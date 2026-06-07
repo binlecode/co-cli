@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.310]
+
+### tool-view-load-by-name — name-addressed deferred-tool loader, fully SDK-decoupled
+
+co stubs every DEFERRED tool by exact name every turn, so keyword search (`search_tools`) was redundant indirection — the model had to invent keywords for a tool it could already name. This replaces it with `tool_view(name)`, a single name-addressed loader consistent with the `memory_view`/`session_view`/`skill_view` family. The original plan coupled to pydantic-ai's capability layer; on review that was rejected in favor of a fully decoupled design — co owns deferral end to end and the SDK loader never engages.
+
+- **`tool_view(name)`** — a normal `@agent_tool` (ALWAYS) in `tools/system/tool_view.py`: normalized-exact name match unlocks the tool; a near-miss returns `difflib` "did you mean" candidates (unlocking nothing — a hallucinated name never resolves to a wrong tool); no match is terminal ("do not retry").
+- **Deferral is co-owned.** Tools no longer set SDK `defer_loading`; the per-turn `_tool_visibility_filter` (`agent/toolset.py`) hides a DEFERRED tool until its name is in `deps.runtime.unlocked_tools`, which `tool_view` populates. The auto-injected `ToolSearch`/`ToolSearchToolset` stays inert and is never imported. MCP dropped `DeferredLoadingToolset` — one loader for native and MCP.
+- **Unlocks survive compaction for free.** Unlock state lives in runtime memory, not message history, so the `_preserve_deferred_tool_discoveries` compaction coupling was deleted.
+- **Validated in the loop.** Live-model W4.E probe: 3/3 trials the model loaded DEFERRED `skill_create` via `tool_view` then called it (no `file_write` fallback).
+- **Source.** `co_cli/tools/system/tool_view.py` (new), `agent/toolset.py`, `agent/core.py`, `agent/mcp.py`, `deps.py`, `context/compaction.py`, and the deferred-prompt / rules / guidance text.
+- **Tests.** `tests/test_tool_view.py` (resolution ladder + visibility gate + compaction-independence); `tests/test_orchestrator_schema_budget.py` ceiling re-pinned for the new lean ALWAYS tool; `evals/eval_skills.py` W4.E updated to the `tool_view` flow.
+- **Specs.** `prompt-assembly.md`, `core-loop.md`, `skills.md`, `tools.md`, `compaction.md`, `self-planning.md`.
+
 ## [0.8.308]
 
 ### read-view-emission-spill-cap — dedup read/view line caps into one pagination cap; verbatim session_view turns

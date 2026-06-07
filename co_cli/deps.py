@@ -83,7 +83,7 @@ class ApprovalSubject:
 
 
 class VisibilityPolicyEnum(Enum):
-    """Whether a tool is visible by default or hidden behind search_tools."""
+    """Whether a tool is visible by default or hidden until loaded via tool_view."""
 
     ALWAYS = "always"
     DEFERRED = "deferred"
@@ -220,6 +220,13 @@ class CoRuntimeState:
     persisted_message_count: int = 0
     # Wired in bootstrap/core.py:create_deps to frontend.on_status. Not cleared per-turn.
     background_status_callback: Callable[[str], None] | None = field(default=None, repr=False)
+    # Names of DEFERRED tools the model has loaded via tool_view. The per-turn visibility
+    # filter (agent/toolset.py) reveals a DEFERRED tool only once its name is here; the
+    # tool_view tool adds names on an exact-name match. The "explicitly justified" tool
+    # reach-in (like clarify_answers): keeping unlock state in runtime memory rather than
+    # message history is what lets unlocks survive compaction for free — no history
+    # preservation coupling. Not reset per-turn (an unlock holds for the whole session run).
+    unlocked_tools: set[str] = field(default_factory=set)
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""

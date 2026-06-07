@@ -122,7 +122,7 @@ content := TODO_SNAPSHOT_PREFIX + "\n" + "\n".join(lines)
 snapshot is omitted (None) when active list is empty
 ```
 
-Snapshot placement in the compacted history: `head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail`. See [compaction.md](compaction.md) for the full assembly pipeline.
+Snapshot placement in the compacted history: `head | marker | [todo_snapshot] | tail`. See [compaction.md](compaction.md) for the full assembly pipeline.
 
 ### 2.5 Rehydration on `/resume`
 

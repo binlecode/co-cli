@@ -23,7 +23,6 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     ToolCallPart,
-    ToolReturnPart,
     UserPromptPart,
 )
 
@@ -236,42 +235,6 @@ async def _gated_summarize_or_none(
     return summary_text
 
 
-def _preserve_deferred_tool_discoveries(
-    dropped: list[ModelMessage],
-) -> list[ModelMessage]:
-    """Carry paired search_tools call/return cycles into the compacted history.
-
-    pydantic-ai's ToolSearchToolset._parse_discovered_tools walks message
-    history for search_tools ToolReturnParts with _DISCOVERED_TOOLS_METADATA_KEY
-    metadata; that set is unioned into the visible toolset each turn. Dropping
-    these pairs across compaction silently revokes every deferred tool the
-    model has unlocked.
-
-    Orphan returns (no paired call) are dropped to avoid emitting broken shapes.
-    """
-    call_part_by_id: dict[str, ToolCallPart] = {}
-    for msg in dropped:
-        if isinstance(msg, ModelResponse):
-            for part in msg.parts:
-                if isinstance(part, ToolCallPart) and part.tool_name == "search_tools":
-                    call_part_by_id[part.tool_call_id] = part
-
-    result: list[ModelMessage] = []
-    for msg in dropped:
-        if not isinstance(msg, ModelRequest):
-            continue
-        for part in msg.parts:
-            if not (isinstance(part, ToolReturnPart) and part.tool_name == "search_tools"):
-                continue
-            call_part = call_part_by_id.get(part.tool_call_id)
-            if call_part is None:
-                # Orphan return without paired call — drop rather than emit broken shape.
-                continue
-            result.append(ModelResponse(parts=[call_part]))
-            result.append(ModelRequest(parts=[part]))
-    return result
-
-
 async def compact_messages(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
@@ -283,7 +246,7 @@ async def compact_messages(
     """Compact ``messages[head_end:tail_start]`` into a marker; assemble result.
 
     Slices by ``bounds`` and assembles ``head | marker | [todo_snapshot] |
-    [deferred-tool discoveries] | tail``. When ``summarize`` is True (default),
+    tail``. When ``summarize`` is True (default),
     runs the gated summarizer over the dropped middle so the marker carries an
     LLM recap; when ``summarize`` is False, the summarizer is skipped entirely
     and ``summary_text`` stays None, driving ``build_compaction_marker`` down
@@ -307,7 +270,6 @@ async def compact_messages(
         *head,
         marker,
         *([todo_snapshot] if todo_snapshot is not None else []),
-        *_preserve_deferred_tool_discoveries(dropped),
         *tail,
     ]
     return result, summary_text

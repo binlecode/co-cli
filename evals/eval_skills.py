@@ -519,7 +519,7 @@ def _eval_w4e_skill_body(name: str) -> str:
 
     Pre-formed so the trial isolates *discovery* of the DEFERRED skill_create tool
     from content-generation quality: the only variable under test is whether the
-    model finds skill_create via search_tools and creates with the given content.
+    model loads skill_create via tool_view and creates with the given content.
     """
     return (
         "---\n"
@@ -541,22 +541,22 @@ async def case_w4_e_discovery(
     run,
     trials: int = 3,
 ) -> CaseResult:
-    """W4.E — does the model discover DEFERRED skill_create via search_tools and create?
+    """W4.E — does the model load DEFERRED skill_create via tool_view and create?
 
     Diagnostic for the deferred-tool-stubs bet: with skill_create flipped to DEFERRED
     and the per-tool awareness stubs live, run ``trials`` independent discovery attempts.
     Each trial drives one ``run_turn`` with a fresh ``message_history=[]`` asking the
     model to save a procedure as a skill. A trial is a HIT when, in one turn, the model:
-    (1) calls ``search_tools`` (discovery), (2) calls ``skill_create`` (loaded + invoked
-    the deferred tool), (3) leaves the skill on disk in the user skills dir, and (4) does
-    NOT fall back to ``file_write`` (the FM-3 cwd-pollution failure mode).
+    (1) calls ``tool_view`` (loads the deferred tool by name), (2) calls ``skill_create``
+    (invoked the loaded tool), (3) leaves the skill on disk in the user skills dir, and
+    (4) does NOT fall back to ``file_write`` (the FM-3 cwd-pollution failure mode).
 
-    Independence note: the SDK's ToolSearchToolset derives "already discovered" state
-    from the message history (``_parse_discovered_tools`` walks ``ctx.messages``), NOT
-    from toolset-instance state. A fresh ``message_history=[]`` per trial therefore
-    re-defers skill_create every trial, so reusing one bootstrap is genuinely independent
-    — and avoids the cross-task MCP teardown crash that per-trial ``make_eval_deps()``
-    bootstraps trigger (the plan's stated 'fresh deps per trial' rationale is moot).
+    Independence note: co's deferral keeps unlock state in ``deps.runtime.unlocked_tools``
+    (NOT message history), so reusing one bootstrap leaks an unlock across trials — once
+    trial 0 loads skill_create, it stays visible. Each trial therefore clears
+    ``unlocked_tools`` to re-defer skill_create, which keeps trials independent while still
+    reusing one bootstrap — avoiding the cross-task MCP teardown crash that per-trial
+    ``make_eval_deps()`` bootstraps trigger.
 
     Gate: HITS ≥ ceil(2/3 · trials) → keep skill_create DEFERRED; below → revert to
     ALWAYS. The gate result is recorded in ``reason`` for the human re-flip decision;
@@ -602,6 +602,7 @@ async def case_w4_e_discovery(
             if skill_path.exists():
                 skill_path.unlink()
                 refresh_skills(deps)
+            deps.runtime.unlocked_tools.clear()
 
             prompt = (
                 f"I just worked out a reliable multi-step procedure for clearing stale "
@@ -636,16 +637,16 @@ async def case_w4_e_discovery(
                 trial_notes.append(f"t{i}=err({type(exc).__name__})")
                 continue
 
-            searched = "search_tools" in tool_names
+            loaded = "tool_view" in tool_names
             managed = "skill_create" in tool_names
             on_disk = skill_path.exists()
             polluted = "file_write" in tool_names
-            hit = searched and managed and on_disk and not polluted
+            hit = loaded and managed and on_disk and not polluted
             if hit:
                 hits += 1
             trial_notes.append(
                 f"t{i}={'HIT' if hit else 'miss'}"
-                f"[search={int(searched)},manage={int(managed)},"
+                f"[load={int(loaded)},manage={int(managed)},"
                 f"disk={int(on_disk)},fw={int(polluted)}]"
             )
         finally:

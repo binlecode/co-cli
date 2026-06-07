@@ -65,13 +65,13 @@ _finalize_turn()  (main.py)
 | **L0** | `lifecycle.wrap_tool_execute` per `ToolCallPart` | `tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 3) | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
 | **L1** | `tool_output()` in native tools, `lifecycle.after_tool_execute` for MCP | `len(content) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS = 4_000`) | Persist to `tool-results/<sha16>.txt`; replace content with `<persisted-output>` placeholder + preview | No |
 | **L2** | `spill_largest_tool_results` history processor | `static_floor_tokens + estimate_message_tokens > deps.spill_threshold_tokens` (realtime-local, no provider-reported floor) | Force-spill largest unspilled string `ToolReturnPart`s **outside the protected tail** (index `< tail_start`, the same boundary as L3), largest-first, until aggregate ≤ threshold | No |
-| **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail`. When the anti-thrash gate is tripped, the same assembly runs with `summarize=False` (static marker, no LLM) — the gate demotes the pass, it never skips it | Yes (static marker fallback when anti-thrash-tripped or breaker-open) |
+| **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | tail`. When the anti-thrash gate is tripped, the same assembly runs with `summarize=False` (static marker, no LLM) — the gate demotes the pass, it never skips it | Yes (static marker fallback when anti-thrash-tripped or breaker-open) |
 | **Recovery** | `run_turn` overflow branch | `is_context_overflow(e)` AND `overflow_recovery_attempted == False` | `strip_all_tool_returns`; if still over budget, planner + `compact_messages` + `commit_compaction` on stripped history | Yes (static marker fallback) |
 | **Manual** | `/compact [focus]` slash command | User-invoked | `compact_messages` with full-history bounds `(0, n, n)` + `commit_compaction`; same degradation policy as L3 | Yes (static marker fallback) |
 
 L1 / L2 / L3 fast-path when below their threshold. The validator at `config/compaction.py:_validate_shape` enforces `tail_fraction < compaction_ratio` and `spill_ratio ≤ compaction_ratio` so L2 spill (cheap) precedes L3 LLM summarization, and post-compact state always leaves headroom before the trigger re-fires.
 
-All three LLM-capable paths share one primitive — `compact_messages(ctx, messages, bounds, focus, summarize=True)` — which slices, runs the gated summarizer (unless `summarize=False` forces the static path with no LLM call), and assembles `head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail`. Each path then calls `commit_compaction` (the single writer of the three "applied" runtime fields). Proactive layers its own savings / status-callback / OTEL / thrash policy on top inside `proactive_window_processor`, and passes `summarize=False` when its anti-thrash gate is tripped; Recovery and Manual handle their own status messaging upstream. Static vs. summary markers differ only in whether a non-empty summary string is available.
+All three LLM-capable paths share one primitive — `compact_messages(ctx, messages, bounds, focus, summarize=True)` — which slices, runs the gated summarizer (unless `summarize=False` forces the static path with no LLM call), and assembles `head | marker | [todo_snapshot] | tail`. Each path then calls `commit_compaction` (the single writer of the three "applied" runtime fields). Proactive layers its own savings / status-callback / OTEL / thrash policy on top inside `proactive_window_processor`, and passes `summarize=False` when its anti-thrash gate is tripped; Recovery and Manual handle their own status messaging upstream. Static vs. summary markers differ only in whether a non-empty summary string is available.
 
 **Why per-request cadence.** Context pressure rises mid-turn — a single tool round can append a 50K-char shell output plus several `file_read` results, pushing the next request over budget before the user speaks again. Per-turn cadence would catch overflow only reactively via HTTP 400/413.
 
@@ -171,8 +171,7 @@ Four `ModelRequestNode` snapshots across a user turn that crosses the compaction
   ModelRequest    UserPromptPart  (1st turn)         ┐ pinned head
   ModelResponse   TextPart        (1st turn)         ┘
   ModelRequest    UserPromptPart  (COMPACTION MARKER)    ← summary or static
-  ModelRequest    UserPromptPart  (todo snapshot)        ┐ metadata
-  ModelRequest    ToolReturnPart  (deferred-tool discoveries)   ┘ (carried over)
+  ModelRequest    UserPromptPart  (todo snapshot)        ← metadata
   ModelRequest    UserPromptPart  (current)          ┐
   ModelResponse   ToolCallPart    (file_read)        │ current turn
   ModelRequest    ToolReturnPart  (result1)          ┘
@@ -187,7 +186,6 @@ Four `ModelRequestNode` snapshots across a user turn that crosses the compaction
   ModelResponse   TextPart        (1st turn)         ┘
   ModelRequest    UserPromptPart  (COMPACTION MARKER)    ← persists across requests
   ModelRequest    UserPromptPart  (todo snapshot)
-  ModelRequest    ToolReturnPart  (deferred-tool discoveries)
   ModelRequest    UserPromptPart  (current)          ┐
   ModelResponse   ToolCallPart    (file_read)        │
   ModelRequest    ToolReturnPart  (result1)          │ two tools resolved
@@ -455,7 +453,7 @@ proactive_window_processor — full path
   ─ STEP 4: assembly (compact_messages — see §2.6) ───────────────
     summary = _gated_summarize_or_none(messages[head_end:tail_start]) if summarize else None
                 ↑ anti-thrash gate passes summarize=False → static marker, no LLM
-    result  = head | marker | [todo_snapshot] | [deferred-tool discoveries] | tail
+    result  = head | marker | [todo_snapshot] | tail
 
   ─ STEP 5: post-compaction feedback (anti-thrash counter) ───────
     savings = (tokens_before − tokens_after) / tokens_before
@@ -519,13 +517,15 @@ proactive_window_processor          recover_overflow_history          /compact s
                     │                       prior summaries via message_history as SUMMARY_MARKER_PREFIX
                     │                       carry-forward rule handles PENDING→RESOLVED across cycles
                     │
-                    ├── build_compaction_marker(len(dropped), summary_text, has_tail)
-                    │        has_tail=True  (proactive/overflow) → "Recent messages are preserved verbatim."
-                    │        has_tail=False (/compact)           → "Continue the conversation from the user's next message."
-                    │        static_marker fallback uses STATIC_MARKER_PREFIX, same shape minus summary_text
-                    └── _preserve_deferred_tool_discoveries(dropped)
-                             ← restores the deferred-tool discovery state the SDK rebuilds from history; orphans dropped
+                    └── build_compaction_marker(len(dropped), summary_text, has_tail)
+                             has_tail=True  (proactive/overflow) → "Recent messages are preserved verbatim."
+                             has_tail=False (/compact)           → "Continue the conversation from the user's next message."
+                             static_marker fallback uses STATIC_MARKER_PREFIX, same shape minus summary_text
 ```
+
+Deferred-tool unlocks are **not** carried in the compacted history: a loaded tool's
+name lives in `runtime.unlocked_tools` (set by `tool_view`), which compaction never
+touches — so unlocks survive compaction for free, with no discovery-preservation step.
 
 **Runtime commit — `commit_compaction(ctx, result)`.** `compact_messages` returns without touching `runtime.*`. Every caller — including recovery PATH 1 (strip-only-fits, no LLM, no marker) — invokes `commit_compaction` as the last step before returning. `commit_compaction` is the **sole writer** of `compaction_applied_this_turn`; it has no other side effects.
 
@@ -622,7 +622,6 @@ PATH 2 — strip + summarize (budget still exceeded after strip)
   ModelResponse   TextPart         (1st turn)         ┘
   ModelRequest    UserPromptPart   (COMPACTION MARKER)    ← summary or static
   ModelRequest    UserPromptPart   (todo snapshot)
-  ModelRequest    ToolReturnPart   (deferred-tool discoveries)
   ModelRequest / ModelResponse    tail turns          ← retained, returns stripped
 
       │  retry once
@@ -702,7 +701,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `compact_messages(ctx, messages, bounds, focus, summarize=True) -> tuple[list[ModelMessage], str \| None]` | `co_cli/context/compaction.py` | Async — slices messages by `(head_end, tail_start, dropped_count)`, runs the gated summarizer (skipped when `summarize=False` → static marker, no LLM), assembles `head \| marker \| [todo_snapshot] \| [deferred-tool discoveries] \| tail`; does NOT write runtime |
+| `compact_messages(ctx, messages, bounds, focus, summarize=True) -> tuple[list[ModelMessage], str \| None]` | `co_cli/context/compaction.py` | Async — slices messages by `(head_end, tail_start, dropped_count)`, runs the gated summarizer (skipped when `summarize=False` → static marker, no LLM), assembles `head \| marker \| [todo_snapshot] \| tail`; does NOT write runtime |
 | `commit_compaction(ctx, result) -> None` | `co_cli/context/compaction.py` | Sole writer of `compaction_applied_this_turn`; no other side effects |
 
 ### Compaction entry points

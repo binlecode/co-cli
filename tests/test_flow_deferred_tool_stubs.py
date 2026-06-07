@@ -3,10 +3,10 @@
 Guards the one functional contract co owns here: every DEFERRED tool appears in
 the discovery prompt exactly once — none silently omitted, no ALWAYS tool leaking
 in. A tool missing from this prompt is invisible to the model and can never be
-discovered via search_tools, so this is the bug-finder for the deferral wiring.
+loaded via tool_view, so this is the bug-finder for the deferral wiring.
 Built from a real bootstrap tool_index so a schema moving between visibility
-buckets fails CI. The live search_tools → discover → call sequence is the SDK's
-(pydantic-ai ToolSearchToolset) and is exercised by behavioral evals, not here.
+buckets fails CI. The live tool_view → load → call sequence is exercised by the
+tool_view resolution tests and behavioral evals, not here.
 """
 
 import re

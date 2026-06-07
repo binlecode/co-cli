@@ -52,8 +52,8 @@ def assemble_routing_toolset(
     native_toolset: AbstractToolset[CoDeps],
     mcp_toolsets: list[AbstractToolset[CoDeps]],
 ) -> AbstractToolset[CoDeps]:
-    """Combine native + connected MCP toolsets and apply the approval-resume filter."""
-    from co_cli.agent.toolset import _approval_resume_filter
+    """Combine native + connected MCP toolsets and apply the per-turn visibility filter."""
+    from co_cli.agent.toolset import _tool_visibility_filter
 
     combined = CombinedToolset([native_toolset, *mcp_toolsets])
-    return combined.filtered(_approval_resume_filter)
+    return combined.filtered(_tool_visibility_filter)

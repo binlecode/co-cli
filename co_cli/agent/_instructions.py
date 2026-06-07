@@ -22,7 +22,7 @@ def safety_prompt(ctx: RunContext[CoDeps]) -> str:
 def deferred_tool_awareness_prompt(ctx: RunContext[CoDeps]) -> str:
     """Per-turn: emit a per-tool stub (name + one-liner) for every deferred tool.
 
-    Lists each DEFERRED tool by name and purpose so the model can load it via search_tools
+    Lists each DEFERRED tool by name and purpose so the model can load it via tool_view
     before calling it. Lives post-static so mid-session integration registration / tool
     toggles are reflected on the next turn without invalidating the static prefix.
     """

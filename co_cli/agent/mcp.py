@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from pydantic_ai import RunContext
-from pydantic_ai.toolsets import AbstractToolset, DeferredLoadingToolset, WrapperToolset
+from pydantic_ai.toolsets import AbstractToolset, WrapperToolset
 from pydantic_ai.toolsets.abstract import ToolsetTool
 
 from co_cli.config.core import Settings
@@ -115,9 +115,13 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
         approval = cfg.approval == "ask"
         sanitizing_server = _SanitizingMCPServer(mcp_server)
         inner = sanitizing_server.approval_required() if approval else sanitizing_server
+        # No DeferredLoadingToolset: it stamps defer_loading=True, which would re-engage
+        # the SDK's search_tools loader. MCP tools are DEFERRED in tool_index, so co's
+        # per-turn visibility filter (agent/toolset.py) hides them until loaded via
+        # tool_view — one loader, native and MCP alike.
         entries.append(
             MCPToolsetEntry(
-                toolset=DeferredLoadingToolset(inner),
+                toolset=inner,
                 server=sanitizing_server,
                 approval=approval,
                 prefix=cfg.prefix or name,

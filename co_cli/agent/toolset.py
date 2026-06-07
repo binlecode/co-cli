@@ -40,6 +40,7 @@ from co_cli.tools.system.skills import (  # noqa: F401
     skill_patch,
     skill_view,
 )
+from co_cli.tools.system.tool_view import tool_view  # noqa: F401
 from co_cli.tools.system.user_input import clarify  # noqa: F401
 from co_cli.tools.tasks.control import (  # noqa: F401
     task_cancel,
@@ -52,20 +53,29 @@ from co_cli.tools.web.fetch import web_fetch  # noqa: F401
 from co_cli.tools.web.search import web_search  # noqa: F401
 
 
-def _approval_resume_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
-    """Filter for approval-resume narrowing only.
+def _tool_visibility_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
+    """Per-turn tool visibility gate. Two independent rules, applied every get_tools.
 
-    Normal turns: pass all tools — SDK ToolSearchToolset handles
-    deferred visibility via defer_loading.
-    Resume turns: narrow to approved tools + always-visible tools.
-    Applies uniformly to native and MCP tools.
+    Deferred gate (every turn): a DEFERRED tool is hidden until the model loads it via
+    tool_view — i.e. until its name is in runtime.unlocked_tools. This is co's sole
+    deferral mechanism (no SDK defer_loading), applied uniformly to native and MCP
+    tools; tool_view itself is ALWAYS and so is never gated here.
+
+    Resume gate (approval-resume turns only): narrow to approved tools + always-visible
+    tools so the resumed run re-presents only what the pending approval needs.
     """
+    entry = ctx.deps.tool_index.get(tool_def.name)
+    if (
+        entry is not None
+        and entry.visibility == VisibilityPolicyEnum.DEFERRED
+        and tool_def.name not in ctx.deps.runtime.unlocked_tools
+    ):
+        return False
     resume = ctx.deps.runtime.resume_tool_names
     if resume is None:
         return True
     if tool_def.name in resume:
         return True
-    entry = ctx.deps.tool_index.get(tool_def.name)
     return entry is None or entry.visibility == VisibilityPolicyEnum.ALWAYS
 
 
@@ -85,10 +95,12 @@ def _make_prepare(fn: Callable[[CoDeps], bool]):
 def _build_native_toolset(
     config: Settings,
 ) -> "tuple[FunctionToolset[CoDeps], dict[str, ToolInfo]]":
-    """Build an unfiltered FunctionToolset with per-tool defer_loading.
+    """Build an unfiltered FunctionToolset; deferred visibility is co-owned, not SDK.
 
-    Tools are registered with defer_loading derived from VisibilityPolicyEnum. The SDK's
-    ToolSearchToolset (auto-added by Agent) handles deferred visibility.
+    Tools are NOT registered with defer_loading: co hides DEFERRED tools via the
+    per-turn _tool_visibility_filter (keyed on tool_index visibility + unlocked_tools)
+    and surfaces them by name through the tool_view tool, so the SDK's keyword loader
+    (search_tools) never engages. Visibility lives only in the returned tool_index.
 
     A tool whose requires_config names an absent config field is excluded; no tool
     currently sets one. Google tools self-gate per-turn via check_fn=_google_available
@@ -108,7 +120,6 @@ def _build_native_toolset(
         kwargs: dict[str, Any] = {
             "requires_approval": info.approval,
             "sequential": not info.is_concurrent_safe,
-            "defer_loading": info.visibility == VisibilityPolicyEnum.DEFERRED,
         }
         if info.retries is not None:
             kwargs["retries"] = info.retries

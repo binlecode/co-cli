@@ -27,14 +27,14 @@ graph LR
 
 | Group | Tools | Notes |
 |-------|-------|-------|
-| Interaction & Session | `clarify`, `capabilities_check`, `todo_write`, `todo_read` | All ALWAYS |
+| Interaction & Session | `clarify`, `capabilities_check`, `todo_write`, `todo_read`, `tool_view` | All ALWAYS; `tool_view` loads a DEFERRED tool by exact name (the single deferred-tool loader — co-owned, no SDK `search_tools`) |
 | Workspace & Files | `file_read`, `file_search`, `file_write`, `file_patch` | `file_search` finds files or greps contents; `file_write`/`file_patch` approval + lock; whole-file delete is `shell_exec` (`rm`), not a dedicated tool |
 | Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_create`, `memory_append`, `memory_replace`, `memory_delete`, `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` | memory write tools / skill write tools approval |
 | Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
-| Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list` | `shell_exec` hybrid approval |
+| Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list` | `shell_exec` hybrid approval; the four `task_*` tools are DEFERRED (loaded via `tool_view`) |
 | Google | `google_drive_search`, `google_drive_read`, `google_gmail_list`, `google_gmail_search`, `google_calendar_list`, `google_calendar_search`, `google_gmail_draft` | DEFERRED; per-turn visibility hides them until a credential exists (`co google auth`); `google_gmail_draft` approval |
 
-**Total: 36 native tools** (24 ALWAYS · 12 DEFERRED · 12 explicit approval-gated · 7 Google tools visibility-gated per turn by credential presence; `shell_exec` may also prompt dynamically based on the command path)
+**Total: 36 native tools** (23 ALWAYS · 13 DEFERRED · 12 explicit approval-gated · 7 Google tools visibility-gated per turn by credential presence; `shell_exec` may also prompt dynamically based on the command path). DEFERRED tools (the 4 `task_*`, `skill_create`, `skill_delete`, 7 Google) are hidden by the per-turn `_tool_visibility_filter` until loaded by name via `tool_view`.
 
 `todo_write` and `todo_read` implement the agent's runtime self-planning capability. For the full planning contract, schema, validation rules, compaction snapshot, and rehydration semantics see [self-planning.md](self-planning.md).
 
@@ -259,7 +259,7 @@ on shared mutation keys is a complementary guard — both layers apply.
 | `CoToolLifecycle(AbstractCapability[CoDeps])` | `co_cli/tools/lifecycle.py` | pydantic-ai capability — fires `before_node_run`, `before_tool_validate`, `before_tool_execute`, `after_tool_execute` on every tool call |
 | `resolve_approval_subject(tool_name, args) -> ApprovalSubject` | `co_cli/tools/approvals.py` | Maps a tool call to its approval-subject kind (`shell`, `path`, `domain`, `tool`) |
 | `ApprovalSubject`, `SessionApprovalRule`, `ApprovalKindEnum` | `co_cli/deps.py` | Approval-subject record types and remembered-rule shape |
-| `build_deferred_tool_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Per-turn system-prompt stub list (one `` - `name`: one-liner `` per DEFERRED tool) grouped by integration family under sub-headers (native primitives first with no sub-header, then e.g. `Google Workspace (load before use):`) telling the model to load a tool via `search_tools` first; emitted via `deferred_tool_awareness_prompt` in `co_cli/agent/_instructions.py` |
+| `build_deferred_tool_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Per-turn system-prompt stub list (one `` - `name`: one-liner `` per DEFERRED tool) grouped by integration family under sub-headers (native primitives first with no sub-header, then e.g. `Google Workspace (load before use):`) telling the model to load a tool via `tool_view` (by exact name) first; emitted via `deferred_tool_awareness_prompt` in `co_cli/agent/_instructions.py` |
 
 ### Delegation handoff
 
@@ -290,6 +290,7 @@ on shared mutation keys is a complementary guard — both layers apply.
 | `co_cli/tools/session/view.py` | `session_view` |
 | `co_cli/tools/memory/manage.py` | `memory_create`, `memory_append`, `memory_replace`, `memory_delete` |
 | `co_cli/tools/system/skills.py` | `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` |
+| `co_cli/tools/system/tool_view.py` | `tool_view` (deferred-tool loader — exact-name unlock, fuzzy "did you mean") |
 | `co_cli/tools/web/search.py` | `web_search` |
 | `co_cli/tools/web/fetch.py` | `web_fetch` |
 | `co_cli/tools/web/_ssrf.py` | SSRF protection — URL safety checks, redirect guard, IP-pinning transport (`SSRFSafeNetworkBackend`, `make_ssrf_safe_transport`) |

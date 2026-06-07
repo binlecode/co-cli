@@ -57,12 +57,13 @@ Construct absolute paths for all file operations. Combine the project root
 with relative paths explicitly — never rely on the current working directory
 being what you expect.
 
-## Deferred discovery
-When the needed capability is not visible in the current tool set, call
-`search_tools` with 2–4 concrete keywords likely to match a tool name or
-description. Prefer a dedicated tool discovered this way over
-`shell` when it clearly fits the task. If `search_tools` returns no
-match, do not retry it — pivot or explain the limitation.
+## Deferred tools
+Some tools are listed by name in the deferred-tools block but not yet loaded. When
+you need one, call `tool_view` with its exact name from that list; it becomes
+callable on your next step, then call it directly. Prefer a dedicated tool loaded
+this way over `shell` when it clearly fits the task. If the name is slightly off you
+get "did you mean" suggestions — retry `tool_view` with one of those. If nothing
+matches, the tool does not exist — do not retry.
 
 ## Memory
 

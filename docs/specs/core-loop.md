@@ -224,8 +224,8 @@ Resume-loop behavior:
 
 ```text
 # run_turn() — before first segment
-# No explicit filter setup needed — _approval_resume_filter passes all
-# during normal turns; SDK ToolSearchToolset handles deferred visibility.
+# No explicit filter setup needed — _tool_visibility_filter hides DEFERRED
+# tools (until loaded via tool_view) and narrows on resume; no SDK loader.
 
 # _run_approval_loop() — each resume hop
 while latest_result.output is DeferredToolRequests:
