@@ -25,11 +25,11 @@ from co_cli.bootstrap.schema_budget import measure_always_schema_budget
 from co_cli.context.assembly import build_static_instructions
 from co_cli.context.tokens import CHARS_PER_TOKEN, estimate_text_tokens
 
-# Measured 2026-06-06 after tool-view-load-by-name: the deferred-tool loader is now a
-# lean ALWAYS tool (`tool_view`, 719 chars — below the per-tool mean), so the bucket grew
-# to 20,581. Re-pinned with ~400-char headroom. (Prior: 19,800 after defer-skill-write-tools;
-# 20,988 pre-defer; 22,589 pre-trim.)
-ALWAYS_BUCKET_CEILING = 21_000
+# Measured 2026-06-07 after defer-recall-and-skill-edit-tools (TASK A2): session_search,
+# session_view, skill_edit, skill_patch flipped ALWAYS → DEFERRED, dropping the bucket
+# 20,581 → 17,224. Re-pinned with ~400-char headroom. (Prior: 20,581 after tool-view-load-by-name;
+# 19,800 after defer-skill-write-tools; 20,988 pre-defer; 22,589 pre-trim.)
+ALWAYS_BUCKET_CEILING = 17_700
 # Measured max ALWAYS tool: file_search = 2,111 chars (child 3's, already trimmed),
 # shell_exec = 1,966 (untouched canonical routing home). +headroom.
 PER_ALWAYS_TOOL_CEILING = 2_300

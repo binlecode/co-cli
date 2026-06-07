@@ -328,7 +328,7 @@ async def skill_create(
 
 
 @agent_tool(
-    visibility=VisibilityPolicyEnum.ALWAYS,
+    visibility=VisibilityPolicyEnum.DEFERRED,
     approval=True,
     approval_subject_fn=_subject_fn("skill_edit", "name"),
 )
@@ -356,7 +356,7 @@ async def skill_edit(
 
 
 @agent_tool(
-    visibility=VisibilityPolicyEnum.ALWAYS,
+    visibility=VisibilityPolicyEnum.DEFERRED,
     approval=True,
     approval_subject_fn=_subject_fn("skill_patch", "name"),
 )

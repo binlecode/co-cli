@@ -50,9 +50,9 @@ Use `settings.json` or env vars.
 
 ## Adding a Tool
 
-- Tool file in `co_cli/tools/`; import and register in `_build_native_toolset()` in `co_cli/agents/_native_toolset.py`.
+- Tool file in `co_cli/tools/`; decorate with `@agent_tool` (self-registers into `TOOL_REGISTRY`) and ensure its module is imported in `co_cli/agent/toolset.py` so the decorator runs.
 - Return `tool_output()` / `tool_error()` — never a raw `str`, `dict`, or `list`.
 - First docstring line is the tool schema description — make it count.
 - `approval=True` for any tool that writes files, spawns processes, or calls external write APIs.
-- `ALWAYS` visibility = present every turn; `DEFERRED` = discovered via search_tools on demand.
+- `ALWAYS` visibility = present every turn; `DEFERRED` = hidden by the per-turn visibility filter and surfaced by name via the `tool_view` loader on demand (co-owned; no SDK `search_tools`).
 - For integration tools: use `requires_config="field"` to exclude when unconfigured, `check_fn=fn` to hide per-turn when runtime state is unavailable. See **Tool Availability Gating**.

@@ -27,14 +27,14 @@ graph LR
 
 | Group | Tools | Notes |
 |-------|-------|-------|
-| Interaction & Session | `clarify`, `capabilities_check`, `todo_write`, `todo_read`, `tool_view` | All ALWAYS; `tool_view` loads a DEFERRED tool by exact name (the single deferred-tool loader — co-owned, no SDK `search_tools`) |
+| Interaction & Planning | `clarify`, `capabilities_check`, `todo_write`, `todo_read`, `tool_view` | All ALWAYS; `tool_view` loads a DEFERRED tool by exact name (the single deferred-tool loader — co-owned, no SDK `search_tools`) |
 | Workspace & Files | `file_read`, `file_search`, `file_write`, `file_patch` | `file_search` finds files or greps contents; `file_write`/`file_patch` approval + lock; whole-file delete is `shell_exec` (`rm`), not a dedicated tool |
-| Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_create`, `memory_append`, `memory_replace`, `memory_delete`, `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` | memory write tools / skill write tools approval |
+| Knowledge, Memory & Skills | `session_search`, `session_view`, `memory_search`, `memory_view`, `memory_create`, `memory_append`, `memory_replace`, `memory_delete`, `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` | `session_search`/`session_view` and all four skill-write tools (`skill_create`/`skill_edit`/`skill_patch`/`skill_delete`) are DEFERRED (loaded via `tool_view`); the rest are ALWAYS. Memory write / skill write tools require approval |
 | Web | `web_search`, `web_fetch` | `web_search` requires `brave_search_api_key` |
 | Execution & Jobs | `shell_exec`, `task_start`, `task_status`, `task_cancel`, `task_list` | `shell_exec` hybrid approval; the four `task_*` tools are DEFERRED (loaded via `tool_view`) |
 | Google | `google_drive_search`, `google_drive_read`, `google_gmail_list`, `google_gmail_search`, `google_calendar_list`, `google_calendar_search`, `google_gmail_draft` | DEFERRED; per-turn visibility hides them until a credential exists (`co google auth`); `google_gmail_draft` approval |
 
-**Total: 36 native tools** (23 ALWAYS · 13 DEFERRED · 12 explicit approval-gated · 7 Google tools visibility-gated per turn by credential presence; `shell_exec` may also prompt dynamically based on the command path). DEFERRED tools (the 4 `task_*`, `skill_create`, `skill_delete`, 7 Google) are hidden by the per-turn `_tool_visibility_filter` until loaded by name via `tool_view`.
+**Total: 36 native tools** (19 ALWAYS · 17 DEFERRED · 12 explicit approval-gated · 7 Google tools visibility-gated per turn by credential presence; `shell_exec` may also prompt dynamically based on the command path). DEFERRED tools (the 4 `task_*`, all 4 skill-write tools `skill_create`/`skill_delete`/`skill_edit`/`skill_patch`, `session_search`, `session_view`, 7 Google) are hidden by the per-turn `_tool_visibility_filter` until loaded by name via `tool_view`.
 
 `todo_write` and `todo_read` implement the agent's runtime self-planning capability. For the full planning contract, schema, validation rules, compaction snapshot, and rehydration semantics see [self-planning.md](self-planning.md).
 

@@ -6,6 +6,22 @@ Source: `uv run python tmp/a1_schema_report.py`, which calls
 totals are the authoritative bucket numbers the schema-budget guard and the runtime
 `deps.static_floor_tokens` both read. Run date: 2026-06-06.
 
+> **ERRATA (verified 2026-06-07 against current code).** The per-tool char-cost table below is still
+> **exact** — every one of the 22 listed tools matches a fresh `measure_always_schema_budget(deps)` run.
+> Three *absolute* numbers drifted because v0.8.310 added the ALWAYS `tool_view` loader (+719 chars) *after*
+> this audit:
+> - **Bucket total: 19,862 → 20,581 chars** (~5,145 tok); the new `tool_view` (719 chars) is not in the
+>   ranked table below.
+> - **ALWAYS count: 22 → 23**; **total `tool_count`: 35 → 36** (DEFERRED set unchanged at 13).
+> - **Test pin** `ALWAYS_BUCKET_CEILING` is now `21_000` (not the `20_200` cited in the Headline).
+>
+> Consequences for the **A2 recommendation (defer 4: `session_search`, `session_view`, `skill_patch`,
+> `skill_edit` = 3,357 chars)**: projected post-deferral bucket is **20,581 − 3,357 = 17,224 chars**, not
+> 16,505. It still clears the **<19,000** target with **+1,776 margin** (was +2,495). The 4-tool set, their
+> char costs, the KEEP decisions (`web_fetch`/`web_search`, memory-write family), and the tiering are all
+> unaffected. (`measure_always_schema_budget` is also now `(deps)`-signatured, not the `stack=None` form the
+> Source line cites.)
+
 ## Headline
 
 - **ALWAYS bucket: 19,862 chars (~4,965 tok)** across **22 ALWAYS-visibility tools** (measured

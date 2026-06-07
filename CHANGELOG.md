@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.314]
+
+### defer-recall-and-skill-edit-tools — shrink the ALWAYS tool-schema floor (context-stability A2)
+
+The fixed prefill floor (static instructions + ALWAYS tool schemas) rides on every request — uncompactable, and a direct prefill-latency tax on a small local model's fixed 64k window. TASK A2 of the context-stability plan defers four episodic, low-per-turn-frequency tools so their schemas leave the per-turn floor, loaded on demand via the `tool_view` loader.
+
+- **Four tools flipped `ALWAYS → DEFERRED`** — `session_search`, `session_view` (cross-session recall), and `skill_edit`/`skill_patch` (unifying all four skill-write tools as DEFERRED alongside `skill_create`/`skill_delete`).
+- **ALWAYS schema bucket: 20,581 → 17,224 chars** (19 ALWAYS tools; `tool_count` unchanged at 36 — deferral hides, does not drop). `deps.static_floor_tokens` auto-updates at bootstrap from `measure_always_schema_budget`, so the runtime compaction trigger floor shrinks with it.
+- **Schema-budget guard re-pinned** — `ALWAYS_BUCKET_CEILING` 21,000 → 17,700.
+- **Doc-sync** — `docs/specs/skills.md` (all four skill-write tools DEFERRED) and `docs/specs/tools.md` (19·17 counts, expanded DEFERRED enumeration, per-row visibility). Fixed two pre-existing `.agent_docs/tools.md` inaccuracies (stale registration path; DEFERRED described as SDK `search_tools` rather than co's `tool_view`).
+- **Verified** — deferred round-trip fires live (eval_memory W3.C loads `session_search` via `tool_view`; eval_skills W4.E discovery 3/3); no dream-daemon regression (task-agent toolsets pass tools by name, bypassing the visibility filter).
+
 ## [0.8.312]
 
 ### drop-capability-api — remove pydantic-ai capability SDK coupling
