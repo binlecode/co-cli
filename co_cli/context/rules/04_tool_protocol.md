@@ -50,7 +50,7 @@ identical arguments. Retrying unchanged is a loop, not recovery.
 When a tool returns empty or partial results, retry with a different query
 or strategy — vary keywords, scope, or path. Empty is not always failure;
 a different angle often surfaces what the first query missed. One varied
-retry is persistence; a second unchanged retry is a loop.
+retry is persistence; a second unchanged retry is not.
 
 ## Paths
 Construct absolute paths for all file operations. Combine the project root

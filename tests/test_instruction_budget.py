@@ -1,24 +1,34 @@
-"""Instruction-block size guard — locks the static-prefix instruction half.
+"""Instruction-floor size guard — locks the full delivered instruction half.
 
-``build_static_instructions(config)`` assembles soul seed + mindsets + the
-numbered behavioral rules. This block rides every cold prefill and every
-post-compaction state — it is never compacted away — so verbose-rule creep is a
-silent, recurring context-budget tax. This guard is the instruction-half
-counterpart to ``test_orchestrator_schema_budget.py`` (which guards the
-tool-schema half): it pins the measured size so a re-bloated rule file or a new
-rule fails CI instead of quietly growing the floor.
+The instruction half of the fixed prefill floor is assembled by the three static
+builders the orchestrator joins into the cached prefix:
+
+1. ``build_static_instructions(config)`` — soul seed + mindsets + numbered rules.
+2. ``build_toolset_guidance(tool_index)`` — toolset-gated guidance
+   (``CAPABILITIES_GUIDANCE``; ``MEMORY_GUIDANCE`` was deleted in floor-audit TASK-1).
+3. ``load_soul_critique(personality)`` — the always-on ``## Review lens`` critique.
+
+All three ride every cold prefill and every post-compaction state — never
+compacted away — so creep in any of them is a silent, recurring context-budget
+tax. This guard is the instruction-half counterpart to
+``test_orchestrator_schema_budget.py`` (which guards the tool-schema half): it
+pins the measured size so a re-bloated rule file, a longer critique, or grown
+guidance fails CI instead of quietly growing the floor.
 
 Single owner: this is the one instruction-budget ceiling. The
 ``rules-block-trim-finish`` plan trims rules and re-pins THIS ceiling
 downward (its TASK-C); the ``context-stability-sizing-control`` plan reads the
 same guard rather than adding a second rules-only test.
 
-Measured 2026-06-03 after rules-block-trim-finish (rules 05+06+07 conservative
-dedup; 06 manifest-scan + background-review dedup completed):
-``build_static_instructions`` = 23,352 chars / ~5,838 tok (personality=tars).
-Ceiling = measurement + ~398-char headroom. The context-stability plan's
-illustrative ~24,256-char figure was the PRE-trim value and must never be
-re-introduced — the post-trim ceiling sits below it.
+Measured 2026-06-07 after instruction-floor-audit TASK-1/TASK-2 (single-owner
+dedup + deferred-tool signature decouple) and extended in TASK-4 to the full
+delivered floor: base 23,129 + guidance 416 + critique 162 = 23,707 chars
+(personality=tars). TASK-4 widened the *measured surface* from base-only to the
+full floor, so the ceiling moved UP to absorb the two components that always rode
+the floor but were previously unmeasured (this is a surface-definition change, not
+a growth accommodation — the downward-only rule still holds for the same surface).
+Ceiling = full-floor measurement + ~490-char headroom; the headroom absorbs the
++23-char max critique across shipped souls (finch 185 vs tars 162, pre-measured).
 """
 
 from __future__ import annotations
@@ -29,25 +39,32 @@ import pytest
 
 from co_cli.bootstrap.core import create_deps
 from co_cli.context.assembly import build_static_instructions
+from co_cli.context.guidance import build_toolset_guidance
+from co_cli.personality.prompts.loader import load_soul_critique
 
-INSTRUCTION_BLOCK_CEILING = 23_750
+INSTRUCTION_BLOCK_CEILING = 24_200
 
 
 @pytest.mark.asyncio
-async def test_static_instructions_within_budget() -> None:
-    """Seed + mindsets + rules stays under the pinned ceiling.
+async def test_instruction_floor_within_budget() -> None:
+    """Base + toolset guidance + critique stays under the pinned ceiling.
 
-    A rule edit that bloats the always-on instruction floor past the ceiling
-    fails here. When a trim intentionally lowers the block, re-pin the ceiling
-    to the new measurement (do not raise it to accommodate growth).
+    Measures the full delivered instruction floor (the three static builders the
+    orchestrator joins). A rule edit, a longer critique, or grown guidance that
+    pushes the floor past the ceiling fails here. When a trim intentionally lowers
+    the floor, re-pin the ceiling to the new measurement (do not raise it to
+    accommodate growth of the same surface).
     """
     async with AsyncExitStack() as stack:
         deps = await create_deps(on_status=lambda _s: None, stack=stack, theme_override=None)
-        instructions = build_static_instructions(deps.config)
+        floor = build_static_instructions(deps.config)
+        floor += build_toolset_guidance(deps.tool_index)
+        if deps.config.personality:
+            floor += load_soul_critique(deps.config.personality)
 
-    size = len(instructions)
+    size = len(floor)
     assert size <= INSTRUCTION_BLOCK_CEILING, (
-        f"static instructions = {size} chars exceeds ceiling "
+        f"instruction floor = {size} chars exceeds ceiling "
         f"{INSTRUCTION_BLOCK_CEILING}. If this is an intentional addition, "
         f"re-pin the ceiling to the new measurement; otherwise trim the bloat."
     )

@@ -43,7 +43,7 @@ flowchart TD
 `build_orchestrator()` assembles `static_instructions` by calling each builder in `ORCHESTRATOR_SPEC.static_instruction_builders` in order — three thin closures, each taking `deps` and returning `str | None`. All evaluated once at agent construction:
 
 1. **`_static_instructions_provider(deps)`** — wraps `build_static_instructions(deps.config)`: soul seed, mindsets, numbered rules (`co_cli/context/rules/NN_rule_id.md`), recency advisory. Character memories and critique are NOT included here.
-2. **`_toolset_guidance_provider(deps)`** — wraps `build_toolset_guidance(deps.tool_index)`: tool-specific guidance blocks, each gated on the tool being present. Currently gated: `memory_search` / `session_search` → `MEMORY_GUIDANCE`; `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
+2. **`_toolset_guidance_provider(deps)`** — wraps `build_toolset_guidance(deps.tool_index)`: tool-specific guidance blocks, each gated on the tool being present. Currently gated: `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
 3. **`_personality_critique_provider(deps)`** — wraps `load_soul_critique(deps.config.personality)` and prefixes with `## Review lens` heading; appended last when a personality is configured and a critique file exists. Placed after operational guidance so the review frame wraps the complete prompt.
 
 The parts are joined with `"\n\n"` and passed as the `instructions=` string to `Agent(...)`. The string is stable for the entire session — it never changes between turns. The skill manifest and deferred-tool awareness are NOT in this block — they live in per-turn instruction callbacks (§2.2) so that `skill_index` / `tool_index` mutations do not churn the cached prefix bytes.
@@ -124,7 +124,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | Symbol | Source | Contract |
 | --- | --- | --- |
 | `build_static_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules, joined with `\n\n`; called once at agent construction |
-| `build_toolset_guidance(tool_index) -> str` | `co_cli/context/guidance.py` | Returns tool-specific guidance blocks, gated on tool presence (`MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE`) |
+| `build_toolset_guidance(tool_index) -> str` | `co_cli/context/guidance.py` | Returns tool-specific guidance blocks, gated on tool presence (`CAPABILITIES_GUIDANCE`) |
 | `build_deferred_tool_awareness_prompt(tool_index) -> str` | `co_cli/tools/deferred_prompt.py` | Returns a per-tool stub list (one `` - `name`: one-line purpose `` per `DEFERRED` tool, name-only when description is empty) grouped by integration family: native primitives render first with no sub-header, then each family under a `` `<label>` (load before use): `` sub-header. Family key = segment before first `_` for native integrations (so all `google_*` cluster), whole string for MCP integrations; deterministic ordering. Empty when no deferred tools exist. Called per-turn via `deferred_tool_awareness_prompt` |
 | `render_skill_manifest(skill_index, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders the `<available_skills>` XML block. Called per-turn via `skill_manifest_prompt` |
 
@@ -153,7 +153,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` — static builders (`_static_instructions_provider`, `_toolset_guidance_provider`, `_personality_critique_provider`) and per-turn instructions (`safety_prompt`, `current_time_prompt`, `deferred_tool_awareness_prompt`, `skill_manifest_prompt`) |
 | `co_cli/agent/_instructions.py` | per-turn instruction callbacks: `safety_prompt`, `current_time_prompt`, `deferred_tool_awareness_prompt`, `skill_manifest_prompt` |
 | `co_cli/context/assembly.py` | `build_static_instructions()` — soul + mindsets + rules; rule-file validation |
-| `co_cli/context/guidance.py` | `MEMORY_GUIDANCE`, `CAPABILITIES_GUIDANCE` constants; `build_toolset_guidance()` — gated on tool presence |
+| `co_cli/context/guidance.py` | `CAPABILITIES_GUIDANCE` constant; `build_toolset_guidance()` — gated on tool presence |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — `<available_skills>` XML block; called per-turn from `skill_manifest_prompt` |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` — personality asset loaders |
 | `co_cli/personality/prompts/validator.py` | personality discovery and file validation |

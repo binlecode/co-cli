@@ -27,8 +27,8 @@ After each tool result, evaluate progress and continue until all sub-goals are
 met. After each step, check: did this move closer to the goal? If multiple
 distinct attempts at the same sub-goal have not produced progress, that
 sub-goal is blocked — surface the blocker rather than exhausting budget on
-variations that cannot converge. Retrying the same failed action is not
-persistence, it is a loop.
+variations that cannot converge. Repeating a failed action unchanged is not
+persistence.
 
 ## Completeness
 Before ending a turn, verify every stated sub-goal has been addressed.

@@ -23,7 +23,9 @@ import pytest
 from co_cli.bootstrap.core import create_deps
 from co_cli.bootstrap.schema_budget import measure_always_schema_budget
 from co_cli.context.assembly import build_static_instructions
+from co_cli.context.guidance import build_toolset_guidance
 from co_cli.context.tokens import CHARS_PER_TOKEN, estimate_text_tokens
+from co_cli.personality.prompts.loader import load_soul_critique
 
 # Measured 2026-06-07 after defer-recall-and-skill-edit-tools (TASK A2): session_search,
 # session_view, skill_edit, skill_patch flipped ALWAYS → DEFERRED, dropping the bucket
@@ -71,14 +73,20 @@ async def test_always_bucket_within_budget() -> None:
 
 @pytest.mark.asyncio
 async def test_static_floor_tokens_measured_at_bootstrap() -> None:
-    """deps.static_floor_tokens is the measured (not literal) instruction + ALWAYS-schema floor."""
+    """deps.static_floor_tokens is the measured full instruction floor + ALWAYS-schema.
+
+    The instruction half is the full delivered floor — base instructions + toolset
+    guidance + personality critique (the three static builders the orchestrator joins)
+    — per instruction-floor-audit TASK-4, not base instructions alone.
+    """
     deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
 
     budget = await measure_always_schema_budget(deps)
-    expected = (
-        estimate_text_tokens(build_static_instructions(deps.config))
-        + budget.total_chars // CHARS_PER_TOKEN
-    )
+    instruction_tokens = estimate_text_tokens(build_static_instructions(deps.config))
+    instruction_tokens += estimate_text_tokens(build_toolset_guidance(deps.tool_index))
+    if deps.config.personality:
+        instruction_tokens += estimate_text_tokens(load_soul_critique(deps.config.personality))
+    expected = instruction_tokens + budget.total_chars // CHARS_PER_TOKEN
 
     assert deps.static_floor_tokens > 0
     assert deps.static_floor_tokens == expected

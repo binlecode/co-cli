@@ -32,19 +32,17 @@ up before executing. Don't substitute.
 ## Drift
 
 If a skill you loaded has stale steps, wrong commands, missing
-pitfalls, or no longer matches the codebase, fix it immediately. Call
-`skill_patch(name=<skill>, old_string=..., new_string=...)` for surgical
-fixes, or `skill_edit(name=<skill>, content=...)` for structural
-overhauls. Don't wait to be asked. Unmaintained skills become
+pitfalls, or no longer matches the codebase, fix it immediately — a
+surgical patch for a localized fix, a full rewrite for a structural
+overhaul. Don't wait to be asked. Unmaintained skills become
 liabilities.
 
 ## Create
 
 After completing a multi-step task (3+ coherent steps), consider
 whether the procedure is reusable. If yes — same steps you'd run for
-similar tasks — promote it to a skill with
-`skill_create(name=<task-type>, content=<§6-body>)`.
-Name by task type, not the specific instance. Content must conform to
+similar tasks — promote it to a skill, naming it by task type, not the
+specific instance. The body must conform to
 `skills.md` §6: description, H1, `**Invocation:**` line, at least one
 `## Phase N — <name>` section.
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.8.318]
+
+### instruction-floor-audit — dedup, deferred-signature decouple, coupling guard, full-floor accounting
+
+Gives the instruction half of the fixed prefill floor (soul seed + mindsets + rules + toolset guidance +
+critique) the first-principles audit the schema half got in A1/A2 (P1–P4 from
+`docs/REPORT-instruction-floor-audit.md`).
+
+- **Single-owner dedup (P1/F1–F4)** — collapsed duplicated rules to one floor owner each: the memory
+  save-policy + safety constraints migrated `02_safety.md` → `07_memory_protocol.md`; `MEMORY_GUIDANCE`
+  deleted (its recall content folded into `07`); the "is a loop" anti-loop principle stated once.
+- **Deferred-tool signature decouple (P2/F5)** — stripped the literal call signatures of the deferred tools
+  (`session_search`, `session_view`, `skill_patch`, `skill_edit`, **`skill_create`**) from the floor while
+  keeping the behavioral triggers. The floor now carries WHEN/WHY; the loaded schema carries HOW. Resolves
+  the contradiction with `04_tool_protocol.md`'s deferred-load mechanic.
+- **Coupling guard (P3)** — new `tests/test_instruction_floor_coupling.py` derives the deferred set live and
+  asserts no deferred tool's call signature rides the assembled floor. No hardcoded allowlist; any future
+  defer is auto-covered. Caught a live `skill_create` leak on first run.
+- **Full-floor accounting (P4/F6)** — `deps.static_floor_tokens` and `test_instruction_budget.py` now measure
+  the full delivered floor (base + toolset guidance + critique), not the base alone. Closes the ~144-tok
+  compaction-trigger under-count; `INSTRUCTION_BLOCK_CEILING` re-pinned 23,600 → 24,200 (surface-definition
+  expansion). Stale `static_floor_tokens` composition descriptions in `compaction.md` corrected.
+
 ## [0.8.316]
 
 ### context-stability TASK B — coherence gate + compaction production-logic audit

@@ -435,9 +435,18 @@ async def create_deps(
 
     from co_cli.bootstrap.schema_budget import measure_always_schema_budget
     from co_cli.context.assembly import build_static_instructions
+    from co_cli.context.guidance import build_toolset_guidance
     from co_cli.context.tokens import CHARS_PER_TOKEN, estimate_text_tokens
+    from co_cli.personality.prompts.loader import load_soul_critique
 
+    # Full delivered instruction floor — the three static builders that the
+    # orchestrator joins into the cached prefix (base instructions + toolset
+    # guidance + personality critique). Measuring only the base under-counts the
+    # floor that actually rides every request.
     instruction_tokens = estimate_text_tokens(build_static_instructions(config))
+    instruction_tokens += estimate_text_tokens(build_toolset_guidance(tool_index))
+    if config.personality:
+        instruction_tokens += estimate_text_tokens(load_soul_critique(config.personality))
     schema_budget = await measure_always_schema_budget(deps)
     deps.static_floor_tokens = instruction_tokens + schema_budget.total_chars // CHARS_PER_TOKEN
 
