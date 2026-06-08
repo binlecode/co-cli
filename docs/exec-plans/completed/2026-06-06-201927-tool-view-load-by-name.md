@@ -18,9 +18,10 @@ already name. This is also incoherent with co's load-by-name family (`memory_vie
 `skill_view`), and it is a small-model failure surface (crafting matching keywords, then picking the right
 one of ≤10 results).
 
-Grounding: this design emerged from the deferred-loading analysis recorded in
-`docs/REPORT-always-tool-schema-audit.md` (the deferral cost model — stub floor + round-trip + plan
-legibility — and the stub-all-makes-search-redundant observation). This plan is **separate from** the A1/A2
+Grounding: this design emerged from the deferred-loading analysis (the deferral cost model — stub floor +
+round-trip + plan legibility — and the stub-all-makes-search-redundant observation), whose durable rule is
+distilled into `docs/specs/tools.md` § Tool-schema prefill floor; the standalone A1 report was removed
+post-consolidation. This plan is **separate from** the A1/A2
 tool-schema-floor-reduction work in
 `docs/exec-plans/active/2026-06-02-210659-context-stability-sizing-control.md` — that flips `visibility`
 flags on existing tools and keeps today's loader; this plan changes the loader *mechanism*.

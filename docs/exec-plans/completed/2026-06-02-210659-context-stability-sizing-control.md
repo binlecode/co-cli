@@ -94,7 +94,8 @@ chain is meanwhile guarded by the unit test `test_l3_fastpaths_after_l2_spill_fi
 
 ## Shipped (this plan)
 
-- **A1** — ALWAYS tool-schema audit → `docs/REPORT-always-tool-schema-audit.md`. Recommended deferral set of
+- **A1** — ALWAYS tool-schema audit (placement rule distilled into `docs/specs/tools.md` § Tool-schema
+  prefill floor; the standalone report was removed post-consolidation). Recommended deferral set of
   4 tools; `web_fetch`/`web_search` + memory-write family resolved KEEP.
 - **A2** (v0.8.314, `b5667fbc`) — deferred `session_search`, `session_view`, `skill_edit`, `skill_patch`
   (ALWAYS → DEFERRED); ALWAYS schema bucket 20,581 → 17,224 chars; `ALWAYS_BUCKET_CEILING` 21,000 → 17,700;

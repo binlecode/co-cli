@@ -61,8 +61,18 @@ not ride the floor every turn. DEFERRED is *not* removal: a per-turn stub keeps 
 is deliberate: a one-time `tool_view` round-trip on the rare turns the tool fires, in exchange for a smaller
 floor on every other turn. This is why cross-session recall (`session_search`/`session_view`), skill writes
 (all four `skill_*` write tools), background jobs (`task_*`), and the Google family are DEFERRED while the
-high-frequency primitives are not. The per-tool size × criticality tiering, usage-frequency grounding, and
-the full deferral cost model are in [`docs/REPORT-always-tool-schema-audit.md`](../REPORT-always-tool-schema-audit.md).
+high-frequency primitives are not.
+
+**Placement rule — size × criticality.** Two axes govern the call: schema *size* is the deferral *payoff*
+(chars saved per turn) and functional *criticality* is the deferral *penalty* (use-probability,
+plan-dependence, latency sensitivity). The payoff is bounded below by the stub floor — deferring a tool
+saves only `full_schema − the one-line stub` (whose purpose text is capped at 100 chars,
+`_ONE_LINER_MAX_CHARS`), so a small tool saves almost nothing — while deferral always costs a one-time
+`tool_view` round-trip plus reduced plan-legibility until the tool loads. So **criticality
+vetoes deferral at any size** (a tool the model reasons *with* stays ALWAYS however big) and **size only
+pays off when big** (a small, non-critical tool stays ALWAYS — deferring it buys nothing). The one
+exception is *family coherence*: a small tool joins an already-deferred cluster (e.g. the `skill_*` writes)
+so its grouped stub block stays whole rather than split across ALWAYS/DEFERRED.
 
 ### Google credential setup & tool visibility
 
