@@ -38,6 +38,20 @@ graph LR
 
 `todo_write` and `todo_read` implement the agent's runtime self-planning capability. For the full planning contract, schema, validation rules, compaction snapshot, and rehydration semantics see [self-planning.md](self-planning.md).
 
+### Tool lifecycle — register → discover → load → call
+
+A tool moves through four stages from import to invocation (the `Registration` / `Assembly` / `Orchestrator` graph above is the pipeline view; this narrates it end-to-end). co has **no keyword "tool search" stage** — the SDK's `search_tools` loader never engages (`_build_native_toolset` does not set `defer_loading`); a deferred tool is loaded by *exact name* via `tool_view`.
+
+1. **Register (import time).** Each native tool is declared with `@agent_tool(visibility=…)` (`co_cli/tools/agent_tool.py`), which attaches a frozen `ToolInfo` (`co_cli/deps.py` — carrying `visibility`, `approval`, `source`, `check_fn`, …) to the function and appends it to the flat `TOOL_REGISTRY`. ALWAYS and DEFERRED tools register identically — visibility is one metadata field, not a separate code path.
+
+2. **Assemble (bootstrap).** `_build_native_toolset(config)` (`co_cli/agent/toolset.py`) adds *every* registered tool to one `FunctionToolset` and returns it alongside `tool_index` (`name → ToolInfo`). MCP tools join via `build_mcp_entries` / `assemble_routing_toolset` (`co_cli/agent/core.py`), which wraps native + MCP in `CombinedToolset([...]).filtered(_tool_visibility_filter)`. Visibility lives only in `tool_index`; the registry is visibility-agnostic.
+
+3. **Discover (every turn).** The model sees two surfaces split by visibility. An ALWAYS tool's full schema (name + description + minified-parameters JSON) rides the cached static prefix — its aggregate size measured and budget-guarded by `measure_always_schema_budget` (`co_cli/bootstrap/schema_budget.py`; see the next section). A DEFERRED tool's schema is withheld; in its place a one-line **stub** (`` - `name`: purpose ``, purpose capped at 100 chars by `_ONE_LINER_MAX_CHARS`) is emitted per turn by `build_deferred_tool_awareness_prompt` (`co_cli/tools/deferred_prompt.py`, via the `deferred_tool_awareness_prompt` instruction in `co_cli/agent/_instructions.py`). The floor thus carries WHEN/WHY, never a deferred tool's call signature — the signature-coherence invariant in [prompt-assembly.md](prompt-assembly.md) §2.2.
+
+4. **Load (DEFERRED only).** Each turn, `_tool_visibility_filter` (`co_cli/agent/toolset.py`) hides a DEFERRED tool until its name is in `deps.runtime.unlocked_tools`. The model copies the exact name from the stub into `tool_view` (itself ALWAYS — `co_cli/tools/system/tool_view.py`): a normalized-exact match (case / `-` / whitespace folded) adds the name to `unlocked_tools`; a near-miss returns `difflib` "did you mean" candidates and unlocks nothing; no match errors "does not exist — do not retry." The full schema then appears on the next model step. Because `unlocked_tools` is runtime state (not message history), unlocks survive compaction. ALWAYS tools skip this stage.
+
+5. **Call.** `_RoutingToolset.call_tool` (`co_cli/agent/toolset.py`) is the single per-call seam: it stamps the `tool {name}` span (`co.tool.*` attributes), enforces the per-model-request tool-call cap, and spills oversized MCP string results. Approval-gated tools (`ToolInfo.approval`, or `shell_exec`'s dynamic path check) suspend into the approval loop and resume via `deferred_tool_results` — see the [Approval Loop](#approval-loop) below and [core-loop.md](core-loop.md).
+
 ### Tool-schema prefill floor — the ALWAYS vs DEFERRED budget
 
 Visibility is not a per-tool preference; it is governed by a **prefill-floor budget**. Every ALWAYS tool's
