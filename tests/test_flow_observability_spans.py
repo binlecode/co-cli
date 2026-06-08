@@ -2,7 +2,7 @@
 
 The agent/model/tool spans are emitted on the seams co owns after the capability
 removal: the agent span at the run call site (_execute_stream_segment), the chat
-span in SurrogateRecoveryModel, and the tool span in _RoutingToolset. This proves
+span in SurrogateRecoveryModel, and the tool span in _CallSeamToolset. This proves
 the co tail / co trace tree is preserved at parity end-to-end.
 """
 
@@ -21,7 +21,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.agent.toolset import _RoutingToolset
+from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import (
     CoDeps,
@@ -94,7 +94,7 @@ async def test_turn_emits_agent_model_tool_span_tree(tmp_path: Path) -> None:
         model,
         deps_type=CoDeps,
         output_type=[str, DeferredToolRequests],
-        toolsets=[_RoutingToolset(inner)],
+        toolsets=[_CallSeamToolset(inner)],
     )
     echo_info = ToolInfo(
         name="echo",
@@ -109,7 +109,7 @@ async def test_turn_emits_agent_model_tool_span_tree(tmp_path: Path) -> None:
         session=CoSessionState(),
         runtime=CoRuntimeState(),
         model=LlmModel(model=model, settings=None),
-        tool_index={"echo": echo_info},
+        tool_catalog={"echo": echo_info},
         model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
     )
 
@@ -157,7 +157,7 @@ async def test_tool_error_emits_error_span_and_clears_stack(tmp_path: Path) -> N
         raise ValueError("tool exploded")
 
     inner.add_function(boom, requires_approval=False)
-    routing = _RoutingToolset(inner)
+    routing = _CallSeamToolset(inner)
     deps = CoDeps(
         shell=ShellBackend(),
         config=SETTINGS_NO_MCP,

@@ -33,7 +33,7 @@ def _make_deps() -> CoDeps:
         shell=ShellBackend(),
         model=_LLM_MODEL,
         toolset=_TOOLSET,
-        tool_index=_TOOL_INDEX,
+        tool_catalog=_TOOL_INDEX,
         config=_CONFIG_NO_MCP,
         session=CoSessionState(),
         model_max_ctx=_CONFIG_NO_MCP.llm.max_ctx,

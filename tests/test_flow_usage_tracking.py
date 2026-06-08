@@ -26,7 +26,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import RequestUsage
 from tests._settings import SETTINGS
 
-from co_cli.agent.toolset import _RoutingToolset
+from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.daemons.dream._loop import _flush_daemon_usage
 from co_cli.deps import CoDeps, CoSessionState, fork_deps
@@ -90,7 +90,7 @@ def _make_approval_then_text_agent(approval_requests: int) -> Agent:
         FunctionModel(stream_function=stream_fn),
         deps_type=CoDeps,
         output_type=[str, DeferredToolRequests],
-        toolsets=[_RoutingToolset(toolset)],
+        toolsets=[_CallSeamToolset(toolset)],
     )
 
 

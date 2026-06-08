@@ -26,16 +26,16 @@ if TYPE_CHECKING:
     from co_cli.deps import CoDeps
 
 
-def _static_instructions_provider(deps: CoDeps) -> str | None:
-    from co_cli.context.assembly import build_static_instructions
+def _base_instructions_provider(deps: CoDeps) -> str | None:
+    from co_cli.context.assembly import build_base_instructions
 
-    return build_static_instructions(deps.config)
+    return build_base_instructions(deps.config)
 
 
 def _toolset_guidance_provider(deps: CoDeps) -> str | None:
     from co_cli.context.guidance import build_toolset_guidance
 
-    return build_toolset_guidance(deps.tool_index)
+    return build_toolset_guidance(deps.tool_catalog)
 
 
 def _personality_critique_provider(deps: CoDeps) -> str | None:
@@ -52,7 +52,7 @@ def _personality_critique_provider(deps: CoDeps) -> str | None:
 ORCHESTRATOR_SPEC = OrchestratorSpec(
     name="orchestrator",
     static_instruction_builders=(
-        _static_instructions_provider,
+        _base_instructions_provider,
         _toolset_guidance_provider,
         _personality_critique_provider,
     ),

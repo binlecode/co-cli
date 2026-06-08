@@ -41,14 +41,14 @@ def _make_deps(tmp_path: Path) -> CoDeps:
     user_skills_dir.mkdir(parents=True, exist_ok=True)
     # Write skill file so is_agent_created returns True
     (user_skills_dir / "test-recall-skill.md").write_text(_SKILL_CONTENT, encoding="utf-8")
-    skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
-    _, tool_index = build_native_toolset(SETTINGS)
+    skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
+    _, tool_catalog = build_native_toolset(SETTINGS)
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
-        tool_index=tool_index,
+        tool_catalog=tool_catalog,
         session=CoSessionState(),
-        skill_index=skill_index,
+        skill_catalog=skill_catalog,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=user_skills_dir,
         tool_results_dir=tmp_path / "tool-results",
@@ -68,13 +68,13 @@ def test_bump_recall_no_op_when_usage_tracking_disabled(tmp_path: Path) -> None:
     user_skills_dir = tmp_path / "skills"
     user_skills_dir.mkdir(parents=True, exist_ok=True)
     (user_skills_dir / "test-recall-skill.md").write_text(_SKILL_CONTENT, encoding="utf-8")
-    _, tool_index = build_native_toolset(config)
+    _, tool_catalog = build_native_toolset(config)
     deps = CoDeps(
         shell=ShellBackend(),
         config=config,
-        tool_index=tool_index,
+        tool_catalog=tool_catalog,
         session=CoSessionState(),
-        skill_index={},
+        skill_catalog={},
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=user_skills_dir,
         tool_results_dir=tmp_path / "tool-results",

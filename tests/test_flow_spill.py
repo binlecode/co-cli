@@ -2,7 +2,7 @@
 
 Two layers:
   - spill_if_oversized(): direct helper API used by native tools.
-  - _RoutingToolset.call_tool(): MCP-source results (plain strings that bypass
+  - _CallSeamToolset.call_tool(): MCP-source results (plain strings that bypass
     tool_output) are coerced through the helper; native results pass through
     (their tools call the helper themselves).
 """
@@ -15,7 +15,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.agent.toolset import _RoutingToolset
+from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.deps import (
     CoDeps,
     CoRuntimeState,
@@ -83,7 +83,7 @@ def test_force_spill_above_preview_size_spills(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# _RoutingToolset.call_tool — MCP spill enforcement
+# _CallSeamToolset.call_tool — MCP spill enforcement
 # ---------------------------------------------------------------------------
 
 
@@ -108,13 +108,13 @@ def _make_routing_deps(tool_results_dir: Path) -> CoDeps:
         session=CoSessionState(),
         runtime=CoRuntimeState(),
         tool_results_dir=tool_results_dir,
-        tool_index={"mcp_test_tool": mcp_info, "native_test_tool": native_info},
+        tool_catalog={"mcp_test_tool": mcp_info, "native_test_tool": native_info},
         model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
     )
 
 
 async def _call_through_wrapper(deps: CoDeps, tool_name: str, payload: str) -> str:
-    """Register a tool returning ``payload`` and call it through _RoutingToolset."""
+    """Register a tool returning ``payload`` and call it through _CallSeamToolset."""
     inner: FunctionToolset = FunctionToolset()
 
     async def emit() -> str:
@@ -122,7 +122,7 @@ async def _call_through_wrapper(deps: CoDeps, tool_name: str, payload: str) -> s
 
     emit.__name__ = tool_name
     inner.add_function(emit, requires_approval=False)
-    routing = _RoutingToolset(inner)
+    routing = _CallSeamToolset(inner)
     ctx = RunContext(deps=deps, model=None, usage=RunUsage(), run_step=1)
     tool = (await routing.get_tools(ctx))[tool_name]
     return await routing.call_tool(tool_name, {}, ctx, tool)

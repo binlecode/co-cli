@@ -40,10 +40,10 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ config.llm.validate_config()
 │  ├─ [if ollama] probe_ollama_model() → model_max_ctx = min(probe.num_ctx, llm.max_ctx)
 │  ├─ build_model(config.llm)
-│  ├─ build_native_toolset(config) → (native_toolset, tool_index)
-│  ├─ build_mcp_entries(config, tool_index)
+│  ├─ build_native_toolset(config) → (native_toolset, tool_catalog)
+│  ├─ build_mcp_entries(config, tool_catalog)
 │  ├─ enter MCP toolsets on stack (per-entry timeout + failure isolation)
-│  ├─ discover_mcp_tools(connected); merge MCP entries into tool_index
+│  ├─ discover_mcp_tools(connected); merge MCP entries into tool_catalog
 │  ├─ assemble_routing_toolset(native_toolset, [connected].toolset) → toolset
 │  ├─ load_skills(skills_dir, settings=config, user_skills_dir=...) → filter_namespace_conflicts()
 │  ├─ _discover_memory_backend(config, frontend, degradations)
@@ -54,7 +54,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  └─ return CoDeps(...)
 │
 ├─ deps.session.reasoning_display = CLI-selected mode
-├─ completer.words = _build_completer_words(deps.skill_index)
+├─ completer.words = _build_completer_words(deps.skill_catalog)
 ├─ build_orchestrator(ORCHESTRATOR_SPEC, deps)
 │      composes static instructions from ORCHESTRATOR_SPEC.static_instruction_builders (3 builders:
 │      static, toolset guidance, personality critique), registers per-turn instructions
@@ -118,11 +118,11 @@ Bootstrap builds the foreground `LlmModel` from the resolved LLM config and cons
 
 ### Step 6. Connect MCP servers and discover their tools
 
-Each configured MCP toolset is entered on the caller's `AsyncExitStack` so it stays alive for the session. Failures are isolated per server: a bad server produces a status warning, records a `"mcp.<prefix>"` entry in `degradations`, and is skipped, while successful servers still contribute discovered tools to the merged `tool_index`.
+Each configured MCP toolset is entered on the caller's `AsyncExitStack` so it stays alive for the session. Failures are isolated per server: a bad server produces a status warning, records a `"mcp.<prefix>"` entry in `degradations`, and is skipped, while successful servers still contribute discovered tools to the merged `tool_catalog`.
 
 ### Step 7. Load skills with two-pass precedence
 
-Bootstrap loads skills before `CoDeps` assembly so the resulting `skill_index` map can be stored directly on the runtime object.
+Bootstrap loads skills before `CoDeps` assembly so the resulting `skill_catalog` map can be stored directly on the runtime object.
 
 ```text
 pass 1: bundled skills (co_cli/skills/)
@@ -165,7 +165,7 @@ After model setup, MCP discovery, skill loading, backend resolution, and sync, b
 
 - `config`: the session `Settings` instance
 - `model`, `memory_store`, and `shell`: service handles
-- `toolset`, `tool_index`, and `skill_index`: bootstrap-built registries
+- `toolset`, `tool_catalog`, and `skill_catalog`: bootstrap-built registries
 - resolved workspace paths
 - `degradations`: runtime downgrade reasons
 - mutable `session` and `runtime` state groups

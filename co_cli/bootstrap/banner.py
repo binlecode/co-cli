@@ -72,13 +72,13 @@ def display_welcome_banner(
         llm_provider = config.llm.provider
 
     from co_cli.commands.registry import BUILTIN_COMMANDS
-    from co_cli.skills.index import get_skill_index
+    from co_cli.skills.index import get_skill_catalog
 
-    tool_count = len(deps.tool_index)
-    skill_count = len(get_skill_index(deps.skill_index))
+    tool_count = len(deps.tool_catalog)
+    skill_count = len(get_skill_catalog(deps.skill_catalog))
     mcp_count = len(deps.config.mcp_servers or {})
     cmd_count = len(BUILTIN_COMMANDS) + sum(
-        1 for s in deps.skill_index.values() if s.user_invocable
+        1 for s in deps.skill_catalog.values() if s.user_invocable
     )
 
     backend = deps.config.memory.search_backend

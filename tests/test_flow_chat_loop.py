@@ -28,14 +28,14 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 
 def _make_deps(tmp_path: Path) -> CoDeps:
-    skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
-    _, tool_index = build_native_toolset(SETTINGS_NO_MCP)
+    skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
+    _, tool_catalog = build_native_toolset(SETTINGS_NO_MCP)
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS_NO_MCP,
-        tool_index=tool_index,
+        tool_catalog=tool_catalog,
         session=CoSessionState(),
-        skill_index=skill_index,
+        skill_catalog=skill_catalog,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
@@ -58,9 +58,9 @@ def _make_agent(deps: CoDeps):
 
     Uses build_model so provider/model come from the user's real settings.
     """
-    toolset, tool_index = build_native_toolset(deps.config)
+    toolset, tool_catalog = build_native_toolset(deps.config)
     deps.toolset = toolset
-    deps.tool_index = tool_index
+    deps.tool_catalog = tool_catalog
     deps.model = build_model(deps.config.llm)
     return build_orchestrator(ORCHESTRATOR_SPEC, deps)
 

@@ -31,7 +31,7 @@ run_turn() (orchestrate.py:run_turn)
           └───────────────────────────────────────────────────────────────────┘
           │
           ┌── CallToolsNode (post-response) ──────────────────────────────────┐
-          │   _RoutingToolset.call_tool (per ToolCallPart):                   │
+          │   _CallSeamToolset.call_tool (per ToolCallPart):                  │
           │     L0 cap (MAX_TOOL_CALLS_PER_MODEL_REQUEST=3) → reject excess   │
           │     [tool runs]                                                   │
           │     MCP-only fallback spill (oversized string results)           │
@@ -59,8 +59,8 @@ _finalize_turn()  (main.py)
 
 | Layer | Where | Trigger | Effect | LLM? |
 |---|---|---|---|---|
-| **L0** | `_RoutingToolset.call_tool` per `ToolCallPart` | `tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 3) | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
-| **L1** | `tool_output()` in native tools, `_RoutingToolset.call_tool` for MCP | `len(content) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS = 4_000`) | Persist to `tool-results/<sha16>.txt`; replace content with `<persisted-output>` placeholder + preview | No |
+| **L0** | `_CallSeamToolset.call_tool` per `ToolCallPart` | `tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 3) | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
+| **L1** | `tool_output()` in native tools, `_CallSeamToolset.call_tool` for MCP | `len(content) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS = 4_000`) | Persist to `tool-results/<sha16>.txt`; replace content with `<persisted-output>` placeholder + preview | No |
 | **L2** | `spill_largest_tool_results` history processor | `static_floor_tokens + estimate_message_tokens > deps.spill_threshold_tokens` (realtime-local, no provider-reported floor) | Force-spill largest unspilled string `ToolReturnPart`s **outside the protected tail** (index `< tail_start`, the same boundary as L3), largest-first, until aggregate ≤ threshold | No |
 | **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | tail`. When the anti-thrash gate is tripped, the same assembly runs with `summarize=False` (static marker, no LLM) — the gate demotes the pass, it never skips it | Yes (static marker fallback when anti-thrash-tripped or breaker-open) |
 | **Recovery** | `run_turn` overflow branch | `is_context_overflow(e)` AND `overflow_recovery_attempted == False` | `strip_all_tool_returns`; if still over budget, planner + `compact_messages` + `commit_compaction` on stripped history | Yes (static marker fallback) |
@@ -201,7 +201,7 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Per-turn fields a
 |---|---|---|---|
 | `compaction_applied_this_turn` | `commit_compaction` (sole writer; called by `proactive_window_processor`, `recover_overflow_history` both paths, `/compact`) | `main.py` (session-branching via `TurnResult.history_compacted`); `proactive_window_processor` (OTEL span attr only) | `reset_for_turn` |
 | `current_request_tokens_estimate` | `spill_largest_tool_results` (always — even fast paths) | `proactive_window_processor` (OTEL only, no logic branch); `main.py` `_build_status_snapshot` (status-line context %) | `reset_for_turn`; `/new`, `/clear` |
-| `tool_call_limit_run_step`, `tool_calls_in_model_request` | `_RoutingToolset.call_tool` per call | L0 cap check + consecutive-violation streak | `_RoutingToolset.call_tool` on `ctx.run_step` change |
+| `tool_call_limit_run_step`, `tool_calls_in_model_request` | `_CallSeamToolset.call_tool` per call | L0 cap check + consecutive-violation streak | `_CallSeamToolset.call_tool` on `ctx.run_step` change |
 | `compaction_skip_count` | `_summarization_gate_open` (block path), `_gated_summarize_or_none` (failure paths) | `_summarization_gate_open` (probe cadence) | `_gated_summarize_or_none` (success → 0) |
 | `consecutive_low_yield_proactive_compactions` | `proactive_window_processor` (++ on low yield) | proactive gate; anti-thrash static-marker demotion (`summarize=False`) | proactive on good savings; `_reset_thrash_state` from `recover_overflow_history`; `/compact` |
 
@@ -219,7 +219,7 @@ L0 caps how many tool calls a single `ModelResponse` can issue (the first row of
 
 **Constant.** `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3` in `co_cli/tools/tool_call_limit.py`; non-configurable. Sized for small-ollama-model coherence (small models lose plan coherence past ~3 parallel calls per response); 3 non-spilling (≤ 4K char) tool returns aggregate well inside the per-request spill threshold.
 
-**Trigger surface.** `_RoutingToolset.call_tool` (`co_cli/agent/toolset.py`) — the routing toolset's per-call wrapper, invoked once per `ToolCallPart` as the agent loop dispatches it.
+**Trigger surface.** `_CallSeamToolset.call_tool` (`co_cli/agent/toolset.py`) — the routing toolset's per-call wrapper, invoked once per `ToolCallPart` as the agent loop dispatches it.
 
 **Counter mechanics.** `ctx.run_step` increments once per `ModelRequestNode`, so all tool calls from one assistant message share the same `run_step`. When `run_step` changes, `runtime.tool_calls_in_model_request` resets to 0; each call increments before the cap check. The first 3 calls execute normally; calls 4+ are **rejected without running** — the rejection payload is returned as the tool's "result," appended to message history as a `ToolReturnPart`, and seen by the model on the next turn:
 
@@ -232,7 +232,7 @@ L0 caps how many tool calls a single `ModelResponse` can issue (the first row of
 }
 ```
 
-**Observability.** Each call is wrapped in a `tool {name}` span by `_RoutingToolset.call_tool`; a rejected (over-cap) call still emits its span, carrying the rejection payload as `co.tool.result` (see `docs/specs/observability.md`).
+**Observability.** Each call is wrapped in a `tool {name}` span by `_CallSeamToolset.call_tool`; a rejected (over-cap) call still emits its span, carrying the rejection payload as `co.tool.result` (see `docs/specs/observability.md`).
 
 **Relationship to L1-L3.** L0 is preventive; L1-L3 are reactive. Even with L0 in place:
 - A malformed tool returning a 1MB blob still needs L1 (`spill_if_oversized`) to size-cap.
@@ -473,7 +473,7 @@ All STEPs above live inside `proactive_window_processor` — the trigger gates (
 
 **Token counting:**
 - `estimate_message_tokens(messages)` — `total_chars // CHARS_PER_TOKEN` over text parts and JSON-serialized `ToolCallPart.args`. Args are included because `evict_old_tool_results` clears return content only, never call args. Counts the **message list only** — the static prefill floor is not in `messages`. Unchanged consumers: the L2 spill-loop accumulator and `dedup_tool_results`.
-- `deps.static_floor_tokens` — bootstrap-measured floor: the full delivered instruction floor — `estimate_text_tokens(build_static_instructions(config))` + `estimate_text_tokens(build_toolset_guidance(tool_index))` + `estimate_text_tokens(load_soul_critique(personality))` (the three static builders the orchestrator joins) — plus ALWAYS-visibility tool-schema tokens (measured by `measure_always_schema_budget`). Immutable after bootstrap, like `spill_threshold_tokens`. Because it is measured live from config + toolset, it auto-updates when rules, guidance, critique, or tools change. The ALWAYS tool-schema half is a budgeted, ceiling-guarded floor — deferring an episodic tool shrinks it; see the [tool-schema prefill floor](tools.md#tool-schema-prefill-floor--the-always-vs-deferred-budget) in tools.md.
+- `deps.static_floor_tokens` — bootstrap-measured floor: the full delivered instruction floor — `estimate_text_tokens(build_base_instructions(config))` + `estimate_text_tokens(build_toolset_guidance(tool_catalog))` + `estimate_text_tokens(load_soul_critique(personality))` (the three static builders the orchestrator joins) — plus ALWAYS-visibility tool-schema tokens (measured by `measure_always_schema_budget`). Immutable after bootstrap, like `spill_threshold_tokens`. Because it is measured live from config + toolset, it auto-updates when rules, guidance, critique, or tools change. The ALWAYS tool-schema half is a budgeted, ceiling-guarded floor — deferring an episodic tool shrinks it; see the [tool-schema prefill floor](tools.md#tool-schema-prefill-floor--the-always-vs-deferred-budget) in tools.md.
 - `effective_request_tokens(deps, messages)` — `static_floor_tokens + estimate_message_tokens(messages)`; the floor-inclusive realtime-local estimate that **is** the L2 and L3 trigger (no provider-reported floor), so the static prefill floor cannot undercount live size by one floor (see §1.5).
 
 **Budget resolution.** `resolve_compaction_budget(deps)` returns `deps.model_max_ctx` (Ollama probe capped by `config.llm.max_ctx`, set at bootstrap).
@@ -746,7 +746,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `co_cli/context/_compaction_markers.py` | Marker builders, `gather_compaction_context` enrichment helper, `SUMMARY_MARKER_PREFIX`. |
 | `co_cli/context/_dedup_tool_results.py` | `dedup_tool_results` helpers: content hash, eligibility predicate (`is_dedup_candidate`), back-reference builder (`build_dedup_part`). |
 | `co_cli/context/history_processors.py` | Pure history processors (registered): `dedup_tool_results`, `evict_old_tool_results`, `spill_largest_tool_results`. Recovery helper (unregistered): `strip_all_tool_returns`. |
-| `co_cli/agent/toolset.py` | `_RoutingToolset.call_tool`: L0 per-call cap brake + consecutive-violation streak, MCP-only fallback spill, and `co.tool.*` span enrichment. |
+| `co_cli/agent/toolset.py` | `_CallSeamToolset.call_tool`: L0 per-call cap brake + consecutive-violation streak, MCP-only fallback spill, and `co.tool.*` span enrichment. |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker` per-tool format and `is_cleared_marker` predicate. |
 | `co_cli/context/summarization.py` | `summarize_messages`, token estimator, budget resolver, and prompt templates. |
 | `co_cli/context/tokens.py` | `CHARS_PER_TOKEN` shared constant; `estimate_text_tokens` (raw-string token estimate, used for the instruction half of the floor — base instructions, toolset guidance, and critique). |
@@ -759,7 +759,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `co_cli/tools/files/read.py` | `file_read` per-tool `spill_threshold_chars=math.inf` override (never spills). |
 | `co_cli/tools/tool_call_limit.py` | `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `MaxToolCallsExceededPayload`, `make_exceeded_payload`. |
 | `co_cli/config/llm.py` | `max_ctx` (Ollama probe ceiling). |
-| `co_cli/context/assembly.py` | Prompt assembly: `build_static_instructions`. |
+| `co_cli/context/assembly.py` | Prompt assembly: `build_base_instructions`. |
 | `co_cli/context/rules/` | Base system prompt rule files (identity, safety, reasoning, tool protocol, workflow). |
 | `evals/eval_compaction_proactive.py` | Proactive compaction end-to-end eval. |
 | `evals/eval_compaction_multi_cycle.py` | Multi-cycle compaction fidelity eval. |
@@ -772,7 +772,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `spill_if_oversized` constant values pinned: `SPILL_THRESHOLD_CHARS`, `TOOL_RESULT_PREVIEW_CHARS` | `tests/test_flow_spill.py` |
 | `spill_if_oversized` threshold boundary: below 4000 passes through unchanged; above 4000 spills | `tests/test_flow_spill.py` |
 | `spill_if_oversized` `force=True`: force-spills even below threshold when above preview size | `tests/test_flow_spill.py` |
-| `_RoutingToolset.call_tool`: MCP results above threshold spilled to disk; below-threshold pass through; native results not coerced (their tools call the helper themselves) | `tests/test_flow_spill.py` |
+| `_CallSeamToolset.call_tool`: MCP results above threshold spilled to disk; below-threshold pass through; native results not coerced (their tools call the helper themselves) | `tests/test_flow_spill.py` |
 | `spill_largest_tool_results`: below-threshold fast path; largest-first spill across full message list; cross-batch accumulation (multiple `ModelRequest`s); already-spilled exclusion; tail protection (fresh read in last turn group survives while an aged read spills; protected tail alone over threshold defers without stubbing; single turn group → no protection); OTEL span `tool_budget.spill_largest_tool_results` | `tests/test_flow_compaction_spill_largest_tool_results.py` |
 | `spill_largest_tool_results` cached threshold: `spill_threshold_tokens` from `CoDeps` used without recompute | `tests/test_flow_compaction_spill_largest_tool_results.py` |
 | L0 tool-call cap: `MAX_TOOL_CALLS_PER_MODEL_REQUEST` constant pinned; allow up to cap; reject above cap with JSON payload | `tests/test_flow_tool_call_limit.py` |

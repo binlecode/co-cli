@@ -34,14 +34,14 @@ Do the test task.
 
 
 def _make_deps(tmp_path: Path, config=SETTINGS) -> CoDeps:
-    skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
-    _, tool_index = build_native_toolset(config)
+    skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
+    _, tool_catalog = build_native_toolset(config)
     return CoDeps(
         shell=ShellBackend(),
         config=config,
-        tool_index=tool_index,
+        tool_catalog=tool_catalog,
         session=CoSessionState(),
-        skill_index=skill_index,
+        skill_catalog=skill_catalog,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",

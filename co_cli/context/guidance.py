@@ -1,7 +1,7 @@
 """Static guidance constants for toolset-availability gated prompt assembly.
 
 Content that was previously unconditional in rule files is moved here and
-emitted only when the matching tool is present in the session tool_index.
+emitted only when the matching tool is present in the session tool_catalog.
 This keeps rule files tool-agnostic while preserving guidance accuracy.
 """
 
@@ -18,10 +18,10 @@ approval-gated actions, unavailable or limited components, and active fallbacks.
 Pair it with `tool_view` when the question is also about deferred tools."""
 
 
-def build_toolset_guidance(tool_index: dict[str, ToolInfo]) -> str:
+def build_toolset_guidance(tool_catalog: dict[str, ToolInfo]) -> str:
     """Emit tool-specific guidance for tools actually present in the session."""
     parts: list[str] = []
-    tool_names = set(tool_index.keys())
+    tool_names = set(tool_catalog.keys())
 
     if "capabilities_check" in tool_names:
         parts.append(CAPABILITIES_GUIDANCE)

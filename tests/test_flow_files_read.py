@@ -34,12 +34,12 @@ def _ctx(deps: CoDeps, tool: object | None = None) -> RunContext[CoDeps]:
 
     Without it, the tool-name lookup misses and tool_output falls back to the 4000-char
     default — fine for small outputs, but file_read's math.inf (keep reads inline) only
-    takes effect when tool_name + tool_index reflect the registered ToolInfo.
+    takes effect when tool_name + tool_catalog reflect the registered ToolInfo.
     """
     if tool is None:
         return RunContext(deps=deps, model=None, usage=RunUsage())
     info = getattr(tool, AGENT_TOOL_ATTR)
-    deps.tool_index[info.name] = info
+    deps.tool_catalog[info.name] = info
     return RunContext(deps=deps, model=None, usage=RunUsage(), tool_name=info.name)
 
 

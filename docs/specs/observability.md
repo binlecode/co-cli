@@ -12,7 +12,7 @@ co-cli emits structured JSON-line trace records to a local log file. No OpenTele
 │   Agent.run() ──▶ Model Call ──▶ Tool Execution                │
 │        │               │               │                       │
 │        ▼               ▼               ▼                       │
-│   run-call-site    SurrogateRecovery   _RoutingToolset         │
+│   run-call-site    SurrogateRecovery   _CallSeamToolset        │
 │   agent span    +  Model chat span  +  tool span  +  @trace()  │
 │                           (push/pop spans)                     │
 │                              │                                 │
@@ -105,7 +105,7 @@ There is no pydantic-ai capability middleware. The agent/model/tool spans are pu
 |------|------|-----------|
 | `invoke_agent {name}` (`agent`) | the run call site — `_execute_stream_segment` (`context/orchestrate.py`) for the orchestrator, `run_standalone` (`agent/run.py`) for task agents | `push_span` with `co.agent.role`/`co.agent.model`/`co.agent.request_limit` before the run; `pop_span` with `co.agent.requests_used`/`co.agent.final_result` after (ERROR + re-raise on exception) |
 | `chat {model}` (`model`) | `SurrogateRecoveryModel` (`llm/surrogate_recovery_model.py`), covering BOTH `request` (non-stream) and `request_stream` (streaming) | `push_span` with `co.model.name`/`co.model.input` on entry; `pop_span` with `co.model.output`/`co.model.tokens.input/output`/`co.model.name`/`co.model.finish_reason` once the response (or assembled stream) is read. On the streaming path the final response/usage is only available after the stream is consumed, so the span closes on context-manager exit reading `StreamedResponse.get()`/`.usage()` |
-| `tool {name}` (`tool`) | `_RoutingToolset.call_tool` (`agent/toolset.py`) | `push_span` with `co.tool.name`/`co.tool.args`/`co.tool.args_chars`; on close sets `co.tool.result`/`co.tool.result_size`/`co.tool.source`/`co.tool.requires_approval`, then `pop_span` (ERROR + re-raise on tool error) |
+| `tool {name}` (`tool`) | `_CallSeamToolset.call_tool` (`agent/toolset.py`) | `push_span` with `co.tool.name`/`co.tool.args`/`co.tool.args_chars`; on close sets `co.tool.result`/`co.tool.result_size`/`co.tool.source`/`co.tool.requires_approval`, then `pop_span` (ERROR + re-raise on tool error) |
 
 The tool span body is linear and ordered: push span → per-model-request cap check (rejection payload past the cap) → `super().call_tool(...)` → MCP-result spill if oversized → set `co.tool.*` → pop span. All three concerns that must live at the `call_tool` boundary (span, cap, spill) sit there together; nothing depends on the ordering of a separate component's hooks. See [tools.md](tools.md) for the cap and spill detail.
 
@@ -165,7 +165,7 @@ One JSON object per closed span, one line per record. Schema version 1:
 | `invoke_agent {name}` | `agent` | `co.agent.role`, `co.agent.model`, `co.agent.request_limit`, `co.agent.requests_used`, `co.agent.final_result` — pushed at the run call site (`_execute_stream_segment` for the orchestrator, `run_standalone` for task agents). |
 | `chat {model}` | `model` | `co.model.name`, `co.model.input` (JSON list of message dicts preserving role + part types incl. `thinking`), `co.model.output` (same shape), `co.model.tokens.input`, `co.model.tokens.output`, `co.model.finish_reason` — emitted by `SurrogateRecoveryModel` on both the streaming and non-stream request paths. |
 | `llm_call {model}` | `model` | Same attribute keys as `chat {model}` (BC-1 parity — renders identically) but emitted by the direct-call primitive `llm_call()` (`co_cli/llm/call.py`) via explicit `push_span`/`pop_span`, NOT the agent loop. Covers the compaction summarizer, dream merges, and eval judge calls. The distinct name keeps direct calls separable from agent turns; the span nests under the active parent (e.g. `compaction.proactive_check`). Reuses `serialize_messages`/`serialize_response` from `observability/serialize.py`. |
-| `tool {name}` | `tool` | `co.tool.name`, `co.tool.args` (JSON string), `co.tool.result` (JSON string, size-capped), `co.tool.result_size`, `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.args_chars` — all set in one place by `_RoutingToolset.call_tool` (`co_cli/agent/toolset.py`). |
+| `tool {name}` | `tool` | `co.tool.name`, `co.tool.args` (JSON string), `co.tool.result` (JSON string, size-capped), `co.tool.result_size`, `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.args_chars` — all set in one place by `_CallSeamToolset.call_tool` (`co_cli/agent/toolset.py`). |
 | `background_task_execute` | `co` | `task.command`, `task.description`, `task.cwd` — `@trace("background_task_execute")` on `task_start`. |
 | `tool_budget.resolved` | `co` | `budget.context_window_tokens`, `budget.spill_ratio`, `budget.tool_call_limit`, `budget.spill_threshold_chars`, `budget.spill_threshold_tokens` — emitted once at bootstrap by `@trace("tool_budget.resolved")` on `_emit_tool_budget_span()`. |
 | `sync_memory` | `co` | `count`, `backend`, `status` — `@trace("sync_memory")` on `_sync_memory_domain()`. |
@@ -313,7 +313,7 @@ All data stays local. Tool responses and full conversation history are captured 
 | Symbol | Source | Contract |
 |--------|--------|---------|
 | `serialize_messages(messages) -> str` / `serialize_response(response) -> str` | `co_cli/observability/serialize.py` | Compact JSON for `co.model.input` / `co.model.output`; shared by the `chat` span (`SurrogateRecoveryModel`) and the direct-call `llm_call` span |
-| `serialize_tool_args(args) -> str` / `truncate_tool_result(value) -> str` | `co_cli/observability/serialize.py` | Compact JSON for `co.tool.args` and a length-bounded render for `co.tool.result`; used by `_RoutingToolset.call_tool` |
+| `serialize_tool_args(args) -> str` / `truncate_tool_result(value) -> str` | `co_cli/observability/serialize.py` | Compact JSON for `co.tool.args` and a length-bounded render for `co.tool.result`; used by `_CallSeamToolset.call_tool` |
 
 ### Viewers (CLI entrypoints)
 
@@ -336,7 +336,7 @@ All data stays local. Tool responses and full conversation history are captured 
 | `co_cli/config/core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
 | `co_cli/config/observability.py` | `ObservabilitySettings` — file-logging settings, spans-log settings, redaction patterns |
 | `co_cli/agent/build.py` | Builds orchestrator and task agents; no capability attachment — tracing/cap/spill ride the toolset wrapper and model wrapper |
-| `co_cli/agent/toolset.py` | `_RoutingToolset.call_tool` — the single `tool`-span / cap / MCP-spill seam |
+| `co_cli/agent/toolset.py` | `_CallSeamToolset.call_tool` — the single `tool`-span / cap / MCP-spill seam |
 | `co_cli/llm/surrogate_recovery_model.py` | `SurrogateRecoveryModel` — the `chat`-span seam (both request paths) plus surrogate recovery and gated tool-arg repair |
 | `~/.co-cli/logs/co-cli.jsonl` | Rotating app log — INFO+ Python `logging` records (`"kind": "log"`); independent stream from spans |
 | `~/.co-cli/logs/co-cli-spans.jsonl` | Rotating spans log — one JSON line per closed span |

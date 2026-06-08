@@ -610,14 +610,14 @@ async def _chat_loop(
             raise SystemExit(1) from e
         deps.session.reasoning_display = reasoning_display
 
-        completer.update(build_completer_entries(deps.skill_index))
+        completer.update(build_completer_entries(deps.skill_catalog))
         agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
 
         restore_session(deps, frontend)
         _sweep_tool_results(deps)
-        from co_cli.skills.index import get_skill_index
+        from co_cli.skills.index import get_skill_catalog
 
-        frontend.on_status(f"  {len(get_skill_index(deps.skill_index))} skill(s) loaded")
+        frontend.on_status(f"  {len(get_skill_catalog(deps.skill_catalog))} skill(s) loaded")
 
         if deps.session.session_path.exists():
             console.print("[dim]Previous session available — /resume to continue[/dim]")

@@ -355,12 +355,12 @@ async def create_deps(
 
     llm_model = build_model(config.llm)
     judge_llm_model = build_judge_model(config.llm)
-    native_toolset, tool_index = build_native_toolset(config)
+    native_toolset, tool_catalog = build_native_toolset(config)
 
     degradations: dict[str, str] = {}
     connected: list[MCPToolsetEntry] = []
     if stack is not None:
-        mcp_entries = build_mcp_entries(config, tool_index)
+        mcp_entries = build_mcp_entries(config, tool_catalog)
         for entry in mcp_entries:
             try:
                 async with asyncio.timeout(entry.timeout):
@@ -369,13 +369,13 @@ async def create_deps(
             except Exception as e:
                 on_status(f"MCP server failed to connect: {e}")
         if connected:
-            _, discovery_errors, mcp_index = await discover_mcp_tools(
-                connected, exclude=set(tool_index.keys())
+            _, discovery_errors, mcp_tool_catalog = await discover_mcp_tools(
+                connected, exclude=set(tool_catalog.keys())
             )
             for prefix, err in discovery_errors.items():
                 on_status(f"MCP server {prefix!r} failed to list tools: {err}")
                 degradations[f"mcp.{prefix}"] = err[:120]
-            tool_index.update(mcp_index)
+            tool_catalog.update(mcp_tool_catalog)
 
     toolset = assemble_routing_toolset(native_toolset, [entry.toolset for entry in connected])
 
@@ -388,7 +388,7 @@ async def create_deps(
         user_skills_dir=paths["user_skills_dir"],
         errors=skill_errors,
     )
-    skill_index = filter_namespace_conflicts(
+    skill_catalog = filter_namespace_conflicts(
         loaded_skills, set(BUILTIN_COMMANDS.keys()), skill_errors
     )
     for msg in skill_errors:
@@ -422,9 +422,9 @@ async def create_deps(
         index_store=index_store,
         memory_store=memory_store,
         session_store=session_store,
-        tool_index=tool_index,
+        tool_catalog=tool_catalog,
         toolset=toolset,
-        skill_index=skill_index,
+        skill_catalog=skill_catalog,
         runtime=runtime,
         model_max_ctx=model_max_ctx,
         spill_threshold_tokens=spill_threshold_tokens,
@@ -434,7 +434,7 @@ async def create_deps(
     deps.runtime.background_status_callback = on_status
 
     from co_cli.bootstrap.schema_budget import measure_always_schema_budget
-    from co_cli.context.assembly import build_static_instructions
+    from co_cli.context.assembly import build_base_instructions
     from co_cli.context.guidance import build_toolset_guidance
     from co_cli.context.tokens import CHARS_PER_TOKEN, estimate_text_tokens
     from co_cli.personality.prompts.loader import load_soul_critique
@@ -443,8 +443,8 @@ async def create_deps(
     # orchestrator joins into the cached prefix (base instructions + toolset
     # guidance + personality critique). Measuring only the base under-counts the
     # floor that actually rides every request.
-    instruction_tokens = estimate_text_tokens(build_static_instructions(config))
-    instruction_tokens += estimate_text_tokens(build_toolset_guidance(tool_index))
+    instruction_tokens = estimate_text_tokens(build_base_instructions(config))
+    instruction_tokens += estimate_text_tokens(build_toolset_guidance(tool_catalog))
     if config.personality:
         instruction_tokens += estimate_text_tokens(load_soul_critique(config.personality))
     schema_budget = await measure_always_schema_budget(deps)

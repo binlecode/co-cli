@@ -48,7 +48,7 @@ async def skill_view(
     Args:
         name: Skill name, e.g. "deep-research" (the filename_stem from the skill manifest).
     """
-    skill = ctx.deps.skill_index.get(name)
+    skill = ctx.deps.skill_catalog.get(name)
     if skill is None:
         return tool_error(f"skill_view: unknown skill {name!r}.", ctx=ctx)
     if skill.disable_model_invocation:
@@ -144,9 +144,9 @@ def _skill_create(ctx: RunContext[CoDeps], name: str, content: str | None) -> To
     warnings = _lint_warnings(content)
     if warnings:
         result["lint_warnings"] = warnings
-    if len(ctx.deps.skill_index) >= 30:
+    if len(ctx.deps.skill_catalog) >= 30:
         result["size_warning"] = (
-            f"Skill count is now {len(ctx.deps.skill_index)}; "
+            f"Skill count is now {len(ctx.deps.skill_catalog)}; "
             "consider reviewing and pruning unused skills."
         )
     ctx.deps.session.model_requests_since_skill_review = 0

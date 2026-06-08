@@ -80,8 +80,12 @@ def build_rules_block() -> str:
     return "\n\n".join(rule_parts)
 
 
-def build_static_instructions(config: Settings) -> str:
-    """Build the static instructions string for the given model and personality.
+def build_base_instructions(config: Settings) -> str:
+    """Build the base instructions (seed + mindsets + rules) for model and personality.
+
+    This is the **base** layer — one of three static-instruction builders the
+    orchestrator joins into the cached prefix, alongside ``_toolset_guidance_provider``
+    and ``_personality_critique_provider``. It does not build the whole static literal.
 
     Assembles sections in explicit order:
     1. Soul seed (identity anchor)
@@ -92,7 +96,7 @@ def build_static_instructions(config: Settings) -> str:
     ``source='canon'`` for personality-system auto-injection only (no model-callable
     read path); critique is appended in ``core.py`` after operational guidance.
 
-    Returns the fully assembled static instructions string.
+    Returns the fully assembled base instructions string.
     """
     parts: list[str] = []
 

@@ -5,7 +5,7 @@ Loads soul seeds, critiques, and mindsets at agent construction time.
 Personality is assembled from these sources in this order:
 - ``souls/{role}/seed.md``                    — identity declaration, trait essence, constraints
 - ``souls/{role}/mindsets/{task_type}.md``     — task-specific behavioral guidance (static)
-- ``rules/01..05_*.md``                       — behavioral rules (assembled by build_static_instructions)
+- ``rules/01..05_*.md``                       — behavioral rules (assembled by build_base_instructions)
 
 Canon scenes (``souls/{role}/canon/*.md``) are NOT loaded here. They are
 indexed at bootstrap into the shared FTS pipeline under source='canon' and
@@ -16,7 +16,7 @@ only a new directory with the required files — no Python changes.
 
 Callers:
   co_cli.context.assembly  — uses load_soul_seed, load_soul_mindsets inside
-                             build_static_instructions(), called by ORCHESTRATOR_SPEC
+                             build_base_instructions(), called by ORCHESTRATOR_SPEC
   co_cli.agent.orchestrator — uses load_soul_critique to append critique after toolset guidance
 """
 

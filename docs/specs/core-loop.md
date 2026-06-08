@@ -142,7 +142,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 | `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by `_approval_resume_filter` |
 | `compaction_skip_count` | cross-turn circuit breaker for inline compaction (>= 3 trips breaker; every 10 skips a probe is attempted) |
 | `active_skill_name` | cross-function skill dispatch marker cleared after the turn |
-| `consecutive_tool_cap_violations` | incremented by `_RoutingToolset.call_tool` immediately at the `(cap+1)`-th call of a model request that exceeds `MAX_TOOL_CALLS_PER_MODEL_REQUEST`; reset on the next request when the prior one behaved, finalized at the segment boundary in `_execute_stream_segment`, and zeroed by `reset_for_turn()` |
+| `consecutive_tool_cap_violations` | incremented by `_CallSeamToolset.call_tool` immediately at the `(cap+1)`-th call of a model request that exceeds `MAX_TOOL_CALLS_PER_MODEL_REQUEST`; reset on the next request when the prior one behaved, finalized at the segment boundary in `_execute_stream_segment`, and zeroed by `reset_for_turn()` |
 
 ### 2.2 Stream Segment Contract
 

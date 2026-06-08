@@ -74,7 +74,7 @@ def _make_run_context(deps: CoDeps, agent) -> RunContext[CoDeps]:
     """Construct a minimal RunContext for direct @agent_tool invocation.
 
     The skill-write tools read ctx.deps, ctx.tool_name (for spill thresholds),
-    and nothing else; tool_index is the only ctx.deps surface touched in the
+    and nothing else; tool_catalog is the only ctx.deps surface touched in the
     success path. RunUsage() is a fresh zero-usage accumulator — irrelevant
     to the tools' structural assertions.
     """
@@ -571,7 +571,7 @@ async def case_w4_e_discovery(
     trace_file = run.case_trace_path(case_id)
     trace_file.touch(exist_ok=True)
 
-    skill_info = deps.tool_index.get("skill_create")
+    skill_info = deps.tool_catalog.get("skill_create")
     if skill_info is None or skill_info.visibility != VisibilityPolicyEnum.DEFERRED:
         return CaseResult(
             name=case_id,
@@ -587,7 +587,7 @@ async def case_w4_e_discovery(
 
     from co_cli.tools.deferred_prompt import build_deferred_tool_awareness_prompt
 
-    stub_chars = len(build_deferred_tool_awareness_prompt(deps.tool_index))
+    stub_chars = len(build_deferred_tool_awareness_prompt(deps.tool_catalog))
 
     threshold = -(-2 * trials // 3)
     hits = 0

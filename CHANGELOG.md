@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.320]
+
+### Toolset symbol renames — `_CallSeamToolset` + `tool_index` → `tool_catalog`
+
+- **`_RoutingToolset` → `_CallSeamToolset`** (`co_cli/agent/toolset.py`) — the per-call `WrapperToolset` does
+  not route (native-vs-MCP dispatch is `CombinedToolset`'s job one layer in); it is the single seam hosting
+  the `tool {name}` span, the per-model-request tool-call cap, and MCP-result spill. The new name matches the
+  established "seam" vocabulary in the docstring and `docs/specs/tools.md`. Hard rename, no alias; the builder
+  `assemble_routing_toolset` is kept (it genuinely assembles the routing surface). Updated all `co_cli/` and
+  `tests/` references and synced specs (`tools.md`, `compaction.md`, `core-loop.md`, `observability.md`,
+  `agents.md`).
+- **`tool_index` → `tool_catalog`** — repo-wide rename of the native+MCP `dict[str, ToolInfo]` carried on
+  `deps` and threaded through bootstrap, MCP discovery, and the call seam, aligning the symbol with spec
+  vocabulary. Includes incidental in-flight coworker edits across `commands/`, `bootstrap/`, and `context/`.
+
 ## [0.8.319]
 
 ### Deferred-tool stub completeness + instruction-floor-audit report consolidation

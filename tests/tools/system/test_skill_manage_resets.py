@@ -53,16 +53,16 @@ Do the thing (updated).
 def _make_deps(tmp_path: Path, initial_iters: int = 8) -> CoDeps:
     user_skills_dir = tmp_path / "skills"
     user_skills_dir.mkdir(parents=True, exist_ok=True)
-    skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
-    _, tool_index = build_native_toolset(SETTINGS)
+    skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
+    _, tool_catalog = build_native_toolset(SETTINGS)
     session = CoSessionState()
     session.model_requests_since_skill_review = initial_iters
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
-        tool_index=tool_index,
+        tool_catalog=tool_catalog,
         session=session,
-        skill_index=skill_index,
+        skill_catalog=skill_catalog,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=user_skills_dir,
         tool_results_dir=tmp_path / "tool-results",
@@ -106,8 +106,8 @@ async def test_edit_resets_model_requests_since_skill_review(tmp_path: Path) -> 
     user_skills_dir = deps.user_skills_dir
     skill_path = user_skills_dir / "test-skill.md"
     skill_path.write_text(_VALID_SKILL, encoding="utf-8")
-    # Reload skill_index so edit finds the skill
-    deps.skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
+    # Reload skill_catalog so edit finds the skill
+    deps.skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
 
     ctx = _make_ctx(deps)
 
@@ -129,7 +129,7 @@ async def test_patch_resets_model_requests_since_skill_review(tmp_path: Path) ->
     user_skills_dir = deps.user_skills_dir
     skill_path = user_skills_dir / "test-skill.md"
     skill_path.write_text(_VALID_SKILL, encoding="utf-8")
-    deps.skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
+    deps.skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
 
     ctx = _make_ctx(deps)
 
@@ -157,7 +157,7 @@ async def test_delete_does_not_reset_model_requests_since_skill_review(tmp_path:
     user_skills_dir = deps.user_skills_dir
     skill_path = user_skills_dir / "test-skill.md"
     skill_path.write_text(_VALID_SKILL, encoding="utf-8")
-    deps.skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
+    deps.skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
 
     ctx = _make_ctx(deps)
 

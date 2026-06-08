@@ -42,13 +42,13 @@ class _SanitizingMCPServer:
 
 @dataclass
 class _SequentialMCPToolset(WrapperToolset):
-    """Patches ToolDefinition.sequential from tool_index.is_concurrent_safe for MCP tools.
+    """Patches ToolDefinition.sequential from tool_catalog.is_concurrent_safe for MCP tools.
 
-    Holds a mutable reference to tool_index — populated by discover_mcp_tools()
+    Holds a mutable reference to tool_catalog — populated by discover_mcp_tools()
     before the first get_tools() call, so the patch is always current at step time.
     """
 
-    tool_index: dict[str, ToolInfo]
+    tool_catalog: dict[str, ToolInfo]
 
     async def get_tools(self, ctx: RunContext[Any]) -> dict[str, ToolsetTool[Any]]:
         tools = await self.wrapped.get_tools(ctx)
@@ -57,7 +57,7 @@ class _SequentialMCPToolset(WrapperToolset):
                 tool,
                 tool_def=replace(tool.tool_def, sequential=not info.is_concurrent_safe),
             )
-            if (info := self.tool_index.get(name)) is not None
+            if (info := self.tool_catalog.get(name)) is not None
             else tool
             for name, tool in tools.items()
         }
@@ -116,7 +116,7 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
         sanitizing_server = _SanitizingMCPServer(mcp_server)
         inner = sanitizing_server.approval_required() if approval else sanitizing_server
         # No DeferredLoadingToolset: it stamps defer_loading=True, which would re-engage
-        # the SDK's search_tools loader. MCP tools are DEFERRED in tool_index, so co's
+        # the SDK's search_tools loader. MCP tools are DEFERRED in tool_catalog, so co's
         # per-turn visibility filter (agent/toolset.py) hides them until loaded via
         # tool_view — one loader, native and MCP alike.
         entries.append(
@@ -167,15 +167,15 @@ async def discover_mcp_tools(
     """Discover MCP tool names by connecting to servers and listing tools.
 
     Reads policy (approval, prefix) from the recorded ``MCPToolsetEntry``; no
-    wrapper chain walking. Returns (tool_names, errors, mcp_index) where errors
+    wrapper chain walking. Returns (tool_names, errors, mcp_tool_catalog) where errors
     maps server prefix to the error string for each server where list_tools()
-    failed, and mcp_index maps tool name to ToolInfo metadata. Tool names exclude
+    failed, and mcp_tool_catalog maps tool name to ToolInfo metadata. Tool names exclude
     any in ``exclude``. MCP tools are deferred by default (DEFERRED visibility).
     All servers are queried concurrently; startup delay is max(timeouts) not sum.
     """
     mcp_tool_names: list[str] = []
     errors: dict[str, str] = {}
-    mcp_index: dict[str, ToolInfo] = {}
+    mcp_tool_catalog: dict[str, ToolInfo] = {}
 
     results = await asyncio.gather(*[_discover_one(entry, exclude) for entry in mcp_entries])
     for entry, (hits, err) in zip(mcp_entries, results, strict=True):
@@ -183,6 +183,6 @@ async def discover_mcp_tools(
             errors[entry.prefix] = err
         for name, info in hits:
             mcp_tool_names.append(name)
-            mcp_index[name] = info
+            mcp_tool_catalog[name] = info
 
-    return sorted(mcp_tool_names), errors, mcp_index
+    return sorted(mcp_tool_names), errors, mcp_tool_catalog

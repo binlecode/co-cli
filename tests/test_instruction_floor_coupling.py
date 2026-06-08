@@ -7,9 +7,9 @@ floor (it loads via ``tool_view`` per ``04_tool_protocol.md``), so hard-coding i
 signature every turn and contradicts the deferred-load mechanic. This is the floor-audit
 plan's F5 (``docs/exec-plans/.../instruction-floor-audit.md``).
 
-This guard iterates the live ``deps.tool_index`` for DEFERRED-visibility tools and asserts
+This guard iterates the live ``deps.tool_catalog`` for DEFERRED-visibility tools and asserts
 none of their names appears with a call-signature pattern (``\\bname\\s*\\(``) in the
-assembled floor (``build_rules_block() + build_toolset_guidance(deps.tool_index)``). The
+assembled floor (``build_rules_block() + build_toolset_guidance(deps.tool_catalog)``). The
 deferred set is derived live — no hardcoded allowlist — so any future defer is auto-covered.
 """
 
@@ -34,11 +34,11 @@ async def test_no_deferred_tool_signature_on_floor() -> None:
 
     deferred_names = [
         name
-        for name, info in deps.tool_index.items()
+        for name, info in deps.tool_catalog.items()
         if info.visibility == VisibilityPolicyEnum.DEFERRED
     ]
 
-    floor = build_rules_block() + build_toolset_guidance(deps.tool_index)
+    floor = build_rules_block() + build_toolset_guidance(deps.tool_catalog)
 
     for name in deferred_names:
         match = re.search(rf"\b{re.escape(name)}\s*\(", floor)

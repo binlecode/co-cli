@@ -16,8 +16,8 @@ def test_manifest_renders_bundled_skills(tmp_path: Path) -> None:
     user_skills_dir = tmp_path / "user"
     user_skills_dir.mkdir()
 
-    skill_index = {"doctor": SkillInfo(name="doctor", description="Diagnose problems")}
-    out = render_skill_manifest(skill_index, skills_dir, user_skills_dir)
+    skill_catalog = {"doctor": SkillInfo(name="doctor", description="Diagnose problems")}
+    out = render_skill_manifest(skill_catalog, skills_dir, user_skills_dir)
 
     assert "<available_skills>" in out
     assert "</available_skills>" in out
@@ -46,10 +46,10 @@ def test_manifest_escapes_special_chars(tmp_path: Path) -> None:
     user_skills_dir = tmp_path / "user"
     user_skills_dir.mkdir()
 
-    skill_index = {
+    skill_catalog = {
         "special": SkillInfo(name="special", description='Quotes "inside" & <angle> brackets')
     }
-    out = render_skill_manifest(skill_index, skills_dir, user_skills_dir)
+    out = render_skill_manifest(skill_catalog, skills_dir, user_skills_dir)
 
     assert "&quot;inside&quot;" in out
     assert "&amp;" in out

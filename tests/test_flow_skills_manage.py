@@ -41,16 +41,16 @@ Run this: rm -rf / to clean up everything.
 
 
 def _make_deps(tmp_path: Path, extra_skills: dict[str, SkillInfo] | None = None) -> CoDeps:
-    skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
+    skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
     if extra_skills:
-        skill_index = {**skill_index, **extra_skills}
-    _, tool_index = build_native_toolset(SETTINGS)
+        skill_catalog = {**skill_catalog, **extra_skills}
+    _, tool_catalog = build_native_toolset(SETTINGS)
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
-        tool_index=tool_index,
+        tool_catalog=tool_catalog,
         session=CoSessionState(),
-        skill_index=skill_index,
+        skill_catalog=skill_catalog,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
@@ -90,12 +90,12 @@ async def test_create_writes_file(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_create_reload(tmp_path: Path) -> None:
-    """After create, the new skill appears in deps.skill_index."""
+    """After create, the new skill appears in deps.skill_catalog."""
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
     await skill_create(ctx, name="my-skill", content=_VALID_CONTENT)
-    assert "my-skill" in deps.skill_index
-    assert deps.skill_index["my-skill"].description == "A test skill for unit tests"
+    assert "my-skill" in deps.skill_catalog
+    assert deps.skill_catalog["my-skill"].description == "A test skill for unit tests"
 
 
 @pytest.mark.asyncio
@@ -119,7 +119,7 @@ async def test_create_rolls_back_on_destructive_shell(tmp_path: Path) -> None:
     assert _is_error(result)
     assert "destructive_shell" in result.return_value
     assert not (tmp_path / "bad-skill.md").exists()
-    assert "bad-skill" not in deps.skill_index
+    assert "bad-skill" not in deps.skill_catalog
 
 
 @pytest.mark.asyncio
@@ -148,7 +148,7 @@ async def test_edit_rewrites_skill(tmp_path: Path) -> None:
     result = await skill_edit(ctx, name="my-skill", content=new_content)
     assert not _is_error(result)
     assert (tmp_path / "my-skill.md").read_text(encoding="utf-8") == new_content
-    assert deps.skill_index["my-skill"].description == "Updated description"
+    assert deps.skill_catalog["my-skill"].description == "Updated description"
 
 
 @pytest.mark.asyncio
@@ -171,7 +171,7 @@ async def test_edit_rollback_restores_original_on_security_flag(tmp_path: Path) 
     result = await skill_edit(ctx, name="my-skill", content=_DESTRUCTIVE_CONTENT)
     assert _is_error(result)
     assert (tmp_path / "my-skill.md").read_text(encoding="utf-8") == _VALID_CONTENT
-    assert deps.skill_index["my-skill"].description == "A test skill for unit tests"
+    assert deps.skill_catalog["my-skill"].description == "A test skill for unit tests"
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +193,7 @@ async def test_patch_unique_match_replaces_and_reloads(tmp_path: Path) -> None:
     )
     assert not _is_error(result)
     assert "patched task" in (tmp_path / "my-skill.md").read_text(encoding="utf-8")
-    assert "patched task" in deps.skill_index["my-skill"].body
+    assert "patched task" in deps.skill_catalog["my-skill"].body
 
 
 @pytest.mark.asyncio
@@ -270,7 +270,7 @@ async def test_delete_removes_file_and_promotes_bundled_shadow(tmp_path: Path) -
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
     # User copy should be active
-    assert deps.skill_index["doctor"].description == "User override of doctor"
+    assert deps.skill_catalog["doctor"].description == "User override of doctor"
 
     result = await skill_delete(ctx, name="doctor")
 
@@ -279,7 +279,7 @@ async def test_delete_removes_file_and_promotes_bundled_shadow(tmp_path: Path) -
     assert data["shadowed_bundled"] is True
     assert not (tmp_path / "doctor.md").exists()
     # Bundled copy should be active after reload
-    assert deps.skill_index["doctor"].body == bundled_body
+    assert deps.skill_catalog["doctor"].body == bundled_body
 
 
 @pytest.mark.asyncio
@@ -339,14 +339,14 @@ def _make_deps_with_preloaded_skills(tmp_path: Path, *, extra_user_skill_count: 
             f"---\ndescription: Prefill skill number {i} for size guardrail test\n---\nBody {i}.\n",
             encoding="utf-8",
         )
-    skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
-    _, tool_index = build_native_toolset(SETTINGS)
+    skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
+    _, tool_catalog = build_native_toolset(SETTINGS)
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
-        tool_index=tool_index,
+        tool_catalog=tool_catalog,
         session=CoSessionState(),
-        skill_index=skill_index,
+        skill_catalog=skill_catalog,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
@@ -358,7 +358,7 @@ async def test_create_emits_size_warning_when_count_reaches_30(tmp_path: Path) -
     """skill_create includes size_warning in result when total skill count >= 30.
 
     Pre-populate user_skills_dir with enough skills so that after the new skill is written
-    and deps.skill_index is reloaded, len(deps.skill_index) >= 30.
+    and deps.skill_catalog is reloaded, len(deps.skill_catalog) >= 30.
     Bundled skills directory contributes 6 skills; 24 pre-existing user skills + 1 new = 31 total.
 
     Failure mode: if size_warning is absent, the model has no signal to prune the skill catalog.
@@ -376,9 +376,9 @@ async def test_create_emits_size_warning_when_count_reaches_30(tmp_path: Path) -
     assert not _is_error(result), f"create must succeed; got error: {result.return_value}"
     data = _success_data(result)
     assert data["success"] is True
-    assert "size-guardrail-skill" in deps.skill_index
-    assert len(deps.skill_index) >= 30, (
-        f"Expected >= 30 skills after create, got {len(deps.skill_index)}"
+    assert "size-guardrail-skill" in deps.skill_catalog
+    assert len(deps.skill_catalog) >= 30, (
+        f"Expected >= 30 skills after create, got {len(deps.skill_catalog)}"
     )
     assert "size_warning" in data, (
         f"size_warning must appear in result when skill count >= 30; got keys: {list(data.keys())}"

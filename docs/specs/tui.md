@@ -75,10 +75,10 @@ Interrupt handling (via key bindings):
 
 ### Tab Completion
 
-`_build_completer_words(skill_index)` is the single source of truth for completer content.
+`_build_completer_words(skill_catalog)` is the single source of truth for completer content.
 It returns `["/cmd" for cmd in BUILTIN_COMMANDS] + ["/name" for user_invocable skills]`.
 The completer is rebuilt once after `create_deps()` resolves the skill registry. Subsequent
-skill changes within the session (e.g. `/skills reload`) call `set_skill_index()` and the
+skill changes within the session (e.g. `/skills reload`) call `set_skill_catalog()` and the
 completer is updated in-place on `ctx.completer`.
 
 ### Slash Command Dispatch (`dispatch`)
@@ -95,7 +95,7 @@ if name in BUILTIN_COMMANDS:
     if result is not None → return ReplaceTranscript(history=result)  # list[Any] path
     else                  → return LocalOnly()
 
-elif name in skill_index:
+elif name in skill_catalog:
     resolve body, inject $ARGUMENTS / $N / $0
     return DelegateToAgent(delegated_input=body, skill_env=..., skill_name=...)
 
@@ -170,8 +170,8 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 | `SlashCommand` | `co_cli/commands/registry.py` | Dataclass — `name`, `handler`, `description`, `argument_hint`, `category` |
 | `CommandContext` | `co_cli/commands/types.py` | Input bag passed to every handler — `message_history`, `deps`, `agent`, `completer`, `frontend`, `input_queue` (live REPL queue by reference, `None` outside REPL) |
 | `SlashOutcome`, `LocalOnly`, `ReplaceTranscript(history)`, `DelegateToAgent(delegated_input, skill_env, skill_name)` | `co_cli/commands/types.py` | Handler return types signalling REPL action |
-| `filter_namespace_conflicts(skill_index) -> dict` | `co_cli/commands/registry.py` | Drops skills whose names collide with `BUILTIN_COMMANDS` |
-| `_build_completer_words(skill_index) -> list[str]` | `co_cli/commands/registry.py` | Returns `["/cmd" for cmd in BUILTIN_COMMANDS] + ["/name" for user-invocable skills]` |
+| `filter_namespace_conflicts(skill_catalog) -> dict` | `co_cli/commands/registry.py` | Drops skills whose names collide with `BUILTIN_COMMANDS` |
+| `_build_completer_words(skill_catalog) -> list[str]` | `co_cli/commands/registry.py` | Returns `["/cmd" for cmd in BUILTIN_COMMANDS] + ["/name" for user-invocable skills]` |
 
 ### Frontend surface
 

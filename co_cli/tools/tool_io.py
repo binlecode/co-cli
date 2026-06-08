@@ -250,7 +250,7 @@ def tool_output(
 ) -> ToolReturn:
     """Construct a ToolReturn with display as return_value and extras as metadata."""
     tool_name = ctx.tool_name or ""
-    info = ctx.deps.tool_index.get(tool_name)
+    info = ctx.deps.tool_catalog.get(tool_name)
     threshold: int | float = (
         info.spill_threshold_chars
         if info and info.spill_threshold_chars is not None

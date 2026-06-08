@@ -28,7 +28,7 @@ def deferred_tool_awareness_prompt(ctx: RunContext[CoDeps]) -> str:
     """
     from co_cli.tools.deferred_prompt import build_deferred_tool_awareness_prompt
 
-    return build_deferred_tool_awareness_prompt(ctx.deps.tool_index)
+    return build_deferred_tool_awareness_prompt(ctx.deps.tool_catalog)
 
 
 def skill_manifest_prompt(ctx: RunContext[CoDeps]) -> str:
@@ -40,5 +40,5 @@ def skill_manifest_prompt(ctx: RunContext[CoDeps]) -> str:
     from co_cli.context.manifests.skill_manifest import render_skill_manifest
 
     return render_skill_manifest(
-        ctx.deps.skill_index, ctx.deps.skills_dir, ctx.deps.user_skills_dir
+        ctx.deps.skill_catalog, ctx.deps.skills_dir, ctx.deps.user_skills_dir
     )

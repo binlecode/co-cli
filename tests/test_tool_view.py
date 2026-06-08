@@ -46,11 +46,11 @@ _SYNTHETIC_INDEX = {
 }
 
 
-def _make_deps(tmp_path, tool_index) -> CoDeps:
+def _make_deps(tmp_path, tool_catalog) -> CoDeps:
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS_NO_MCP,
-        tool_index=tool_index,
+        tool_catalog=tool_catalog,
         session=CoSessionState(),
         tool_results_dir=tmp_path / "tool-results",
     )
@@ -128,9 +128,9 @@ async def test_deferred_tool_hidden_until_loaded_by_name(tmp_path) -> None:
     Also asserts no tool carries the SDK defer_loading flag — so the auto-injected
     search_tools loader can never engage (co owns deferral via the filter).
     """
-    native_toolset, tool_index = build_native_toolset(SETTINGS_NO_MCP)
+    native_toolset, tool_catalog = build_native_toolset(SETTINGS_NO_MCP)
     toolset = assemble_routing_toolset(native_toolset, [])
-    deps = _make_deps(tmp_path, tool_index)
+    deps = _make_deps(tmp_path, tool_catalog)
     ctx = _ctx(deps)
 
     before = await _visible_tool_names(toolset, ctx)
@@ -158,9 +158,9 @@ async def test_visibility_independent_of_message_history(tmp_path) -> None:
     visibility, proving the gate does not re-derive unlocks from messages (what made
     the old search_tools preservation coupling necessary).
     """
-    native_toolset, tool_index = build_native_toolset(SETTINGS_NO_MCP)
+    native_toolset, tool_catalog = build_native_toolset(SETTINGS_NO_MCP)
     toolset = assemble_routing_toolset(native_toolset, [])
-    deps = _make_deps(tmp_path, tool_index)
+    deps = _make_deps(tmp_path, tool_catalog)
     deps.runtime.unlocked_tools.add("skill_create")
 
     long_history = [ModelRequest(parts=[UserPromptPart(content="x")]) for _ in range(20)]

@@ -185,7 +185,7 @@ Dream runs are idempotent. The trigger is `session_end` by default; `manual` tri
 
 ### Skills
 
-Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through model-callable tools: `skill_view` (read) and `skill_create`/`skill_edit`/`skill_patch`/`skill_delete` (write). All discoverable skills (bundled and user-installed) are declared via the `<available_skills>` manifest, emitted as a per-turn dynamic instruction so newly created skills become visible to the model on the next turn. Slash commands in the REPL dispatch to installed skills via the `skill_index` map on `CoDeps`.
+Skills are procedural capability units — YAML-fronted markdown files in `co_cli/skills/` (bundled) and `~/.co-cli/skills/` (user-installed). They are discovered at startup and surfaced through model-callable tools: `skill_view` (read) and `skill_create`/`skill_edit`/`skill_patch`/`skill_delete` (write). All discoverable skills (bundled and user-installed) are declared via the `<available_skills>` manifest, emitted as a per-turn dynamic instruction so newly created skills become visible to the model on the next turn. Slash commands in the REPL dispatch to installed skills via the `skill_catalog` map on `CoDeps`.
 
 The REPL writes KICK files to `$CO_HOME/daemons/dream/queue/` at threshold-based intervals (configurable per domain: memory and skill). The dream daemon dequeues these and runs the appropriate reviewer agent out-of-process. The same daemon also runs scheduled-tick housekeeping over both the memory store and the user skill library (`merge_skills` + `decay_skills`) — see [dream.md](dream.md) for the full mechanics. Usage counters, `pinned`, and `recall_days` are persisted in per-skill sidecars at `~/.co-cli/skills/<name>.usage.json`.
 
@@ -207,9 +207,9 @@ CoDeps
 │   ├── resource_locks    ResourceLockStore — shared across forks
 │   └── file_tracker      FileReadTracker — shared across forks
 ├── registries
-│   ├── tool_index        dict[name, ToolInfo] — approval + span attribute lookup; forwarded to forks
+│   ├── tool_catalog        dict[name, ToolInfo] — approval + span attribute lookup; forwarded to forks
 │   ├── toolset           AbstractToolset[CoDeps] — orchestrator routing surface; excluded from forks
-│   └── skill_index       dict[name, SkillInfo] — slash-command dispatch; forwarded to forks
+│   └── skill_catalog       dict[name, SkillInfo] — slash-command dispatch; forwarded to forks
 ├── mutable state
 │   ├── session (CoSessionState)
 │   │   ├── todos                 runtime self-plan
@@ -259,7 +259,7 @@ System-level contracts crossing every subsystem. Per-subsystem APIs are document
 | `build_orchestrator(spec, deps) -> Agent[CoDeps, Any]` | `co_cli/agent/build.py` | Constructs the foreground orchestrator agent from `ORCHESTRATOR_SPEC` — composes static-instruction builders, registers per-turn instructions, attaches history processors, and reads toolset from `deps.toolset` |
 | `build_task_agent(spec, deps, model) -> Agent[CoDeps, Any]` | `co_cli/agent/build.py` | Constructs a focused task agent from a `TaskAgentSpec`; resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME`, filtered by `_config_requirement_met`; fails loud on unknown names |
 | `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async single-turn entrypoint: assembly → segment stream → approval loop → output checks |
-| `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds a delegated `CoDeps` for sub-agents; forwards `tool_index`, excludes `toolset`, increments `agent_depth` |
+| `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds a delegated `CoDeps` for sub-agents; forwards `tool_catalog`, excludes `toolset`, increments `agent_depth` |
 | `fork_deps_for_reviewer(parent) -> CoDeps` | `co_cli/deps.py` | Fork for the dream daemon reviewer agent; delegates to `fork_deps` |
 | `dispatch(raw_input, ctx) -> SlashOutcome` | `co_cli/commands/core.py` | Async slash-command router; returns `LocalOnly`, `ReplaceTranscript`, or `DelegateToAgent` |
 

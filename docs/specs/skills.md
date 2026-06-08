@@ -9,7 +9,7 @@ Skills are procedural capability — name-addressable workflows injected as prom
 ```mermaid
 flowchart LR
     SkillFile["skill .md file"] --> Loader["load_skills"]
-    Loader --> Registry["deps.skill_index\n+ get_skill_index()"]
+    Loader --> Registry["deps.skill_catalog\n+ get_skill_catalog()"]
     Registry --> Dispatch["name args"]
     Dispatch --> AgentBody["expanded skill body"]
     AgentBody --> MainLoop["main.py"]
@@ -22,11 +22,11 @@ flowchart LR
 | Component | Role |
 |-----------|------|
 | `load_skills` | Two-pass loader — bundled then user-global; security scan applied to user-global only |
-| `deps.skill_index` | Full skill registry (`dict[str, SkillInfo]`); used by slash-command dispatch |
-| `get_skill_index()` | Model-facing subset — excludes hidden skills; source for `<available_skills>` manifest |
+| `deps.skill_catalog` | Full skill registry (`dict[str, SkillInfo]`); used by slash-command dispatch |
+| `get_skill_catalog()` | Model-facing subset — excludes hidden skills; source for `<available_skills>` manifest |
 | `render_skill_manifest()` | Renders `<available_skills>` XML block; emitted per-turn via `skill_manifest_prompt` so newly created skills are visible on the next turn |
-| `dispatch(raw_input, ctx)` | Routes slash commands — built-ins first, then `skill_index`, then error |
-| `refresh_skills(deps)` | Hot-reload: re-loads both tiers, replaces `deps.skill_index`; called by the skill write tools and `/skills reload` |
+| `dispatch(raw_input, ctx)` | Routes slash commands — built-ins first, then `skill_catalog`, then error |
+| `refresh_skills(deps)` | Hot-reload: re-loads both tiers, replaces `deps.skill_catalog`; called by the skill write tools and `/skills reload` |
 | `skill_create` / `skill_edit` / `skill_patch` / `skill_delete` | Model-callable write tools — one monomorphic tool per operation |
 | `skill_view` | Model-callable reader — returns full skill body inline |
 
@@ -43,7 +43,7 @@ Per-turn: `main.py` saves current env for keys in `skill_env`, calls `os.environ
 Skills are reached through three distinct paths:
 
 **Path 1 — User slash-command.**
-The user types `/skill-name [args]` in the REPL. `dispatch()` matches the name in `skill_index`, expands the body (argument substitution), and returns `DelegateToAgent`. The REPL then calls `run_turn()` with the expanded body as the user input — a full new agent turn. The skill body replaces the user's input for that turn; the model never sees the raw `/skill-name` string.
+The user types `/skill-name [args]` in the REPL. `dispatch()` matches the name in `skill_catalog`, expands the body (argument substitution), and returns `DelegateToAgent`. The REPL then calls `run_turn()` with the expanded body as the user input — a full new agent turn. The skill body replaces the user's input for that turn; the model never sees the raw `/skill-name` string.
 
 **Path 2 — Model inline use.**
 The agent reads the `<available_skills>` manifest injected per-turn into the system prompt, identifies a matching skill, and calls `skill_view(name)` to load the full body. The body is returned as a tool result inside the current turn. The agent reads it and follows its phases as its procedure — no new turn, no dispatch, no REPL involvement. This is the primary path for agent-initiated skill use.
@@ -60,11 +60,11 @@ The dream daemon's domain reviewers also write via the skill write tools (`skill
 | Field | Purpose |
 |-------|---------|
 | `name` | slash-command name derived from file stem |
-| `description` | listing text shown in `/skills` and exposed via `get_skill_index()` |
+| `description` | listing text shown in `/skills` and exposed via `get_skill_catalog()` |
 | `body` | prompt body injected into the main agent on dispatch |
 | `argument_hint` | UI hint for `/help` and `/skills` |
 | `user_invocable` | whether the skill appears as a slash command |
-| `disable_model_invocation` | hide from `get_skill_index()` results and manifest |
+| `disable_model_invocation` | hide from `get_skill_catalog()` results and manifest |
 | `skill_env` | env vars injected for the duration of the dispatched turn |
 | `path` | absolute path to the `.md` file on disk; `None` for programmatic configs |
 
@@ -77,7 +77,7 @@ Markdown files parsed with `parse_frontmatter()` from `co_cli/memory/frontmatter
 | `description` | human-readable summary (required) |
 | `argument-hint` | argument usage hint |
 | `user-invocable` | include in slash-command completer and `/help` |
-| `disable-model-invocation` | hide from `get_skill_index()` and manifest |
+| `disable-model-invocation` | hide from `get_skill_catalog()` and manifest |
 | `skill-env` | turn-scoped env injection, filtered through `_SKILL_ENV_BLOCKED` |
 
 ### Load Order
@@ -104,7 +104,7 @@ create_deps()
 Skill dispatch is the third branch of `dispatch()` (after built-ins and before unknown-command error). Full routing lives in `tui.md`; this section covers the skill branch only.
 
 ```
-name matched in ctx.deps.skill_index
+name matched in ctx.deps.skill_catalog
   body = skill.body
   if args non-empty AND "$ARGUMENTS" in body:
     args_list = args.split()           # whitespace-split positional args
@@ -307,14 +307,14 @@ Returns a skill's full body, addressed by the `filename_stem` from the skill man
 | Symbol | Source | Contract |
 |--------|--------|---------|
 | `load_skills(skills_dir, settings, user_skills_dir) -> dict[str, SkillInfo]` | `co_cli/skills/loader.py` | Two-pass loader; security scan on user-global only |
-| `refresh_skills(deps) -> None` | `co_cli/skills/lifecycle.py` | Re-loads both tiers; replaces `deps.skill_index` |
-| `get_skill_index(skill_index) -> list[dict]` | `co_cli/skills/index.py` | Model-facing list; excludes `disable_model_invocation=True` and blank-description skills |
+| `refresh_skills(deps) -> None` | `co_cli/skills/lifecycle.py` | Re-loads both tiers; replaces `deps.skill_catalog` |
+| `get_skill_catalog(skill_catalog) -> list[dict]` | `co_cli/skills/index.py` | Model-facing list; excludes `disable_model_invocation=True` and blank-description skills |
 
 ### Manifest injection
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `render_skill_manifest(skill_index, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders `<available_skills>` XML block; emitted per-turn via `skill_manifest_prompt` (`co_cli/agent/_instructions.py`) |
+| `render_skill_manifest(skill_catalog, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders `<available_skills>` XML block; emitted per-turn via `skill_manifest_prompt` (`co_cli/agent/_instructions.py`) |
 
 ### Schema
 
@@ -330,7 +330,7 @@ Returns a skill's full body, addressed by the `filename_stem` from the skill man
 | `co_cli/skills/skill_types.py` | `SkillInfo` frozen dataclass |
 | `co_cli/skills/lint.py` | `lint_skill(content, path)` — R1–R4 advisory validator; `lint_bundled_extras(content)` — B1 no-marker gate; `LintFinding` dataclass |
 | `co_cli/skills/loader.py` | `load_skills`, `_load_skill_file`, `scan_skill_content` |
-| `co_cli/skills/index.py` | `set_skill_index()`, `get_skill_index()` |
+| `co_cli/skills/index.py` | `set_skill_catalog()`, `get_skill_catalog()` |
 | `co_cli/skills/lifecycle.py` | `refresh_skills`, `discover_skill_files`, `read_skill_meta`, `cleanup_skill_run_state` |
 | `co_cli/config/skills.py` | `SkillsSettings` — Pydantic config model |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` |
@@ -339,8 +339,8 @@ Returns a skill's full body, addressed by the `filename_stem` from the skill man
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass |
 | `co_cli/bootstrap/core.py` | `create_deps()` — skill loading at startup |
 | `co_cli/main.py` | per-turn skill-env lifecycle, live skill reload; `_post_turn_hook` (two-counter KICK dispatch), `_fire_session_end_kicks` |
-| `co_cli/agent/_instructions.py` | `skill_manifest_prompt` — per-turn `@agent.instructions` callback that re-renders the manifest from live `ctx.deps.skill_index` |
-| `co_cli/deps.py` | `skills_dir`, `user_skills_dir`, `skill_index`, `active_skill_name` on `CoDeps`; `fork_deps_for_reviewer` |
+| `co_cli/agent/_instructions.py` | `skill_manifest_prompt` — per-turn `@agent.instructions` callback that re-renders the manifest from live `ctx.deps.skill_catalog` |
+| `co_cli/deps.py` | `skills_dir`, `user_skills_dir`, `skill_catalog`, `active_skill_name` on `CoDeps`; `fork_deps_for_reviewer` |
 | `co_cli/memory/frontmatter.py` | markdown frontmatter parsing used by skill loader |
 | `co_cli/tools/system/skills.py` | `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `skill_delete` — all call into `co_cli/skills/usage.py` on success |
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review()` — daemon domain reviewers |
@@ -376,7 +376,7 @@ Returns a skill's full body, addressed by the `filename_stem` from the skill man
 | 06_skill_protocol.md appears in assembled static instructions | `tests/test_flow_skill_protocol.py` |
 | skill-creator present in `<available_skills>` manifest | `tests/test_flow_skill_protocol.py` |
 | Background review section present in 06_skill_protocol.md | `tests/test_flow_skill_protocol.py` |
-| create writes file and skill appears in deps.skill_index | `tests/test_flow_skills_manage.py` |
+| create writes file and skill appears in deps.skill_catalog | `tests/test_flow_skills_manage.py` |
 | create rejects missing description and existing skill | `tests/test_flow_skills_manage.py` |
 | create rolls back on destructive shell pattern | `tests/test_flow_skills_manage.py` |
 | edit rewrites user skill; rejects bundled-only | `tests/test_flow_skills_manage.py` |

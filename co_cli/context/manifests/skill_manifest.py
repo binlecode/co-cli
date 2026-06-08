@@ -11,23 +11,23 @@ if TYPE_CHECKING:
 
 
 def render_skill_manifest(
-    skill_index: dict[str, SkillInfo],
+    skill_catalog: dict[str, SkillInfo],
     skills_dir: Path,
     user_skills_dir: Path,
 ) -> str:
     """Render `<available_skills>` for all discoverable skills — empty string if none.
 
-    All entries in skill_index are emitted: bundled and user-installed.
+    All entries in skill_catalog are emitted: bundled and user-installed.
     For a name present in both directories the user-dir description wins
-    (skill_index[name] already carries the shadowed value from the loader).
+    (skill_catalog[name] already carries the shadowed value from the loader).
     """
-    all_names = sorted(skill_index)
+    all_names = sorted(skill_catalog)
     if not all_names:
         return ""
 
     lines: list[str] = ["<available_skills>"]
     for name in all_names:
-        skill = skill_index[name]
+        skill = skill_catalog[name]
         description = (skill.description or "").strip()
         lines.append(
             f'  <skill name="{escape(name, quote=True)}" '

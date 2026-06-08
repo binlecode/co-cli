@@ -17,7 +17,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from pydantic_ai.toolsets import FunctionToolset
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.agent.toolset import _RoutingToolset
+from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.config.core import load_config
 from co_cli.config.llm import DEFAULT_MAX_MODEL_REQUESTS_PER_TURN, LlmSettings
 from co_cli.context.orchestrate import run_turn
@@ -122,7 +122,7 @@ def _make_model_request_cap_agent() -> Agent:
         FunctionModel(stream_function=stream_fn),
         deps_type=CoDeps,
         output_type=[str, DeferredToolRequests],
-        toolsets=[_RoutingToolset(toolset)],
+        toolsets=[_CallSeamToolset(toolset)],
     )
 
 
@@ -212,7 +212,7 @@ def _make_hard_stop_agent() -> Agent:
         FunctionModel(stream_function=stream_fn),
         deps_type=CoDeps,
         output_type=[str, DeferredToolRequests],
-        toolsets=[_RoutingToolset(toolset)],
+        toolsets=[_CallSeamToolset(toolset)],
     )
 
 
@@ -291,7 +291,7 @@ def _make_over_then_under_cap_agent() -> Agent:
         FunctionModel(stream_function=stream_fn),
         deps_type=CoDeps,
         output_type=[str, DeferredToolRequests],
-        toolsets=[_RoutingToolset(toolset)],
+        toolsets=[_CallSeamToolset(toolset)],
     )
 
 

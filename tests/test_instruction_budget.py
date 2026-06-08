@@ -3,8 +3,8 @@
 The instruction half of the fixed prefill floor is assembled by the three static
 builders the orchestrator joins into the cached prefix:
 
-1. ``build_static_instructions(config)`` — soul seed + mindsets + numbered rules.
-2. ``build_toolset_guidance(tool_index)`` — toolset-gated guidance
+1. ``build_base_instructions(config)`` — soul seed + mindsets + numbered rules.
+2. ``build_toolset_guidance(tool_catalog)`` — toolset-gated guidance
    (``CAPABILITIES_GUIDANCE``; ``MEMORY_GUIDANCE`` was deleted in floor-audit TASK-1).
 3. ``load_soul_critique(personality)`` — the always-on ``## Review lens`` critique.
 
@@ -38,7 +38,7 @@ from contextlib import AsyncExitStack
 import pytest
 
 from co_cli.bootstrap.core import create_deps
-from co_cli.context.assembly import build_static_instructions
+from co_cli.context.assembly import build_base_instructions
 from co_cli.context.guidance import build_toolset_guidance
 from co_cli.personality.prompts.loader import load_soul_critique
 
@@ -57,8 +57,8 @@ async def test_instruction_floor_within_budget() -> None:
     """
     async with AsyncExitStack() as stack:
         deps = await create_deps(on_status=lambda _s: None, stack=stack, theme_override=None)
-        floor = build_static_instructions(deps.config)
-        floor += build_toolset_guidance(deps.tool_index)
+        floor = build_base_instructions(deps.config)
+        floor += build_toolset_guidance(deps.tool_catalog)
         if deps.config.personality:
             floor += load_soul_critique(deps.config.personality)
 

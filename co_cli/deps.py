@@ -296,10 +296,14 @@ class CoDeps:
     # with [judge_model_same_as_agent] reason flag. Set in bootstrap from
     # settings.llm.judge_model via build_judge_model().
     judge_model: LlmModel | None = field(default=None, repr=False)
-    # Bootstrap-set registries
-    tool_index: dict[str, ToolInfo] = field(default_factory=dict)
+    # Bootstrap-set registries.
+    # Each *_catalog is the full enumerated listing of all registered tools/skills
+    # regardless of per-turn visibility — a DEFERRED tool stays in tool_catalog.
+    # Membership means "registered," not "callable this turn"; per-turn visibility
+    # is read separately via ToolInfo.visibility and enforced by _tool_visibility_filter.
+    tool_catalog: dict[str, ToolInfo] = field(default_factory=dict)
     toolset: AbstractToolset[CoDeps] | None = field(default=None, repr=False)
-    skill_index: dict[str, SkillInfo] = field(default_factory=dict)
+    skill_catalog: dict[str, SkillInfo] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
@@ -413,8 +417,8 @@ def fork_deps(base: CoDeps) -> CoDeps:
         session_store=base.session_store,
         model=base.model,
         judge_model=base.judge_model,
-        tool_index=base.tool_index,
-        skill_index=base.skill_index,
+        tool_catalog=base.tool_catalog,
+        skill_catalog=base.skill_catalog,
         session=inherited_session,
         runtime=CoRuntimeState(agent_depth=base.runtime.agent_depth + 1),
         workspace_dir=base.workspace_dir,

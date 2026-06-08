@@ -155,14 +155,14 @@ Executed TL-solo serial (no Dev fan-out): every core task collides on the same f
 | TASK-2 | Per-request cap in routing wrapper — immediate increment at (cap+1)-th call, delayed reset, segment-boundary finalize; hard-stop incl. last-in-segment; over→under does not stop | ✓ pass |
 | TASK-3 | Tool-call dedup deleted (lifecycle.py removed) | ✓ pass |
 | TASK-4 | `PATH_NORMALIZATION_TOOLS` deleted; `enforce_write_boundary` already resolves relative→absolute; no consumer reads a pre-resolved path | ✓ pass |
-| TASK-5 | MCP oversized-string spill folded into `_RoutingToolset.call_tool` | ✓ pass |
+| TASK-5 | MCP oversized-string spill folded into `_CallSeamToolset.call_tool` | ✓ pass |
 | TASK-6 | serialize.py created + consumed by call.py/model; tool span + co.tool.*; chat span on BOTH paths (streamed tokens asserted non-zero); usage once-per-run at finally (no double-count + error-path); span tree at parity | ✓ pass |
 | TASK-7 | `capabilities=[...]` gone from both builders; capability.py + lifecycle.py deleted; `rg` for capability symbols returns nothing in `co_cli/` | ✓ pass |
 | TASK-8 | All 6 listed test files rewritten/retargeted at the new seams; dedup test deleted; capability test renamed to span-tree test; grep-clean | ✓ pass |
 
 **Resolved OQ-3:** discrete `invoke_agent <name>` agent span pushed at each run call site (`_execute_stream_segment` for the orchestrator, `run_standalone` for task agents) — preserves the per-segment nesting the capability emitted.
 
-**Extra files (beyond task `files:`):** docstring fixes for grep-clean / dangling refs — `agent/spec.py`, `observability/tracing.py`, `tools/files/fs_guards.py`, `agent/build.py`; `build_task_agent` reworked to route task-agent tools through `_RoutingToolset` (subagent span/cap/spill parity); deleted `tests/test_flow_tool_call_dedup.py`; renamed `tests/test_observability_capability.py` → `tests/test_flow_observability_spans.py`; updated two pre-existing `tests/test_surrogate_recovery_model.py` span-event tests (recovery event now lands on the chat span).
+**Extra files (beyond task `files:`):** docstring fixes for grep-clean / dangling refs — `agent/spec.py`, `observability/tracing.py`, `tools/files/fs_guards.py`, `agent/build.py`; `build_task_agent` reworked to route task-agent tools through `_CallSeamToolset` (subagent span/cap/spill parity); deleted `tests/test_flow_tool_call_dedup.py`; renamed `tests/test_observability_capability.py` → `tests/test_flow_observability_spans.py`; updated two pre-existing `tests/test_surrogate_recovery_model.py` span-event tests (recovery event now lands on the chat span).
 
 **Tests:** scoped + broad — 545 passed, 0 failed (`flow/observ/agent/surrogate/build/toolset/usage/spill/tracing/daemon`). Lint clean.
 **Doc Sync:** full — fixed observability.md, tools.md, agents.md, compaction.md, sessions.md, dream.md, core-loop.md (removed capability machinery; relocated usage capture to run boundaries; cap mechanics).
@@ -185,7 +185,7 @@ Reviewed all 8 `✓ DONE` tasks. Stance: issues exist — PASS earned. Four para
 | TASK-4 | Path-norm deleted; write still resolves rel→abs | ✓ pass | `PATH_NORMALIZATION_TOOLS` grep empty; `fs_guards.py:41` `(workspace_dir/path).resolve()`; `_tool_result_markers.py` keys exclude file_write/file_patch; `write.py` untouched (verify-only) |
 | TASK-5 | MCP oversized-string spill in wrapper | ✓ pass | `toolset.py:201-212` gated `isinstance(str) and info.source==MCP` → `spill_with_span` |
 | TASK-6 | serialize.py; tool+chat spans (streamed tokens non-zero); usage once-per-run; span tree at parity | ✓ pass | `serialize.py:30,72` imported by model+`call.py:11`; chat span both paths `:206-242`/`:253-291`; usage once at `orchestrate.py:857` (cumulative latest_usage), `run.py:78`, `call.py:73`; **live: `co trace` tree co.turn→invoke_agent→[chat×2,tool] with in=11776/11871** |
-| TASK-7 | capabilities gone; files deleted; grep clean | ✓ pass | `grep capabilities= build.py` empty; `capability.py`+`lifecycle.py` absent; `rg pydantic_ai.capabilities\|AbstractCapability\|ObservabilityCapability\|CoToolLifecycle co_cli/` empty; `build_task_agent` routes via `_RoutingToolset(FunctionToolset)` `build.py:100-110` |
+| TASK-7 | capabilities gone; files deleted; grep clean | ✓ pass | `grep capabilities= build.py` empty; `capability.py`+`lifecycle.py` absent; `rg pydantic_ai.capabilities\|AbstractCapability\|ObservabilityCapability\|CoToolLifecycle co_cli/` empty; `build_task_agent` routes via `_CallSeamToolset(FunctionToolset)` `build.py:100-110` |
 | TASK-8 | tests retargeted at new seams; no residual imports; green | ✓ pass | residual-import grep empty; deleted-dedup + capability-test absent; observability-spans test present; all 7 files behavioral; 625-test suite green |
 
 ### Issues Found & Fixed
@@ -206,7 +206,7 @@ Reviewed all 8 `✓ DONE` tasks. Stance: issues exist — PASS earned. Four para
 - Log: `.pytest-logs/20260607-*-review-impl.log`
 
 ### Behavioral Verification
-- `co chat` bootstrap (EOF): ✓ agent builds via `_RoutingToolset` (Tools: 38, ✓ Ready, exit 0)
+- `co chat` bootstrap (EOF): ✓ agent builds via `_CallSeamToolset` (Tools: 38, ✓ Ready, exit 0)
 - Live completed turn (`file_search`): ✓ emitted `co.turn → invoke_agent → [chat×2, tool file_search]` to the spans log; `co.tool.source=native`; real streamed tokens `in=11776/11871 out=57/64`
 - `co trace <id>`: ✓ renders the agent/model/tool tree at parity
 - Token ledger: ✓ **one** `usage.jsonl` line `input_tokens=23647 output_tokens=121` = turn total, recorded once (no double-count) — live proof of TASK-6d

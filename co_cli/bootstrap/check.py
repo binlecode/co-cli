@@ -322,9 +322,9 @@ def check_runtime(
     knowledge_result = _check_memory_store(deps.memory_store, deps.config.memory.search_backend)
 
     _emit_progress(progress, "Doctor: checking loaded skills...")
-    from co_cli.skills.index import get_skill_index
+    from co_cli.skills.index import get_skill_catalog
 
-    skills_result = _check_skills(get_skill_index(deps.skill_index))
+    skills_result = _check_skills(get_skill_catalog(deps.skill_catalog))
 
     # Probe each configured MCP server via binary PATH/URL check
     mcp_probes: list[tuple[str, CheckResult]] = []
@@ -362,19 +362,19 @@ def check_runtime(
     }
 
     # Build status dict from session state
-    tool_index = deps.tool_index
+    tool_catalog = deps.tool_catalog
     source_counts: dict[str, int] = {}
-    for tc in tool_index.values():
+    for tc in tool_catalog.values():
         source_name = tc.source.value
         source_counts[source_name] = source_counts.get(source_name, 0) + 1
 
     status: dict[str, Any] = {
         "session_id": deps.session.session_path.stem[-8:],
         "active_skill": deps.runtime.active_skill_name,
-        "tool_names": list(tool_index.keys()),
-        "tool_approvals": {name: tc.approval for name, tc in tool_index.items()},
-        "tool_count": len(tool_index),
-        "skill_count": len(get_skill_index(deps.skill_index)),
+        "tool_names": list(tool_catalog.keys()),
+        "tool_approvals": {name: tc.approval for name, tc in tool_catalog.items()},
+        "tool_count": len(tool_catalog),
+        "skill_count": len(get_skill_catalog(deps.skill_catalog)),
         "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",
         "knowledge_mode": deps.config.memory.search_backend,
         "source_counts": source_counts,

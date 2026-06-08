@@ -18,7 +18,7 @@ def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> Agent[CoDeps, An
     Composes static instructions by calling each builder in order, registers
     per-turn instructions via agent.instructions(...), and attaches history
     processors. Toolset is read from deps.toolset directly (singleton) — the
-    routing wrapper on that toolset hosts the tool span, per-request cap, and
+    call-seam wrapper on that toolset hosts the tool span, per-request cap, and
     MCP spill. Output type is fixed [str, DeferredToolRequests]; retries from
     deps.config.tool_retries.
     """
@@ -73,7 +73,7 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
     """
     from pydantic_ai.toolsets import FunctionToolset
 
-    from co_cli.agent.toolset import _config_requirement_met, _RoutingToolset
+    from co_cli.agent.toolset import _CallSeamToolset, _config_requirement_met
     from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY_BY_NAME
 
     tool_fns: list[Any] = []
@@ -90,7 +90,7 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
     if spec.include_skill_manifest:
         from co_cli.context.manifests.skill_manifest import render_skill_manifest
 
-        manifest = render_skill_manifest(deps.skill_index, deps.skills_dir, deps.user_skills_dir)
+        manifest = render_skill_manifest(deps.skill_catalog, deps.skills_dir, deps.user_skills_dir)
         if manifest:
             instructions = f"{manifest}\n\n{instructions}"
 
@@ -107,6 +107,6 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
         output_type=spec.output_type,
         instructions=instructions,
         retries=deps.config.tool_retries,
-        toolsets=[_RoutingToolset(toolset)],
+        toolsets=[_CallSeamToolset(toolset)],
     )
     return agent

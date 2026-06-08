@@ -19,7 +19,7 @@ Session start
 build_orchestrator(ORCHESTRATOR_SPEC, deps)
     ↓
     iterates ORCHESTRATOR_SPEC.static_instruction_builders in order:
-    [1] _static_instructions_provider   → soul seed, mindsets, behavioral rules, recency advisory
+    [1] _base_instructions_provider   → soul seed, mindsets, behavioral rules, recency advisory
     [2] _toolset_guidance_provider      — tool-specific guidance (conditional on tool presence)
     [3] _personality_critique_provider  — ## Review lens, last (conditional on personality + critique file)
     → joined and set as Agent.instructions (static, once per session)
@@ -83,7 +83,7 @@ for human reference — they are not loaded into the agent.
 
 ### Static Prompt Assembly
 
-`build_static_instructions(config)` in `assembly.py` owns the stable-forever sections only:
+`build_base_instructions(config)` in `assembly.py` owns the stable-forever sections only:
 
 ```
 section_1 = load_soul_seed(role)               # Required — placed first; identity anchor
@@ -98,7 +98,7 @@ return "\n\n".join(non_empty_sections)
 ```
 parts = []
 for builder in ORCHESTRATOR_SPEC.static_instruction_builders:
-    piece = builder(deps)                            # _static_instructions_provider,
+    piece = builder(deps)                            # _base_instructions_provider,
                                                      # _toolset_guidance_provider,
                                                      # _personality_critique_provider
     if piece:
@@ -108,8 +108,8 @@ static_instructions = "\n\n".join(parts)
 
 The `<available_skills>` manifest and deferred-tool awareness are NOT in this static
 block; they are emitted by per-turn `agent.instructions()` callbacks
-(`skill_manifest_prompt`, `deferred_tool_awareness_prompt`) so that `skill_index` /
-`tool_index` mutations do not invalidate the cached prefix. See [prompt-assembly.md](prompt-assembly.md) §2.2–2.3.
+(`skill_manifest_prompt`, `deferred_tool_awareness_prompt`) so that `skill_catalog` /
+`tool_catalog` mutations do not invalidate the cached prefix. See [prompt-assembly.md](prompt-assembly.md) §2.2–2.3.
 
 Character canon (`memories/*.md`) is NOT included in the static prompt. It is indexed at
 bootstrap into the shared FTS index under `source='canon'` for personality-system use
@@ -177,7 +177,7 @@ for missing mindset files.
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `build_static_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules joined with `\n\n`; called once per session at agent construction |
+| `build_base_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules joined with `\n\n`; called once per session at agent construction |
 
 ### Soul asset loaders
 
@@ -206,7 +206,7 @@ for missing mindset files.
 
 | File | Purpose |
 |---|---|
-| `co_cli/context/assembly.py` | `build_static_instructions()` — static prompt assembly (soul + mindsets + rules + recency advisory) |
+| `co_cli/context/assembly.py` | `build_base_instructions()` — static prompt assembly (soul + mindsets + rules + recency advisory) |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — `<available_skills>` block; emitted per-turn via `skill_manifest_prompt` |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` |
 | `co_cli/personality/prompts/souls/{role}/memories/*.md` | Canon scene files (package-shipped) |

@@ -11,7 +11,7 @@ consumed by two callers that must agree on the number:
 
 Measurement: walk the assembled toolset to the inner ``FunctionToolset.tools`` dict, call each
 tool's ``prepare_tool_def(ctx)`` (respects per-turn prepare callbacks), and cross-reference
-visibility via ``deps.tool_index[name].visibility``.
+visibility via ``deps.tool_catalog[name].visibility``.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ async def measure_always_schema_budget(deps: CoDeps) -> AlwaysSchemaBudget:
     """Measure the ALWAYS-visibility tool-schema prefill bucket from the assembled toolset.
 
     Sums ``len(name) + len(description) + len(minified-params-JSON)`` over every tool whose
-    ``deps.tool_index`` visibility is ALWAYS. ``per_tool_chars`` holds the ALWAYS tools only;
+    ``deps.tool_catalog`` visibility is ALWAYS. ``per_tool_chars`` holds the ALWAYS tools only;
     ``tool_count`` counts every tool measured (a drop guard); ``empty_descriptions`` lists any tool
     with a blank description.
     """
@@ -89,7 +89,7 @@ async def measure_always_schema_budget(deps: CoDeps) -> AlwaysSchemaBudget:
             empty_descriptions.append(name)
         params_json = json.dumps(tdef.parameters_json_schema or {}, separators=(",", ":"))
         size = len(tdef.name) + len(desc) + len(params_json)
-        info = deps.tool_index.get(name)
+        info = deps.tool_catalog.get(name)
         if info is not None and info.visibility == VisibilityPolicyEnum.ALWAYS:
             per_tool_chars[name] = size
             total_chars += size

@@ -1,6 +1,6 @@
 """Tests for the per-model-request tool-call cap at the routing wrapper.
 
-The cap lives in _RoutingToolset.call_tool: calls within a run_step past the cap
+The cap lives in _CallSeamToolset.call_tool: calls within a run_step past the cap
 get the rejection payload (the tool never executes), and a run_step transition
 resets the per-request counter so each model request gets a fresh budget. The
 consecutive-violation streak and its hard-stop are verified behaviorally end-to-end
@@ -15,7 +15,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.agent.toolset import _RoutingToolset
+from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
@@ -34,14 +34,14 @@ def _make_deps() -> CoDeps:
 
 
 async def _build_routing_toolset(deps: CoDeps):
-    """Return (_RoutingToolset, tool) over a real one-tool FunctionToolset."""
+    """Return (_CallSeamToolset, tool) over a real one-tool FunctionToolset."""
     inner: FunctionToolset = FunctionToolset()
 
     async def echo(x: int) -> str:
         return f"ok{x}"
 
     inner.add_function(echo, requires_approval=False)
-    routing = _RoutingToolset(inner)
+    routing = _CallSeamToolset(inner)
     ctx = RunContext(deps=deps, model=None, usage=RunUsage(), run_step=1)
     tools = await routing.get_tools(ctx)
     return routing, tools["echo"]

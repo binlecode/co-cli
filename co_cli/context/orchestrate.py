@@ -234,7 +234,7 @@ async def _collect_deferred_tool_approvals(
         # Standard approval path
         args = decode_tool_args(call.args)
         subject = resolve_approval_subject(
-            call.tool_name, args, deps.tool_index.get(call.tool_name)
+            call.tool_name, args, deps.tool_catalog.get(call.tool_name)
         )
 
         # Auto-approval — skip prompt if subject already approved this session

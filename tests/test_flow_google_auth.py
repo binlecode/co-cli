@@ -31,7 +31,7 @@ _, _INDEX = build_native_toolset(_SETTINGS)
 
 def _deps() -> CoDeps:
     deps = CoDeps(shell=ShellBackend(), config=_SETTINGS)
-    deps.tool_index = _INDEX
+    deps.tool_catalog = _INDEX
     return deps
 
 

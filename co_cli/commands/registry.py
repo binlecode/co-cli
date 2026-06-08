@@ -26,18 +26,18 @@ class SlashCommand:
 BUILTIN_COMMANDS: dict[str, SlashCommand] = {}
 
 
-def build_completer_entries(skill_index: dict) -> list[tuple[str, str]]:
+def build_completer_entries(skill_catalog: dict) -> list[tuple[str, str]]:
     """Single source of truth for the REPL completer: (name, description) pairs."""
     builtin = [(name, cmd.description) for name, cmd in BUILTIN_COMMANDS.items()]
-    skills = [(name, s.description) for name, s in skill_index.items() if s.user_invocable]
+    skills = [(name, s.description) for name, s in skill_catalog.items() if s.user_invocable]
     return builtin + skills
 
 
 def refresh_completer(ctx: CommandContext) -> None:
-    """Refresh the REPL completer after a skill_index mutation."""
+    """Refresh the REPL completer after a skill_catalog mutation."""
     if ctx.completer is None:
         return
-    ctx.completer.update(build_completer_entries(ctx.deps.skill_index))
+    ctx.completer.update(build_completer_entries(ctx.deps.skill_catalog))
 
 
 def filter_namespace_conflicts(

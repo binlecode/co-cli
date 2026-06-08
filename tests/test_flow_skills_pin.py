@@ -26,12 +26,12 @@ Do the test task.
 
 
 def _make_ctx(tmp_path: Path) -> CommandContext:
-    skill_index = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
+    skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
     deps = CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
         session=CoSessionState(),
-        skill_index=skill_index,
+        skill_catalog=skill_catalog,
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",

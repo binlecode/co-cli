@@ -227,7 +227,7 @@ Memory growth has two distinct accumulation modes:
 
 ### Inline curation surface
 
-Inline curation is a doctrine-level discipline (see `co_cli/context/rules/07_memory_protocol.md`) — promote substrate into notes/rules while research context is hot, replace on user contradiction, replace or delete on drift. No new code path; the rule renders into the static prompt via `build_static_instructions`.
+Inline curation is a doctrine-level discipline (see `co_cli/context/rules/07_memory_protocol.md`) — promote substrate into notes/rules while research context is hot, replace on user contradiction, replace or delete on drift. No new code path; the rule renders into the static prompt via `build_base_instructions`.
 
 ### Session-end reviewers
 

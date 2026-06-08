@@ -4,7 +4,7 @@ co hides DEFERRED tools via the per-turn visibility filter, so a deferred tool's
 full schema is absent from the prompt until loaded via tool_view. This module emits
 a per-tool stub (name + one-line purpose) for every DEFERRED tool so the model knows
 the tool exists and what it does, and can load it by name via tool_view before
-calling it. The list is derived from the live tool_index — complete by construction,
+calling it. The list is derived from the live tool_catalog — complete by construction,
 with no hardcoded allowlist to forget when a tool goes DEFERRED.
 
 Stubs are grouped by integration family (e.g. all ``google_*`` tools under one
@@ -78,9 +78,9 @@ def _family_label(family_key: str) -> str:
 
 
 def build_deferred_tool_awareness_prompt(
-    tool_index: dict[str, ToolInfo],
+    tool_catalog: dict[str, ToolInfo],
 ) -> str:
-    """Return a per-tool stub prompt for every DEFERRED tool in tool_index.
+    """Return a per-tool stub prompt for every DEFERRED tool in tool_catalog.
 
     Each deferred tool emits one line: ``- `name`: one-liner`` (or ``- `name``` when
     the description is empty). Stubs are grouped by integration family: native
@@ -91,13 +91,13 @@ def build_deferred_tool_awareness_prompt(
     deterministic so the per-turn slot does not churn.
 
     Config-gated and MCP tools only appear when their integration is registered in
-    tool_index, so gating falls out naturally. Returns the empty string when no deferred
+    tool_catalog, so gating falls out naturally. Returns the empty string when no deferred
     tools exist — the per-turn instruction slot relies on that contract.
     """
     general: list[str] = []
     families: dict[str, list[str]] = {}
-    for name in sorted(tool_index):
-        info = tool_index[name]
+    for name in sorted(tool_catalog):
+        info = tool_catalog[name]
         if info.visibility != VisibilityPolicyEnum.DEFERRED:
             continue
         line = _stub_line(name, info.description)

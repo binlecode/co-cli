@@ -1,4 +1,4 @@
-"""Native toolset construction, approval-resume filter, and the routing call_tool wrapper."""
+"""Native toolset construction, the per-turn tool-visibility filter, and the call-seam call_tool wrapper."""
 
 import json
 from collections.abc import Callable
@@ -70,7 +70,7 @@ def _tool_visibility_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -
     Resume gate (approval-resume turns only): narrow to approved tools + always-visible
     tools so the resumed run re-presents only what the pending approval needs.
     """
-    entry = ctx.deps.tool_index.get(tool_def.name)
+    entry = ctx.deps.tool_catalog.get(tool_def.name)
     if (
         entry is not None
         and entry.visibility == VisibilityPolicyEnum.DEFERRED
@@ -104,20 +104,20 @@ def _build_native_toolset(
     """Build an unfiltered FunctionToolset; deferred visibility is co-owned, not SDK.
 
     Tools are NOT registered with defer_loading: co hides DEFERRED tools via the
-    per-turn _tool_visibility_filter (keyed on tool_index visibility + unlocked_tools)
+    per-turn _tool_visibility_filter (keyed on tool_catalog visibility + unlocked_tools)
     and surfaces them by name through the tool_view tool, so the SDK's keyword loader
-    (search_tools) never engages. Visibility lives only in the returned tool_index.
+    (search_tools) never engages. Visibility lives only in the returned tool_catalog.
 
     A tool whose requires_config names an absent config field is excluded; no tool
     currently sets one. Google tools self-gate per-turn via check_fn=_google_available
     (wired as a prepare hook), so they register here unconditionally and hide each turn
     until a credential exists on disk.
 
-    Returns (native_toolset, native_index) where native_index maps each tool name
+    Returns (native_toolset, native_tool_catalog) where native_tool_catalog maps each tool name
     to its ToolInfo metadata.
     """
     toolset: FunctionToolset[CoDeps] = FunctionToolset()
-    index: dict[str, ToolInfo] = {}
+    catalog: dict[str, ToolInfo] = {}
 
     for fn in TOOL_REGISTRY:
         info: ToolInfo = getattr(fn, AGENT_TOOL_ATTR)
@@ -132,12 +132,12 @@ def _build_native_toolset(
         if info.check_fn is not None:
             kwargs["prepare"] = _make_prepare(info.check_fn)
         toolset.add_function(fn, **kwargs)
-        index[info.name] = info
+        catalog[info.name] = info
 
-    return toolset, index
+    return toolset, catalog
 
 
-class _RoutingToolset(WrapperToolset[CoDeps]):
+class _CallSeamToolset(WrapperToolset[CoDeps]):
     """Single explicit seam at the routing ``call_tool`` boundary.
 
     Co-locates the three concerns that can only live at the per-call boundary, as
@@ -189,7 +189,7 @@ class _RoutingToolset(WrapperToolset[CoDeps]):
             args_chars = 0
         current_span().set_attribute("co.tool.args_chars", args_chars)
 
-        info = ctx.deps.tool_index.get(name)
+        info = ctx.deps.tool_catalog.get(name)
         try:
             if runtime.tool_calls_in_model_request > cap:
                 result: Any = json.dumps(

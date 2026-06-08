@@ -74,7 +74,7 @@ async def tool_view(
 
     catalog = {
         info.name: info.description
-        for info in ctx.deps.tool_index.values()
+        for info in ctx.deps.tool_catalog.values()
         if info.visibility == VisibilityPolicyEnum.DEFERRED
     }
     by_normalized = {_normalize(canonical): canonical for canonical in catalog}
