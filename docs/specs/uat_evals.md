@@ -137,7 +137,7 @@ A new eval is **mission-justified** only if it ties to a tenet row in the missio
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `llm.model` | `CO_LLM_MODEL` | `qwen3.5:35b-a3b-q4_k_m-agentic` | Agent under test |
+| `llm.model` | `CO_LLM_MODEL` | `qwen3.6:35b-a3b-agentic` | Agent under test |
 | `llm.judge_model` | `CO_LLM_JUDGE_MODEL` | unset (falls back to `llm.model`) | Distinct judge model for behavioral evals |
 | `eval.timeout_secs` | — | per-case in `evals/_timeouts.py` | Warm-model budget; never folds cold-start (per `feedback_call_timeout_no_cold_start`) |
 | `eval.report_dir` | — | `docs/` | Permanent `REPORT-eval-<scenario>.md` location |

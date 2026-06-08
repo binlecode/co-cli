@@ -215,7 +215,7 @@ These settings most directly affect bootstrap behavior.
 | Setting | Env Var | Default | Description |
 | --- | --- | --- | --- |
 | `llm.provider` | `CO_LLM_PROVIDER` | `ollama` | Selects provider-specific bootstrap checks and model wiring |
-| `llm.host` | `CO_LLM_HOST` | `http://localhost:11434` | Host used by Ollama checks and runtime model calls |
+| `llm.host` | `CO_LLM_HOST` | `http://localhost:11433` | Host used by Ollama checks and runtime model calls (multi-instance router; `11434` bypasses to primary Ollama) |
 | `llm.model` | `CO_LLM_MODEL` | provider default | Primary foreground model built during startup |
 | `llm.max_ctx` | — | `65536` | Ceiling on probed Ollama context window; `deps.model_max_ctx = min(probe, max_ctx)` |
 | `memory.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
@@ -251,6 +251,6 @@ These settings most directly affect bootstrap behavior.
 | `co_cli/commands/core.py` | Slash-command `dispatch` and `BUILTIN_COMMANDS` registrations |
 | `co_cli/commands/skills.py` | `/skills` REPL command family (list/check/lint/reload/usage/pin/unpin) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS`, `filter_namespace_conflicts` — called after `load_skills` to drop namespace conflicts |
-| `co_cli/memory/session.py` | Session filename generation, latest-session discovery, new-path factory |
-| `co_cli/memory/memory_store.py` | Implements the `MemoryStore` used when bootstrap enables indexed retrieval |
-| `co_cli/memory/indexer.py` | Extracts user-prompt and assistant-text parts from JSONL transcripts |
+| `co_cli/session/filename.py` | Session filename generation, latest-session discovery, new-path factory |
+| `co_cli/memory/store.py` | Implements the `MemoryStore` used when bootstrap enables indexed retrieval |
+| `co_cli/session/transcript.py` | Extracts user-prompt and assistant-text parts from JSONL transcripts |

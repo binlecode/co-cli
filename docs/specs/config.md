@@ -158,7 +158,7 @@ Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is)
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `llm.provider` | `CO_LLM_PROVIDER` | `"ollama"` | Provider: `ollama` or `gemini` |
-| `llm.host` | `CO_LLM_HOST` | `"http://localhost:11434"` | Ollama server base URL |
+| `llm.host` | `CO_LLM_HOST` | `"http://localhost:11433"` | Ollama server base URL (multi-instance router; `11434` bypasses to primary Ollama) |
 | `llm.model` | `CO_LLM_MODEL` | `"qwen3.6:35b-a3b-agentic"` (Ollama default) | Single model name for all tasks; falls back to `DEFAULT_LLM_MODELS[provider]` when unset |
 | `llm.judge_model` | — | `None` | Optional pinned-distinct judge model name. Used by phase-1 judge cases (W1.A coherence, W4.A skill body) AND all phase-2 behavioral evals. Inherits provider/host/api_key from `llm.*`; only the model name differs. When unset, the judge falls back to `llm.model` and `CaseResult.reason` carries `[judge_model_same_as_agent]` — a single-model regression can mask itself in the judge. Pick a model with comparable capability but a different family/training data than `model` when possible (e.g. `qwen` agent + `llama` judge) so single-family regressions don't mask. |
 | `llm.max_ctx` | — | `65536` | Ceiling on probed Ollama context window |
@@ -194,7 +194,7 @@ Shape invariant: `tail_fraction < compaction_ratio` and `spill_ratio <= compacti
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `compaction.compaction_ratio` | `CO_COMPACTION_RATIO` | `0.50` | Proactive trigger fraction; fires when context ≥ this fraction of budget |
-| `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.20` | Fraction of budget preserved as tail in compaction; must be < compaction_ratio |
+| `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.10` | Fraction of budget preserved as tail in compaction; must be < compaction_ratio |
 | `compaction.spill_ratio` | `CO_COMPACTION_SPILL_RATIO` | `0.50` | Fraction above which tool returns spill to disk; must be ≤ compaction_ratio |
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum savings fraction to count a proactive compaction as effective |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Consecutive low-yield compactions before anti-thrash gate activates |

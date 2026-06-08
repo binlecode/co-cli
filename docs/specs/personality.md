@@ -211,7 +211,7 @@ for missing mindset files.
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` |
 | `co_cli/personality/prompts/souls/{role}/memories/*.md` | Canon scene files (package-shipped) |
 | `co_cli/bootstrap/core.py:_sync_canon_store` | Bootstrap hook indexing canon under `source='canon'` (personality-load-only path) |
-| `co_cli/memory/memory_store.py:sync_dir(no_chunk=True)` | Single-chunk-per-file indexing path used by canon |
+| `co_cli/bootstrap/core.py:_sync_canon_dir` | Single-chunk-per-file canon indexing helper (one `Chunk` per file, `index=0`) called by `_sync_canon_store` |
 | `co_cli/personality/prompts/validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
 | `co_cli/personality/prompts/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
 | `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `07_memory_protocol.md` |

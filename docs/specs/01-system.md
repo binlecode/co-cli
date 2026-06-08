@@ -237,8 +237,8 @@ Settings most relevant to system assembly:
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `llm.provider` | `CO_LLM_PROVIDER` | `ollama` | Model provider for the session runtime |
-| `llm.host` | `CO_LLM_HOST` | `http://localhost:11434` | Ollama-compatible host |
-| `llm.model` | `CO_LLM_MODEL` | `qwen3.5:35b-a3b-q4_k_m-agentic` | Primary model for the foreground agent |
+| `llm.host` | `CO_LLM_HOST` | `http://localhost:11433` | Ollama-compatible host (multi-instance router; set `11434` to bypass to primary Ollama) |
+| `llm.model` | `CO_LLM_MODEL` | `qwen3.6:35b-a3b-agentic` | Primary model for the foreground agent (empty → per-provider default via validator) |
 | `mcp_servers` | `CO_MCP_SERVERS` | bundled defaults | MCP server definitions attached during runtime assembly |
 | `personality` | `CO_PERSONALITY` | `tars` | Personality assets injected during prompt assembly |
 | `memory.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before runtime degradation |

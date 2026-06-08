@@ -319,7 +319,7 @@ Output-limit diagnostics happen only after a successful final segment:
 
 1. if `latest_result.response.finish_reason == "length"`, show a truncation status message
 2. if `deps.model_max_ctx` is set, compare `latest_result.response.usage.input_tokens / deps.model_max_ctx` — the provider's real input count for the final request, re-sourced on demand from the last `ModelResponse` (not carried as a runtime status var)
-3. emit either a warning or overflow message based on `ctx_warn_threshold` and `ctx_overflow_threshold`
+3. emit an overflow message when `ratio >= 1.0`, or a context-pressure warning when `ratio >= compaction.compaction_ratio` and proactive compaction has stalled (`consecutive_low_yield_proactive_compactions >= compaction.proactive_thrash_window`)
 
 Interrupt handling is conservative:
 
@@ -379,8 +379,6 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
 | `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
 | `llm.max_model_requests_per_turn` | `CO_LLM_MAX_MODEL_REQUESTS_PER_TURN` | `90` | Max `ModelResponse`s per turn; `0` disables the cap |
-| `ctx_warn_threshold` | `CO_LLM_CTX_WARN_THRESHOLD` | `0.85` | Context-ratio warning threshold |
-| `ctx_overflow_threshold` | `CO_LLM_CTX_OVERFLOW_THRESHOLD` | `1.0` | Context-ratio overflow threshold |
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Thinking display mode for streamed turns |
 
 ## 4. Public Interface
@@ -425,5 +423,5 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/tools/shell/execute.py` | command-shape shell allow/deny/approval logic |
 | `co_cli/display/stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
 | `co_cli/display/core.py` | terminal frontend surfaces, tool panels, status rendering, approval prompts, and question prompting (`QuestionPrompt`, `prompt_question`) |
-| `co_cli/memory/session.py` | session filename generation and latest-session discovery |
+| `co_cli/session/filename.py` | session filename generation and latest-session discovery |
 | `co_cli/skills/lifecycle.py` | skill-run environment save/restore and active-skill-name cleanup |

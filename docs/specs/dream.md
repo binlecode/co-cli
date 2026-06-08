@@ -510,7 +510,7 @@ The daemon wires the same observability stack as the main app via `setup_observa
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | (existing) | Master switch for the reviewer subsystem |
+| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Master switch for the reviewer subsystem |
 | `skills.review_memory_nudge_interval` | `CO_SKILLS_REVIEW_MEMORY_NUDGE_INTERVAL` | `10` | Turns between mid-session memory KICKs |
 | `skills.review_skill_nudge_interval` | `CO_SKILLS_REVIEW_SKILL_NUDGE_INTERVAL` | `10` | Iterations between mid-session skill KICKs |
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.321]
+
+### Spec sync — stale paths, config defaults, phantom settings
+
+Doc-only corrections across `docs/specs/` to match current source (no code change):
+
+- **Stale source paths** (memory/index/session/skills restructure): `memory/session.py`→`session/filename.py` (bootstrap.md, core-loop.md), `memory/memory_store.py`→`memory/store.py` (bootstrap.md), `memory/indexer.py`→`session/transcript.py` (bootstrap.md), `memory/memory_store.py:sync_dir(no_chunk=True)`→`bootstrap/core.py:_sync_canon_dir` (personality.md), `skills/_lint.py`→`skills/lint.py` (skills.md).
+- **Wrong config defaults**: `compaction.tail_fraction` `0.20`→`0.10` (config.md, compaction.md + worked example); `llm.host` `11434`→`11433` (config.md, bootstrap.md, 01-system.md); `llm.model` `qwen3.5:35b-a3b-q4_k_m-agentic`→`qwen3.6:35b-a3b-agentic` (01-system.md, uat_evals.md); `skills.review_enabled` default `(existing)`→`false` (dream.md); default model `Qwen3.5`→`Qwen3.6` (compaction.md).
+- **Phantom config removed**: `ctx_warn_threshold`/`ctx_overflow_threshold` (never existed) dropped from core-loop.md; flow prose rewritten to the real mechanism (hardcoded `ratio≥1.0` overflow, `ratio≥compaction_ratio` warn gated by `proactive_thrash_window`).
+
 ## [0.8.320]
 
 ### Toolset symbol renames — `_CallSeamToolset` + `tool_index` → `tool_catalog`

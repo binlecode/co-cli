@@ -321,7 +321,7 @@ Returns a skill's full body, addressed by the `filename_stem` from the skill man
 | Symbol | Source | Contract |
 |--------|--------|---------|
 | `SkillInfo` | `co_cli/skills/skill_types.py` | Frozen dataclass — `name`, `description`, `body`, `argument_hint`, `user_invocable`, `disable_model_invocation`, `skill_env`, `path` |
-| `LintFinding` | `co_cli/skills/_lint.py` | Frozen dataclass — `rule`, `line`, `message` |
+| `LintFinding` | `co_cli/skills/lint.py` | Frozen dataclass — `rule`, `line`, `message` |
 
 ## 5. Files
 

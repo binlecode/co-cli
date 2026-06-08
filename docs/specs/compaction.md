@@ -254,7 +254,7 @@ Spills any single tool result exceeding its per-tool threshold to `.co-cli/tool-
 
 Placeholder shape — multi-line `<persisted-output>` block carrying a size preamble, `tool:` / `file:` lines, a `file_read` retrieval hint, and a `preview:` of the first `TOOL_RESULT_PREVIEW_CHARS` (1,500) chars (newline-aware truncation past halfway point).
 
-**Why 4,000?** Derivation from context-budget arithmetic against the default Qwen3.5 model with `model_max_ctx = 65,536`.
+**Why 4,000?** Derivation from context-budget arithmetic against the default Qwen3.6 model with `model_max_ctx = 65,536`.
 
 | Reservation | Tokens | Chars (~4/tok) |
 |---|---|---|
@@ -430,7 +430,7 @@ proactive_window_processor — full path
     budget       = resolve_compaction_budget(deps)    (= model_max_ctx)
     head_end     = find_first_run_end(messages) + 1
     groups       = group_by_turn(messages)            e.g., [G0, G1, G2, G3]
-    tail_budget  = tail_fraction × budget             e.g., 0.20 × 32K ≈ 6.5K
+    tail_budget  = tail_fraction × budget             e.g., 0.10 × 32K ≈ 3.2K
 
     if len(groups) < _MIN_RETAINED_TURN_GROUPS + 1 (= 2)
         → return None                  (nothing to drop)
@@ -661,7 +661,7 @@ Peer parity: hermes embeds an inline `Use file tools to read the full file.` in 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
 | `compaction.compaction_ratio` | `CO_COMPACTION_RATIO` | `0.50` | Fraction of budget above which `proactive_window_processor` fires |
-| `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.20` | Fraction of budget targeted for the preserved tail |
+| `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.10` | Fraction of budget targeted for the preserved tail (≈20% of the operational budget = `compaction_ratio` × budget) |
 | `compaction.spill_ratio` | `CO_COMPACTION_SPILL_RATIO` | `0.50` | Fraction of context window above which `spill_largest_tool_results` force-spills tool returns. Validated `≤ compaction_ratio` so post-spill aggregate falls below proactive's trigger and proactive fast-paths. |
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum token savings fraction to count a proactive compaction as effective (anti-thrashing) |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Consecutive low-yield proactive compactions before anti-thrashing gate activates |
