@@ -9,8 +9,9 @@ context-stability plan (`2026-06-02-...-context-stability-sizing-control`) audit
 **schema half** rigorously (A1 report → A2: defer 4 tools, 20,581 → 17,224 chars) but left the
 **instruction half** with only a size pin.
 
-`docs/REPORT-instruction-floor-audit.md` (2026-06-07) gives the instruction half the equivalent
-first-principles review. Measured live (tars, native toolset):
+An instruction-floor audit (2026-06-07; its durable rule distilled into `docs/specs/prompt-assembly.md`
+§2.2, the signature-coherence invariant — the standalone audit report was removed post-ship) gave the
+instruction half the equivalent first-principles review. Measured live (tars, native toolset):
 
 | Floor component | Chars | ~Tok |
 |---|---:|---:|

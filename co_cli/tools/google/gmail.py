@@ -149,8 +149,7 @@ def google_gmail_search(ctx: RunContext[CoDeps], query: str, max_results: int = 
     check_fn=_google_available,
 )
 def google_gmail_draft(ctx: RunContext[CoDeps], to: str, subject: str, body: str) -> ToolReturn:
-    """Create a draft email in Gmail. Does NOT send — the user reviews and
-    sends manually from Gmail.
+    """Create a draft email in Gmail. Does NOT send — the user reviews and sends manually from Gmail.
 
     Creates a plain-text draft. For rich formatting, the user can edit the
     draft in Gmail before sending.

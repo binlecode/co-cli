@@ -92,8 +92,10 @@ def google_calendar_list(
     days_ahead: int = 1,
     max_results: int = 25,
 ) -> ToolReturn:
-    """List calendar events in a time window around today. Auto-paginates
-    internally — all matching events up to max_results are returned in one call.
+    """List calendar events in a time window around today.
+
+    Auto-paginates internally — all matching events up to max_results are
+    returned in one call.
 
     Use this for schedule overviews (today, this week) — its near-term default
     window (days_ahead=1) suits a today/this-week glance. For keyword search

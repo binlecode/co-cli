@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.319]
+
+### Deferred-tool stub completeness + instruction-floor-audit report consolidation
+
+- **Deferred-tool stubs** — fixed three Google tool docstrings (`google_calendar_list`, `google_drive_search`,
+  `google_gmail_draft`) whose first physical line wrapped mid-clause. The per-turn deferred-tool stub
+  (`build_deferred_tool_awareness_prompt`, which renders only the first docstring line via
+  `agent_tool.py`'s `description` extraction) now leads with a complete ≤100-char purpose statement. All 17
+  native DEFERRED tools verified complete against `TOOL_REGISTRY`.
+- **Spec/report consolidation** — distilled the one durable rule from `docs/REPORT-instruction-floor-audit.md`
+  (the signature-coherence invariant: the floor carries WHEN/WHY, a tool's call signature/HOW lives in its
+  schema; a deferred signature must never sit in floor prose) into `docs/specs/prompt-assembly.md` §2.2, then
+  removed the standalone report. Build-time findings/proposals/measurements remain preserved in the archived
+  plan; the archived plan's provenance line was repointed to the spec.
+
 ## [0.8.318]
 
 ### instruction-floor-audit — dedup, deferred-signature decouple, coupling guard, full-floor accounting

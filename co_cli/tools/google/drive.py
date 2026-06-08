@@ -67,9 +67,10 @@ def _format_drive_results(
     check_fn=_google_available,
 )
 def google_drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> ToolReturn:
-    """Search files in Google Drive by name or content. Returns up to 10
-    results per page. Matches files whose name contains the query OR whose
-    full text body contains the query.
+    """Search files in Google Drive by name or content. Returns up to 10 results per page.
+
+    Matches files whose name contains the query OR whose full text body
+    contains the query.
 
     Pagination: When has_more is true, call again with page + 1 to get the
     next batch. Keep paginating until has_more is false when the task requires

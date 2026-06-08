@@ -63,6 +63,8 @@ Registered in `build_orchestrator()` (`co_cli/agent/build.py`) from `ORCHESTRATO
 
 These layers are **not** persisted into `message_history`. They are emitted as `InstructionPart(dynamic=True)` in registration order, joined by `\n\n` and appended after the static literal in the system prompt block — see §2.3 for how cache-aware providers separate them from the cached prefix.
 
+**Signature-coherence invariant.** The instruction floor (rules, mindsets, toolset guidance) carries *behavioral triggers* — WHEN and WHY to use a capability — never a tool's *call signature* (its HOW). A signature lives in the tool's schema: on the cached prefix for `ALWAYS` tools, loaded on demand via `tool_view` for `DEFERRED` tools (whose floor presence is the one-line stub above, not a signature). Hard-coding a deferred tool's `name(args…)` syntax in rule or guidance prose is a defect on two counts — it re-encodes on the floor the schema cost deferral removed, and it instructs a direct call to a tool that is not callable until loaded (contradicting the deferred-load mechanic). `tests/test_instruction_floor_coupling.py` guards this: it derives the `DEFERRED` set live from `tool_index` and fails if any deferred tool's call signature appears in the assembled floor (`build_rules_block() + build_toolset_guidance(...)`).
+
 ### 2.3 Static vs Dynamic Split — Cache-Friendliness
 
 pydantic-ai distinguishes static and dynamic instructions at the `InstructionPart` level: the literal passed to `Agent(instructions=...)` becomes one `InstructionPart(dynamic=False)`; each `@agent.instructions` callback becomes a separate `InstructionPart(dynamic=True)` in registration order. All parts are joined by `\n\n` and emitted as the system prompt block.
