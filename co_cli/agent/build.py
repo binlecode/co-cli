@@ -10,9 +10,10 @@ from co_cli.deps import CoDeps
 
 if TYPE_CHECKING:
     from co_cli.agent.spec import OrchestratorSpec, TaskAgentSpec
+    from co_cli.context.orchestrate import SessionAgent
 
 
-def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> Agent[CoDeps, Any]:
+def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> SessionAgent:
     """Build the orchestrator agent from a spec.
 
     Composes static instructions by calling each builder in order, registers
@@ -37,7 +38,7 @@ def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> Agent[CoDeps, An
             parts.append(piece)
     static_instructions = "\n\n".join(parts)
 
-    agent: Agent[CoDeps, Any] = Agent(
+    agent: SessionAgent = Agent(
         raw_model,
         deps_type=CoDeps,
         instructions=static_instructions,

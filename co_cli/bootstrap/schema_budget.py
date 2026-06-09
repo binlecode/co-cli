@@ -2,28 +2,32 @@
 
 Every ALWAYS-visibility tool's ToolDefinition (name + description + minified-parameters-JSON)
 ships in every turn's static prefix, so it is part of the floor-inclusive prefill the provider
-counts on every request. This module measures that bucket once, from the assembled toolset, and is
+counts on every request. This module measures that bucket once, from the native toolset, and is
 consumed by two callers that must agree on the number:
 
   - ``co_cli/bootstrap/core.py`` — folds the measured chars into ``deps.static_floor_tokens`` so the
     compaction triggers can account for the floor when the provider report is stale.
   - ``tests/test_orchestrator_schema_budget.py`` — the regression guard that pins the bucket size.
 
-Measurement: walk the assembled toolset to the inner ``FunctionToolset.tools`` dict, call each
-tool's ``prepare_tool_def(ctx)`` (respects per-turn prepare callbacks), and cross-reference
-visibility via ``deps.tool_catalog[name].visibility``.
+Measurement: iterate the native ``FunctionToolset.tools`` dict (passed in by the caller, which
+already holds it from ``build_native_toolset``), call each tool's ``prepare_tool_def(ctx)``
+(respects per-turn prepare callbacks), and cross-reference visibility via
+``deps.tool_catalog[name].visibility``.
 """
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING
 
-from pydantic_ai._run_context import RunContext
-from pydantic_ai.result import RunUsage
+from pydantic_ai import RunContext
+from pydantic_ai.usage import RunUsage
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
+
+if TYPE_CHECKING:
+    from pydantic_ai.toolsets import FunctionToolset
 
 
 @dataclass(frozen=True)
@@ -36,49 +40,25 @@ class AlwaysSchemaBudget:
     empty_descriptions: list[str]
 
 
-def _unwrap_function_toolset(toolset: Any) -> Any:
-    """Walk toolset wrappers to the inner FunctionToolset holding a .tools dict.
+async def measure_always_schema_budget(
+    deps: CoDeps, native_toolset: FunctionToolset[CoDeps]
+) -> AlwaysSchemaBudget:
+    """Measure the ALWAYS-visibility tool-schema prefill bucket from the native toolset.
 
-    Handles the FilteredToolset / CombinedToolset / wrapped chain produced by
-    ``assemble_routing_toolset``.
-    """
-    inner: Any = toolset
-    for _ in range(12):
-        if hasattr(inner, "tools") and isinstance(inner.tools, dict):
-            return inner
-        if hasattr(inner, "toolsets"):
-            for sub in inner.toolsets:
-                cur = sub
-                for _ in range(8):
-                    if hasattr(cur, "tools") and isinstance(cur.tools, dict):
-                        return cur
-                    cur = getattr(cur, "wrapped", None)
-                    if cur is None:
-                        break
-            return None
-        inner = getattr(inner, "wrapped", None)
-        if inner is None:
-            return None
-    return inner
-
-
-async def measure_always_schema_budget(deps: CoDeps) -> AlwaysSchemaBudget:
-    """Measure the ALWAYS-visibility tool-schema prefill bucket from the assembled toolset.
+    ``native_toolset`` is the inner ``FunctionToolset`` produced by ``build_native_toolset`` —
+    the caller (``bootstrap/core.py``) already holds it, so the measurer reads its ``.tools`` dict
+    directly instead of duck-typing the SDK's assembled toolset-composition topology.
 
     Sums ``len(name) + len(description) + len(minified-params-JSON)`` over every tool whose
     ``deps.tool_catalog`` visibility is ALWAYS. ``per_tool_chars`` holds the ALWAYS tools only;
     ``tool_count`` counts every tool measured (a drop guard); ``empty_descriptions`` lists any tool
     with a blank description.
     """
-    inner = _unwrap_function_toolset(deps.toolset)
-    if inner is None or not hasattr(inner, "tools"):
-        raise RuntimeError("could not unwrap toolset to a FunctionToolset with a .tools dict")
-
     total_chars = 0
     per_tool_chars: dict[str, int] = {}
     empty_descriptions: list[str] = []
     tool_count = 0
-    for name, tool in inner.tools.items():
+    for name, tool in native_toolset.tools.items():
         ctx = RunContext(deps=deps, model=None, usage=RunUsage(), tool_name=name)  # type: ignore[arg-type]
         tdef = await tool.prepare_tool_def(ctx)
         if tdef is None:

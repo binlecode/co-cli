@@ -8,11 +8,17 @@ Two layers:
 """
 
 import json
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from typing import Any
 
 import pytest
-from pydantic_ai.messages import ModelResponse, ToolCallPart
-from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.settings import ModelSettings
+from pydantic_ai.usage import RequestUsage
 
 from co_cli.llm.surrogate_recovery_model import (
     SurrogateRecoveryModel,
@@ -123,5 +129,104 @@ async def test_gemini_path_leaves_args_untouched():
     """Default repair_tool_args=False (Gemini) passes the model output through verbatim."""
     model = SurrogateRecoveryModel(_malformed_tool_call_model())
     response = await model.request([], None, ModelRequestParameters())
+    (part,) = [p for p in response.parts if isinstance(p, ToolCallPart)]
+    assert part.args == '{"cmd": "ls",'
+
+
+# ---------------------------------------------------------------------------
+# SurrogateRecoveryModel.request_stream — gated repair on the streaming path
+#
+# The agent graph validates streamed tool args from StreamedResponse.get(), so
+# _RepairingStreamedResponse must repair that assembled response. These tests pin
+# that seam: a future SDK change that bypasses it turns them red instead of
+# silently crashing every malformed-JSON tool call on the Ollama streaming path.
+# ---------------------------------------------------------------------------
+
+
+class _MalformedArgsStream(StreamedResponse):
+    """StreamedResponse whose assembled get() carries a malformed-JSON ToolCallPart."""
+
+    def __init__(self, mrp: ModelRequestParameters) -> None:
+        super().__init__(mrp)
+
+    async def _get_event_iterator(self) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
+
+    def get(self) -> ModelResponse:
+        return ModelResponse(
+            parts=[ToolCallPart(tool_name="shell_exec", args='{"cmd": "ls",', tool_call_id="c1")],
+            model_name="fake",
+        )
+
+    def usage(self) -> RequestUsage:
+        return RequestUsage()
+
+    @property
+    def model_name(self) -> str:
+        return "fake"
+
+    @property
+    def provider_name(self) -> str | None:
+        return "fake"
+
+    @property
+    def provider_url(self) -> str | None:
+        return None
+
+    @property
+    def timestamp(self) -> datetime:
+        return datetime.now(UTC)
+
+
+class _StreamingModel(Model):
+    """Fake model whose stream yields a malformed-args assembled response."""
+
+    @property
+    def model_name(self) -> str:
+        return "fake"
+
+    @property
+    def system(self) -> str:
+        return "fake"
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        raise NotImplementedError("streaming-only fake")
+
+    @asynccontextmanager
+    async def request_stream(
+        self,
+        messages: list[ModelMessage],
+        model_settings: ModelSettings | None,
+        model_request_parameters: ModelRequestParameters,
+        run_context: Any = None,
+    ) -> AsyncIterator[StreamedResponse]:
+        yield _MalformedArgsStream(model_request_parameters)
+
+    async def count_tokens(self, *args: Any, **kwargs: Any) -> RequestUsage:
+        return RequestUsage()
+
+
+@pytest.mark.asyncio
+async def test_streaming_path_repairs_malformed_args():
+    """repair_tool_args=True repairs the assembled streamed response's tool-call args."""
+    model = SurrogateRecoveryModel(_StreamingModel(), repair_tool_args=True)
+    async with model.request_stream([], None, ModelRequestParameters()) as stream:
+        response = stream.get()
+    (part,) = [p for p in response.parts if isinstance(p, ToolCallPart)]
+    assert json.loads(part.args) == {"cmd": "ls"}
+
+
+@pytest.mark.asyncio
+async def test_streaming_path_leaves_args_untouched_when_disabled():
+    """Default repair_tool_args=False passes the streamed args through verbatim."""
+    model = SurrogateRecoveryModel(_StreamingModel())
+    async with model.request_stream([], None, ModelRequestParameters()) as stream:
+        response = stream.get()
     (part,) = [p for p in response.parts if isinstance(p, ToolCallPart)]
     assert part.args == '{"cmd": "ls",'

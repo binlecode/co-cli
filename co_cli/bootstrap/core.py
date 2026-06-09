@@ -447,7 +447,7 @@ async def create_deps(
     instruction_tokens += estimate_text_tokens(build_toolset_guidance(tool_catalog))
     if config.personality:
         instruction_tokens += estimate_text_tokens(load_soul_critique(config.personality))
-    schema_budget = await measure_always_schema_budget(deps)
+    schema_budget = await measure_always_schema_budget(deps, native_toolset)
     deps.static_floor_tokens = instruction_tokens + schema_budget.total_chars // CHARS_PER_TOKEN
 
     return deps

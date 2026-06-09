@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.324]
+
+### pydantic-ai SDK decouple — drop private-module dependency + topology heuristic
+
+- **`schema_budget.py` de-coupled from SDK internals**: deleted `_unwrap_function_toolset` (a deep duck-typing walk over the SDK's toolset-composition topology) and the private `pydantic_ai._run_context` / non-canonical `pydantic_ai.result` imports. `measure_always_schema_budget` now takes the inner `FunctionToolset` as a parameter, fed from the `native_toolset` already in scope at `bootstrap/core.py`. Measured schema-budget number is unchanged (17,224), pinned by the existing regression guard.
+- **Streaming-path JSON-repair regression test**: new tests in `test_flow_tool_call_repair.py` drive a malformed-JSON `ToolCallPart.args` through `SurrogateRecoveryModel.request_stream(repair_tool_args=True/False)` — pins the `_RepairingStreamedResponse` assumption so a future SDK change that bypasses it turns the test red instead of silently breaking Ollama streaming sessions.
+- **Cosmetic cleanups**: `build_orchestrator` annotated `-> SessionAgent` (existing alias, imported under `TYPE_CHECKING`); `orchestrate.py` `UsageLimits(request_limit=None)` kept with an explanatory comment (orchestrator intentionally unbounded; human drives turn count).
+- **New spec**: `docs/specs/pydantic-ai-integration.md` documents the SDK consumption surface (model wrapping, toolset composition, call-seam, approval protocol, schema budget) as the living source of truth; linked from `01-system.md`.
+
 ## [0.8.323]
 
 ### Config surface cleanup — dead settings removed, dream consolidation threshold fix

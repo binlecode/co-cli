@@ -384,6 +384,10 @@ async def _execute_stream_segment(
                     else turn_state.current_history,
                     model_settings=model_settings,
                     usage=turn_state.latest_usage,
+                    # Orchestrator is intentionally unbounded — the human drives
+                    # turn count. Explicit None is required: the SDK default is 50
+                    # requests (unlike task agents, which keep a real limit at
+                    # agent/run.py).
                     usage_limits=UsageLimits(request_limit=None),
                     deferred_tool_results=turn_state.tool_approval_decisions,
                     metadata={

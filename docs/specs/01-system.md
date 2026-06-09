@@ -59,6 +59,7 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Observability | [observability.md](observability.md) | Structured JSON-line spans log, `@trace` decorator, `co tail` / `co trace` viewers |
 | Self-planning | [self-planning.md](self-planning.md) | `todo_write` / `todo_read` plan state, compaction snapshot, rehydration on `/resume` |
 | Agents | [agents.md](agents.md) | Agent construction, orchestrator, daemon task agents |
+| pydantic-ai integration | [pydantic-ai-integration.md](pydantic-ai-integration.md) | SDK consumption surface: model wrapping, toolset composition, call-seam, approval protocol, schema budget |
 | UAT Evals | [uat_evals.md](uat_evals.md) | End-to-end quality contract: eval registry, rubric discipline, gating policy |
 
 ### Package Dependency Direction (one-way rule)
