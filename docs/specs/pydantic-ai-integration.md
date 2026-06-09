@@ -121,7 +121,7 @@ A `.filtered()` predicate the SDK calls on every `get_tools`. Two independent ga
 _tool_visibility_filter(ctx, tool_def) -> bool:
     entry = ctx.deps.tool_catalog.get(tool_def.name)
     # Deferred gate (every turn): hide DEFERRED tools until loaded via tool_view
-    if entry and entry.visibility == DEFERRED and tool_def.name not in ctx.deps.runtime.unlocked_tools:
+    if entry and entry.visibility == DEFERRED and tool_def.name not in ctx.deps.runtime.revealed_tools:
         return False
     # Resume gate (approval-resume turns only): narrow to approved + ALWAYS tools
     resume = ctx.deps.runtime.resume_tool_names
@@ -353,7 +353,7 @@ Package-private (not callable cross-package, listed for the map): `_CallSeamTool
 Load-bearing, intentional, or rejected couplings — recorded so they are not re-litigated. (Verified against `pydantic-ai==1.81.0`.)
 
 **Intentional divergences from SDK features:**
-- **No `defer_loading`/`search_tools`.** co owns deferral via `_tool_visibility_filter` + `tool_view` + `runtime.unlocked_tools`, uniformly over native and MCP tools (§2.3). Registering tools with `defer_loading=True` would re-engage the SDK keyword loader and split the mechanism.
+- **No `defer_loading`/`search_tools`.** co owns deferral via `_tool_visibility_filter` + `tool_view` + `runtime.revealed_tools`, uniformly over native and MCP tools (§2.3). Registering tools with `defer_loading=True` would re-engage the SDK keyword loader and split the mechanism.
 - **Orchestrator `usage_limits=UsageLimits(request_limit=None)`** is required, not ceremony — the SDK default is 50; dropping the arg would cap the human-driven orchestrator at 50 requests. Task agents keep a real limit (`agent/run.py`).
 
 **Minimum-necessary wrappers (do not merge or remove):**

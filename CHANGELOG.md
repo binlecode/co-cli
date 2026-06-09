@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.331]
+
+### Deferred-tool reveal — single source of truth (`revealed_tools`)
+
+- **Stub generator now honors the reveal set**: `build_deferred_tool_awareness_prompt` gained a `revealed_tools: set[str]` parameter and skips any DEFERRED tool already revealed via `tool_view`. Previously the per-turn awareness block kept emitting a "load it via `tool_view`" stub for a tool whose full schema was already surfaced — a redundant, self-contradicting instruction that wasted floor budget and compounded as more tools were revealed in a session. Both consumers (the visibility filter and the stub generator) now read the one runtime set, so they agree by construction.
+- **Field renamed `unlocked_tools` → `revealed_tools`**: the `CoRuntimeState` field is renamed to name its true membership (DEFERRED tools the model has revealed), with a full "unlock"→"reveal" terminology sweep across code, tests, and comments. Model-facing vocabulary is deliberately preserved: the `tool_view` docstring and `"Loaded …"` return keep the "load"/"view" action verb — internal *state* is `revealed_tools`, the model-facing *action* stays "load via `tool_view`".
+- **No data-model or behavior regression**: reveal state stays in `runtime` (fork-fresh, survives compaction with no history coupling); no catalog mutation, no `ToolInfo` change. Specs (`tools.md`, `pydantic-ai-integration.md`, `compaction.md`) and reference docs synced. Full suite green (652 passed).
+
 ## [0.8.330]
 
 ### `ToolInfo` cleanup — remove write-only `is_read_only`, make `is_concurrent_safe` a required field

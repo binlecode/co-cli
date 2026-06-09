@@ -46,7 +46,7 @@ def test_stub_names_exactly_match_deferred_set() -> None:
     tool (model can never discover it), an ALWAYS leak, and a multi-line
     description leak (which would split one tool across extra lines)."""
     tool_catalog = _real_tool_index()
-    prompt = build_deferred_tool_awareness_prompt(tool_catalog)
+    prompt = build_deferred_tool_awareness_prompt(tool_catalog, set())
     stub_names = _stub_names(prompt)
     deferred = _deferred_names(tool_catalog)
     assert set(stub_names) == deferred

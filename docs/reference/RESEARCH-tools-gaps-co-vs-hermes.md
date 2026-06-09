@@ -16,7 +16,7 @@
 > - **New ALWAYS/DEFERRED visibility mechanism (`tool_view`, v0.8.310 + v0.8.314):**
 >   co-cli no longer relies on the SDK's `defer_loading`. Tools carry a static
 >   `visibility` (`ALWAYS` | `DEFERRED`); DEFERRED tools are hidden every turn by
->   `_tool_visibility_filter()` until the model calls `tool_view(name=…)` to unlock
+>   `_tool_visibility_filter()` until the model calls `tool_view(name=…)` to reveal
 >   them. Today **19 ALWAYS / 17 DEFERRED**. This is the biggest new architectural
 >   divergence from hermes (which gates by runtime `check_fn` + named toolset
 >   profiles) — see §1.0 and §3.4.
@@ -43,7 +43,7 @@ then architecture-level gaps and anti-patterns.
 
 - [`co_cli/agent/toolset.py`](/Users/binle/workspace_genai/co-cli/co_cli/agent/toolset.py) — `_build_native_toolset()` iterates `TOOL_REGISTRY` into a pydantic-ai `FunctionToolset`; `_make_prepare(check_fn)` wraps per-tool `check_fn`; `_tool_visibility_filter()` (per-turn ALWAYS/DEFERRED + approval-resume gate); `_CallSeamToolset` (`WrapperToolset`, MCP-result spill at the `call_tool` boundary, lines 140–212)
 - [`co_cli/tools/agent_tool.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/agent_tool.py) — `@agent_tool(...)` decorator; `TOOL_REGISTRY` (list) + `TOOL_REGISTRY_BY_NAME` (dict) self-registration at import
-- [`co_cli/tools/system/tool_view.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/system/tool_view.py) — name-addressed DEFERRED-tool unlock loader (replaces SDK `defer_loading`)
+- [`co_cli/tools/system/tool_view.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/system/tool_view.py) — name-addressed DEFERRED-tool reveal loader (replaces SDK `defer_loading`)
 - [`co_cli/agent/mcp.py`](/Users/binle/workspace_genai/co-cli/co_cli/agent/mcp.py) — `_SanitizingMCPServer`, concurrent `_discover_one` + `asyncio.gather`
 - [`co_cli/tools/mcp_schema.py`](/Users/binle/workspace_genai/co-cli/co_cli/tools/mcp_schema.py) — `sanitize_mcp_schema()` (type-array collapse, nullable-union collapse, object-shape fix, recursion)
 - [`co_cli/llm/surrogate_recovery_model.py`](/Users/binle/workspace_genai/co-cli/co_cli/llm/surrogate_recovery_model.py) — JSON tool-arg repair (moved here from the deleted `lifecycle.py`)
@@ -90,13 +90,13 @@ imports every tool module up front to populate the registry, then iterates it in
 Two co-specific mechanisms replace SDK machinery the capability-API drop (v0.8.312)
 removed:
 
-- **Static visibility + `tool_view` unlock.** co-cli does **not** pass `defer_loading`
+- **Static visibility + `tool_view` reveal.** co-cli does **not** pass `defer_loading`
   to pydantic-ai. Instead every tool carries `visibility ∈ {ALWAYS, DEFERRED}`
   (`deps.py:85–89`). `_tool_visibility_filter()` (`toolset.py:62–85`) hides DEFERRED
-  tools each turn unless their canonical name is in `ctx.deps.runtime.unlocked_tools`,
+  tools each turn unless their canonical name is in `ctx.deps.runtime.revealed_tools`,
   and on approval-resume turns narrows to approved + ALWAYS tools. The model calls
-  `tool_view(name=…)` (`system/tool_view.py:52–104`) — normalized-exact match unlocks
-  the tool; a near-miss returns difflib suggestions (cutoff 0.6) without unlocking;
+  `tool_view(name=…)` (`system/tool_view.py:52–104`) — normalized-exact match reveals
+  the tool; a near-miss returns difflib suggestions (cutoff 0.6) without revealing;
   no match returns a "do not retry" error.
 - **Call-seam `WrapperToolset`.** `_CallSeamToolset` (`toolset.py:140–212`) wraps
   `call_tool` to coerce oversized MCP string results through `spill_with_span()`.
@@ -115,7 +115,7 @@ raw JSON-Schema dicts and normalized via `schema_sanitizer.py` at MCP-ingestion 
 
 The defining difference is **how each manages model-visible surface area**: co-cli
 ships a small static ALWAYS floor and gates the rest behind a model-driven
-`tool_view` unlock; hermes keeps everything registered and gates by runtime `check_fn`
+`tool_view` reveal; hermes keeps everything registered and gates by runtime `check_fn`
 + static named toolset profiles per platform.
 
 ---

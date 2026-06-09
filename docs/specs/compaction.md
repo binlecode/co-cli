@@ -556,9 +556,9 @@ proactive_window_processor          recover_overflow_history          /compact s
                              static_marker fallback uses STATIC_MARKER_PREFIX, same shape minus summary_text
 ```
 
-Deferred-tool unlocks are **not** carried in the compacted history: a loaded tool's
-name lives in `runtime.unlocked_tools` (set by `tool_view`), which compaction never
-touches — so unlocks survive compaction for free, with no discovery-preservation step.
+Deferred-tool reveals are **not** carried in the compacted history: a loaded tool's
+name lives in `runtime.revealed_tools` (set by `tool_view`), which compaction never
+touches — so reveals survive compaction for free, with no discovery-preservation step.
 
 **Runtime commit — `commit_compaction(ctx, result)`.** `compact_messages` returns without touching `runtime.*`. Every caller — including recovery PATH 1 (strip-only-fits, no LLM, no marker) — invokes `commit_compaction` as the last step before returning. `commit_compaction` is the **sole writer** of `compaction_applied_this_turn`; it has no other side effects.
 

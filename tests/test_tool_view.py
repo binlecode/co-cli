@@ -2,11 +2,11 @@
 
 Two layers:
 - Resolution ladder (the tool_view tool over a synthetic deferred catalog): exact /
-  fuzzy-suggest / no-match, and which branch unlocks.
+  fuzzy-suggest / no-match, and which branch reveals.
 - Visibility gate (the real native toolset + per-turn filter): a DEFERRED tool is
-  hidden until unlocked, tool_view is always present, no tool carries the SDK
+  hidden until revealed, tool_view is always present, no tool carries the SDK
   defer_loading flag (so search_tools can never engage), and visibility is driven by
-  runtime state — not message history — so unlocks survive compaction for free.
+  runtime state — not message history — so reveals survive compaction for free.
 """
 
 import pytest
@@ -77,8 +77,8 @@ def _is_error(result) -> bool:
 
 
 @pytest.mark.asyncio
-async def test_normalized_exact_match_unlocks_canonical(tmp_path) -> None:
-    """A case/separator variant (`Skill-Create`) resolves to the canonical name and unlocks it.
+async def test_normalized_exact_match_reveals_canonical(tmp_path) -> None:
+    """A case/separator variant (`Skill-Create`) resolves to the canonical name and reveals it.
 
     `Skill-Create` exercises the full normalization path — lowercasing, hyphen→space, and
     the whitespace split — so it covers the space-separated form too.
@@ -87,28 +87,28 @@ async def test_normalized_exact_match_unlocks_canonical(tmp_path) -> None:
     ctx = _ctx(deps)
     result = await tool_view(ctx, name="Skill-Create")
     assert not _is_error(result)
-    assert "skill_create" in deps.runtime.unlocked_tools
+    assert "skill_create" in deps.runtime.revealed_tools
 
 
 @pytest.mark.asyncio
-async def test_typo_suggests_without_unlocking(tmp_path) -> None:
-    """A near-miss typo returns candidate suggestions and unlocks nothing."""
+async def test_typo_suggests_without_revealing(tmp_path) -> None:
+    """A near-miss typo returns candidate suggestions and reveals nothing."""
     deps = _make_deps(tmp_path, dict(_SYNTHETIC_INDEX))
     ctx = _ctx(deps)
     result = await tool_view(ctx, name="skil_create")
     assert not _is_error(result)
     assert "skill_create" in result.return_value
-    assert deps.runtime.unlocked_tools == set()
+    assert deps.runtime.revealed_tools == set()
 
 
 @pytest.mark.asyncio
-async def test_no_overlap_name_is_terminal_and_unlocks_nothing(tmp_path) -> None:
-    """A name with no fuzzy overlap is a terminal no-retry error, unlocking nothing."""
+async def test_no_overlap_name_is_terminal_and_reveals_nothing(tmp_path) -> None:
+    """A name with no fuzzy overlap is a terminal no-retry error, revealing nothing."""
     deps = _make_deps(tmp_path, dict(_SYNTHETIC_INDEX))
     ctx = _ctx(deps)
     result = await tool_view(ctx, name="quantum_flux_capacitor")
     assert _is_error(result)
-    assert deps.runtime.unlocked_tools == set()
+    assert deps.runtime.revealed_tools == set()
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +124,7 @@ async def _visible_tool_names(toolset, ctx) -> set[str]:
 
 @pytest.mark.asyncio
 async def test_deferred_tool_hidden_until_loaded_by_name(tmp_path) -> None:
-    """skill_create is hidden until tool_view unlocks it; tool_view is always present.
+    """skill_create is hidden until tool_view reveals it; tool_view is always present.
 
     Also asserts no tool carries the SDK defer_loading flag — so the auto-injected
     search_tools loader can never engage (co owns deferral via the filter).
@@ -146,23 +146,23 @@ async def test_deferred_tool_hidden_until_loaded_by_name(tmp_path) -> None:
     tools = await prepared.get_tools(ctx)
     assert all(not t.tool_def.defer_loading for t in tools.values())
 
-    deps.runtime.unlocked_tools.add("skill_create")
+    deps.runtime.revealed_tools.add("skill_create")
     after = await _visible_tool_names(toolset, ctx)
     assert "skill_create" in after
 
 
 @pytest.mark.asyncio
 async def test_visibility_independent_of_message_history(tmp_path) -> None:
-    """Unlock state lives in runtime, not history — so it survives compaction.
+    """Reveal state lives in runtime, not history — so it survives compaction.
 
     The same deps with an empty history and with a long history yield identical
-    visibility, proving the gate does not re-derive unlocks from messages (what made
+    visibility, proving the gate does not re-derive reveals from messages (what made
     the old search_tools preservation coupling necessary).
     """
     native_toolset, tool_catalog = build_native_toolset()
     toolset = assemble_routing_toolset(native_toolset, [])
     deps = _make_deps(tmp_path, tool_catalog)
-    deps.runtime.unlocked_tools.add("skill_create")
+    deps.runtime.revealed_tools.add("skill_create")
 
     long_history = [ModelRequest(parts=[UserPromptPart(content="x")]) for _ in range(20)]
     empty_ctx = _ctx(deps, messages=[])

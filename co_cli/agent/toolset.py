@@ -62,7 +62,7 @@ def _tool_visibility_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -
     """Per-turn tool visibility gate. Two independent rules, applied every get_tools.
 
     Deferred gate (every turn): a DEFERRED tool is hidden until the model loads it via
-    tool_view — i.e. until its name is in runtime.unlocked_tools. This is co's sole
+    tool_view — i.e. until its name is in runtime.revealed_tools. This is co's sole
     deferral mechanism (no SDK defer_loading), applied uniformly to native and MCP
     tools; tool_view itself is ALWAYS and so is never gated here.
 
@@ -73,7 +73,7 @@ def _tool_visibility_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -
     if (
         entry is not None
         and entry.visibility == VisibilityPolicyEnum.DEFERRED
-        and tool_def.name not in ctx.deps.runtime.unlocked_tools
+        and tool_def.name not in ctx.deps.runtime.revealed_tools
     ):
         return False
     resume = ctx.deps.runtime.resume_tool_names
@@ -97,7 +97,7 @@ def _build_native_toolset() -> "tuple[FunctionToolset[CoDeps], dict[str, ToolInf
     """Build an unfiltered FunctionToolset; deferred visibility is co-owned, not SDK.
 
     Tools are NOT registered with defer_loading: co hides DEFERRED tools via the
-    per-turn _tool_visibility_filter (keyed on tool_catalog visibility + unlocked_tools)
+    per-turn _tool_visibility_filter (keyed on tool_catalog visibility + revealed_tools)
     and surfaces them by name through the tool_view tool, so the SDK's keyword loader
     (search_tools) never engages. Visibility lives only in the returned tool_catalog.
 

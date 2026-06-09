@@ -9,16 +9,16 @@ brings a deferred tool into reach, family-consistent with ``memory_view`` /
 
 There is no separate deferring mechanism: a DEFERRED tool is hidden by the per-turn
 visibility filter (``agent/toolset.py``) until its name is in
-``deps.runtime.unlocked_tools``, and an exact-name ``tool_view`` call adds it there.
-Because the unlock set lives in runtime memory (not message history), unlocks survive
+``deps.runtime.revealed_tools``, and an exact-name ``tool_view`` call adds it there.
+Because the reveal set lives in runtime memory (not message history), reveals survive
 compaction with no preservation coupling, and the SDK's keyword loader never engages.
 
 Resolution ladder inside ``tool_view(name)``:
 
 1. Normalized-exact match (case-insensitive; ``-``/whitespace folded to ``_``) against
-   the DEFERRED catalog → unlock it; the model calls it directly next turn. Happy path.
+   the DEFERRED catalog → reveal it; the model calls it directly next turn. Happy path.
 2. No exact match → fuzzy ``difflib`` over the names → "did you mean" candidates,
-   **unlocking nothing** (a hallucinated name must never resolve to a plausible wrong
+   **revealing nothing** (a hallucinated name must never resolve to a plausible wrong
    tool). The model retries with an exact name.
 3. No fuzzy match → "does not exist — do not retry."
 """
@@ -82,7 +82,7 @@ async def tool_view(
 
     canonical = by_normalized.get(query)
     if canonical is not None:
-        ctx.deps.runtime.unlocked_tools.add(canonical)
+        ctx.deps.runtime.revealed_tools.add(canonical)
         return tool_output(
             f"Loaded `{canonical}`. It is now callable — call it directly with its arguments.",
             ctx=ctx,
