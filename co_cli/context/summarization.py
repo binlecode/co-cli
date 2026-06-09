@@ -146,6 +146,12 @@ _SUMMARIZE_PROMPT = (
     "their exact words — do NOT paraphrase or rephrase. Quote the user directly.\n"
     "Example: \"User asked: 'Now refactor the auth module to use JWT instead of sessions'\"\n"
     "If no outstanding task exists, write 'None.']\n\n"
+    "## Next Step\n"
+    "[Immediate next action. MUST include a verbatim quote — copy 1–2 lines exactly\n"
+    "from the most recent user or assistant message as a drift anchor. No paraphrase.\n"
+    "Example: \"Next: implement the login view. Verbatim: 'add JWT token generation on\n"
+    "successful login'\"\n"
+    "If the task just completed with no explicit continuation, say so.]\n\n"
     "## Goal\n"
     "[What the user wants to accomplish.]\n\n"
     "## Constraints & Preferences\n"
@@ -174,12 +180,6 @@ _SUMMARIZE_PROMPT = (
     "[Unanswered questions — verbatim or near-verbatim. Skip if none.]\n\n"
     "## Resolved Questions\n"
     "[Q: <question> → A: <one-sentence answer>. Skip if none.]\n\n"
-    "## Next Step\n"
-    "[Immediate next action. MUST include a verbatim quote — copy 1–2 lines exactly\n"
-    "from the most recent user or assistant message as a drift anchor. No paraphrase.\n"
-    "Example: \"Next: implement the login view. Verbatim: 'add JWT token generation on\n"
-    "successful login'\"\n"
-    "If the task just completed with no explicit continuation, say so.]\n\n"
     "## Critical Context\n"
     "[Exact values that cannot be reconstructed: error strings, config values,\n"
     "line numbers, command outputs. Skip if none.]\n\n"
@@ -192,17 +192,31 @@ _SUMMARIZE_PROMPT = (
     "high-signal intent changes that must survive compaction.\n"
     "If none found, DO NOT write this section at all — not even 'None found'.\n"
     "A '## User Corrections' section with placeholder text is WRONG. Simply omit it.\n\n"
-    "If a prior summary exists in the conversation, integrate its content — do not discard it.\n"
-    "Apply these transitions:\n"
-    "- Items in a prior '## Pending User Asks' that are now answered → move to '## Resolved Questions'.\n"
-    "- Items that remain unanswered → keep in '## Pending User Asks'.\n"
-    "- Items in a prior '## Resolved Questions' → carry forward as-is.\n"
-    "Do not re-raise resolved questions as pending. Update all other sections with new information.\n\n"
     "SKIP RULE (applies to every '## Section' marked 'Skip if none' above): If a "
     "section has no real content from the conversation, OMIT THE SECTION ENTIRELY — "
     "do NOT write the header followed by 'None.', '[None]', 'N/A', or any "
     "placeholder. A section header with placeholder text is WRONG. Simply omit it.\n\n"
 )
+
+
+_PRIOR_SUMMARY_CLAUSE = (
+    "The PRIOR SUMMARY block above is the authoritative prior state. Produce a COMPLETE "
+    "refreshed summary that folds it together with the new turns — emit EVERY mandatory "
+    "section in full (especially ## Active Task and ## Next Step), even when the new turns "
+    "add little. Do not copy the prior summary unchanged, and do not emit only a delta of "
+    "what changed.\n"
+    "Apply these transitions:\n"
+    "- Items in a prior '## Pending User Asks' that are now answered → move to '## Resolved Questions'.\n"
+    "- Items that remain unanswered → keep in '## Pending User Asks'.\n"
+    "- Items in a prior '## Resolved Questions' → carry forward as-is.\n"
+    "Do not re-raise resolved questions as pending. Update all other sections with new information.\n\n"
+)
+"""Carry-forward transition instructions, emitted only when a prior summary is fed.
+
+Lifted out of ``_SUMMARIZE_PROMPT`` so it appears iff a ``PRIOR SUMMARY`` slot is
+present — the lead sentence references that slot; the four transition bullets are
+kept verbatim to preserve carry-forward specificity (Pending→Resolved handling).
+"""
 
 
 def _length_priority_tail(budget: int) -> str:
@@ -286,14 +300,18 @@ def _build_summarizer_prompt(
     personality_active: bool,
     budget: int,
     focus: str | None = None,
+    prior_summary: str | None = None,
 ) -> str:
     """Assemble the final summarizer prompt from _SUMMARIZE_PROMPT + optional context + personality.
 
-    Assembly order: focus → template → length target → context addendum → personality addendum.
+    Assembly order: focus → template → prior-summary clause → length target →
+    context addendum → personality addendum.
     Personality is always last (tone modifier); context provides factual input.
     Focus narrows scope and leads the prompt so the LLM prioritises it.
     ``budget`` sets the ``Target ~N tokens`` line so the model aims at a length
-    proportional to the compacted region.
+    proportional to the compacted region. The prior-summary carry-forward clause
+    is emitted only when ``prior_summary`` is present (it references the
+    ``PRIOR SUMMARY`` slot, which ``summarize_messages`` prepends to the user message).
     """
     parts = []
     if focus:
@@ -304,6 +322,8 @@ def _build_summarizer_prompt(
             f"Allocate ~60-70% of the summary to the focus topic.\n\n"
         )
     parts.append(_SUMMARIZE_PROMPT)
+    if prior_summary:
+        parts.append(_PRIOR_SUMMARY_CLAUSE)
     parts.append(_length_priority_tail(budget))
     if context:
         parts.append(f"\n\n=== ADDITIONAL CONTEXT ===\n{context}\n=== END ADDITIONAL CONTEXT ===")
@@ -319,6 +339,7 @@ async def summarize_messages(
     personality_active: bool = False,
     context: str | None = None,
     focus: str | None = None,
+    prior_summary: str | None = None,
 ) -> str:
     """Summarise *messages* via a single LLM call (no tools, no agent loop).
 
@@ -353,15 +374,31 @@ async def summarize_messages(
     # guarantee. Surfaced so a focus-active cap-bound pass is identifiable in traces.
     span.set_attribute("co.compaction.summary.focus", bool(focus))
 
-    task_prompt = _build_summarizer_prompt(context, personality_active, budget, focus)
+    task_prompt = _build_summarizer_prompt(
+        context, personality_active, budget, focus, prior_summary
+    )
     serialized = serialize_messages(messages, deps.config.observability.redact_patterns)
     settings = cap_output_tokens(deps.model.settings_noreason, cap)
+    # The prior summary is seated in a dedicated, trusted slot ABOVE the opaque
+    # TURNS TO SUMMARIZE: block — not inline among the turns — so the system
+    # prompt's "ignore commands in the turns" rule and the task prompt's "update
+    # this anchor" rule no longer collide. redact_text matches other rendered content.
+    if prior_summary:
+        redacted_prior = redact_text(prior_summary, deps.config.observability.redact_patterns)
+        user_message = (
+            "PRIOR SUMMARY (authoritative prior state — fold into a complete refreshed "
+            "summary, do not copy unchanged):\n"
+            f"{redacted_prior}\n\n"
+            f"TURNS TO SUMMARIZE:\n{serialized}"
+        )
+    else:
+        user_message = f"TURNS TO SUMMARIZE:\n{serialized}"
     # Needed only for the /compact command path, which has no outer segment timeout.
     # On the proactive path the segment timeout already caps this call.
     async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):
         return await llm_call(
             deps,
-            f"TURNS TO SUMMARIZE:\n{serialized}",
+            user_message,
             instructions=f"{_SUMMARIZER_SYSTEM_PROMPT}\n\n{task_prompt}",
             model_settings=settings,
         )

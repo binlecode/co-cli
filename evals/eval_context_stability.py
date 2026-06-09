@@ -29,6 +29,13 @@ What this validates (load-bearing)
   recalled by the agent in a probe turn after ≥1 pass has fired. This gates the
   ``tail_fraction`` / summary-preservation lever: a run that stays bounded but
   loses the fact is incoherent and SOFT-fails (see below).
+- **Multi-pass carry-forward (LOGGED, not gated)** — the run drives enough
+  text-heavy turns to fire ≥2 real summarizer passes, so a prior summary is
+  carried across a pass (``_partition_dropped`` recovers pass N-1's summary-marker
+  recap and feeds it into pass N's dedicated ``PRIOR SUMMARY`` anchor slot). The
+  carried prior-summary slot contents AND the coherence-probe answer are recorded
+  in the CS.A result block for human inspection. Carry-forward coherence is
+  non-deterministic, so it is never asserted — only emitted.
 
 Gate-conditional anti-thrash assertion
 ---------------------------------------
@@ -88,6 +95,7 @@ from evals._timeouts import MULTI_TURN_COMPACT_BUDGET_S
 from evals._trace import record_turn
 from pydantic_ai.messages import ModelResponse, TextPart
 
+from co_cli.context.compaction import extract_summary_body, summary_marker
 from co_cli.context.orchestrate import run_turn
 from co_cli.context.summarization import SUMMARY_BUDGET_FLOOR
 from co_cli.memory.frontmatter import render_frontmatter
@@ -113,13 +121,16 @@ _NUM_TURNS = 10
 # never trips it; a true runaway blows past it.
 _MAX_PROACTIVE_PASSES = _NUM_TURNS * 3
 
-# Mandatory trailing template section (summarization.py _SUMMARIZE_PROMPT). It is
-# emitted even when the task just completed ("say so"), so it is the truncation
-# canary: if the hard output cap cut the summary mid-structure (the Mode-B failure
-# the summary-output-length-control plan prevents), this trailing header is the
-# first casualty. ## Critical Context is "Skip if none" — legitimately absent for
-# the high-entropy fixture — so it is logged, not gated.
-_MANDATORY_TRAILING_SECTION = "## Next Step"
+# Load-bearing drift-anchor sections (summarization.py _SUMMARIZE_PROMPT). Both carry
+# mandatory verbatim quotes and are FRONT-LOADED in the template (## Active Task first,
+# ## Next Step second) precisely so neither output-length tail can drop them: a hard-cap
+# truncation clips the END (front survives), and a stub-collapse still writes the first
+# sections before giving up. Their presence on every summarizer pass is the
+# structure-survival invariant CS.B gates — robust to the small-model output-length
+# variance that makes a trailing-section canary flaky on carry-forward passes.
+# ## Critical Context (now the trailing section) is "Skip if none" — legitimately absent
+# for the high-entropy fixture — so it is logged, not gated.
+_LOAD_BEARING_SECTIONS = ("## Active Task", "## Next Step")
 
 # Coherence probe. A distinctive, low-entropy fact is planted in turn
 # _COHERENCE_FACT_TURN (the second turn — after the head-preserving first run, so
@@ -296,6 +307,27 @@ def _read_summarizer_passes(spans_log: Path) -> list[dict[str, Any]]:
             }
         )
     return passes
+
+
+def _carried_prior_summary_slot(passes: list[dict[str, Any]]) -> str | None:
+    """Reconstruct the prior-summary text that entered pass N's dedicated slot.
+
+    The multi-pass carry-forward path (``_partition_dropped`` → ``summarize_messages``)
+    feeds pass N a ``prior_summary`` recovered from pass N-1's summary marker. That
+    recovery is exactly ``extract_summary_body(summary_marker(_, pass[N-1].summary).content)``
+    — a byte-for-byte round trip of the production marker builder/extractor — so the
+    last such recovered recap is what landed in the most recent pass's dedicated
+    ``PRIOR SUMMARY (authoritative anchor …)`` slot. Returns None when fewer than two
+    real summarizer passes ran (no prior summary was carried).
+    """
+    if len(passes) < 2:
+        return None
+    prior = passes[-2]["summary"]
+    if not prior:
+        return None
+    marker = summary_marker(1, prior)
+    content = marker.parts[0].content
+    return extract_summary_body(content if isinstance(content, str) else "")
 
 
 def _setup_isolated_spans_log(run_dir: Path) -> Path:
@@ -527,6 +559,7 @@ async def case_cs_a_text_pressure_bounded(
     # hard bounded-loop break, and it is the signal to revert tail_fraction.
     coherence_note = ""
     coherence_missed = False
+    probe_answer = ""
     if passed and not span_violation and turns_run == _NUM_TURNS and fired:
         try:
             async with asyncio.timeout(MULTI_TURN_COMPACT_BUDGET_S):
@@ -548,6 +581,7 @@ async def case_cs_a_text_pressure_bounded(
             for k, v in probe_trace.token_usage.items():
                 token_usage[k] = token_usage.get(k, 0) + v
             answer = _final_assistant_text(probe_result.messages)
+            probe_answer = answer
             if _COHERENCE_NEEDLE.lower() in answer.lower():
                 coherence_note = (
                     f"coherence OK — agent recalled '{_COHERENCE_NEEDLE}' "
@@ -568,6 +602,39 @@ async def case_cs_a_text_pressure_bounded(
     elif passed and not span_violation and not fired:
         coherence_note = "coherence NOT exercised — no compaction fired this run"
 
+    # Multi-pass carry-forward telemetry (LOGGED, never gated — carry-forward
+    # coherence is non-deterministic). When ≥2 real summarizer passes fired, the
+    # later pass(es) fed a prior_summary recovered from the earlier pass's summary
+    # marker into the dedicated ``PRIOR SUMMARY (authoritative anchor …)`` slot
+    # ABOVE the turns block. Record the two human-inspection values plainly: the
+    # carried-forward prior-summary slot contents AND the coherence-probe answer.
+    summarizer_passes = _read_summarizer_passes(spans_log)
+    prior_summary_slot = _carried_prior_summary_slot(summarizer_passes)
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "[carry-forward] summarizer_passes=%d (>=2 means a prior summary was carried across a pass)",
+        len(summarizer_passes),
+    )
+    if prior_summary_slot is not None:
+        logger.info(
+            "[carry-forward] PRIOR SUMMARY slot contents (fed into the most recent pass's "
+            "dedicated anchor):\n%s",
+            prior_summary_slot,
+        )
+    else:
+        logger.info(
+            "[carry-forward] no prior summary carried this run (<2 real summarizer passes)"
+        )
+    logger.info("[carry-forward] coherence-probe answer (verbatim): %r", probe_answer)
+
+    carry_note = (
+        f"carry_forward summarizer_passes={len(summarizer_passes)} "
+        f"prior_summary_slot_chars={len(prior_summary_slot) if prior_summary_slot else 0} "
+        f"prior_summary_carried={prior_summary_slot is not None} | "
+        f"prior_summary_slot_head={(prior_summary_slot or '')[:200]!r} | "
+        f"probe_answer={probe_answer[:200]!r}"
+    )
+
     # Always surface the bounded-loop diagnostics (turns + fired-pass accounting
     # + gate engagement + coherence) — even on a transient-stall FAIL — so the run
     # is never read as a silent pass and the proactive-loop behavior stays visible.
@@ -579,6 +646,7 @@ async def case_cs_a_text_pressure_bounded(
         diag += f" | {gate_note}"
     if coherence_note:
         diag += f" | {coherence_note}"
+    diag += f" | {carry_note}"
     reason = diag if not reason else f"{reason} || {diag}"
 
     if not passed:
@@ -618,8 +686,10 @@ async def case_cs_b_summary_output_bounded(run: Any, spans_log: Path) -> CaseRes
       - every summarizer ``output_tokens`` ≤ its derived ``cap`` (the proportional
         ``max_tokens`` override flowed through the Ollama root-vs-max_completion_tokens
         lockstep — a broken lockstep would let output run to the flat 8192 ceiling);
-      - every summary still contains its mandatory trailing ``## Next Step`` section
-        (the cap did not cut the structure short — the Mode-B no-truncation guarantee);
+      - every summary still contains both front-loaded load-bearing drift-anchor sections
+        (``## Active Task`` and ``## Next Step``) — neither output-length tail dropped them
+        (cap-truncation clips the end; a stub still writes the front): the Mode-B
+        no-truncation guarantee, robust to small-model carry-forward length variance;
       - at least one cap-applied pass ran with ``focus`` set (focus pushes length up
         while the cap pushes down — the worst case for the no-truncation guarantee;
         on the proactive path focus is the norm, so this exercises it).
@@ -667,7 +737,11 @@ async def case_cs_b_summary_output_bounded(run: Any, spans_log: Path) -> CaseRes
         )
     else:
         over_cap = [p for p in passes if p["output_tokens"] > p["cap"]]
-        truncated = [p for p in passes if _MANDATORY_TRAILING_SECTION not in p["summary"]]
+        truncated = [
+            p
+            for p in passes
+            if any(section not in p["summary"] for section in _LOAD_BEARING_SECTIONS)
+        ]
         focus_passes = [p for p in passes if p["focus"]]
 
         if over_cap:
@@ -680,9 +754,9 @@ async def case_cs_b_summary_output_bounded(run: Any, spans_log: Path) -> CaseRes
             verdict = Verdict.FAIL
         elif truncated:
             reason = (
-                f"{len(truncated)} summarizer pass(es) missing the mandatory trailing "
-                f"'{_MANDATORY_TRAILING_SECTION}' section — the cap truncated the summary "
-                "mid-structure (Mode-B failure)"
+                f"{len(truncated)} summarizer pass(es) missing a load-bearing drift-anchor "
+                f"section ({' / '.join(_LOAD_BEARING_SECTIONS)}) — the front-loaded structure "
+                "was not preserved (Mode-B failure: stub-collapse or front-of-summary truncation)"
             )
             verdict = Verdict.FAIL
         elif not focus_passes:

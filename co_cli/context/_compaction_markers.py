@@ -22,9 +22,9 @@ STATIC_MARKER_PREFIX = "[CONTEXT COMPACTION — STATIC MARKER] "
 """Sentinel prefix for static (no-LLM) compaction markers.
 
 Used exclusively by ``static_marker`` when the summarizer is unavailable or
-falls back. Distinct from ``SUMMARY_MARKER_PREFIX`` so ``_gather_prior_summaries``
-can skip static markers without picking up their placeholder text as summary
-context."""
+falls back. Distinct from ``SUMMARY_MARKER_PREFIX`` so the dropped-region
+partition can skip static markers without picking up their placeholder text as
+summary context."""
 
 SUMMARY_MARKER_PREFIX = "[CONTEXT COMPACTION — REFERENCE ONLY] This session is being continued from a previous conversation that ran out of context."
 """Stable sentinel prefix for post-compaction LLM summary markers.
@@ -101,6 +101,29 @@ def summary_marker(
     )
 
 
+def extract_summary_body(content: str) -> str | None:
+    """Recover the embedded recap (``summary_text``) from a summary marker's content.
+
+    Inverse of ``summary_marker``'s content layout, co-located so the format and
+    its inverse stay in sync. The layout is two ``"\\n\\n"``-separated lead blocks
+    (the framing sentence and the ``The summary covers the earlier portion (N
+    messages).`` sentence), then ``summary_text`` (which may itself contain
+    ``"\\n\\n"``), then ``"\\n\\n"`` and the ``has_tail`` trailer.
+
+    Strips both lead blocks via a bounded ``split("\\n\\n", 2)`` (rejoining is
+    unnecessary — the recap is the third segment) and removes the trailer with a
+    single ``rsplit("\\n\\n", 1)``. Returns ``None`` for static markers,
+    non-markers, and any malformed content lacking the expected structure.
+    """
+    if not content.startswith(SUMMARY_MARKER_PREFIX):
+        return None
+    segments = content.split("\n\n", 2)
+    if len(segments) < 3:
+        return None
+    recap_and_trailer = segments[2]
+    return recap_and_trailer.rsplit("\n\n", 1)[0]
+
+
 def build_compaction_marker(
     dropped_count: int, summary_text: str | None, *, has_tail: bool = True
 ) -> ModelRequest:
@@ -160,7 +183,9 @@ def gather_compaction_context(ctx: RunContext[CoDeps]) -> str | None:
 
     Session todos live on ``ctx.deps.session``, not in the conversation
     history, so the summarizer cannot infer them from message content alone.
-    File paths and prior summaries are recoverable LLM-side and intentionally
-    omitted.
+    File paths are recoverable LLM-side and intentionally omitted. The prior
+    summary is handled separately — ``compact_messages`` extracts it via
+    ``_partition_dropped`` and feeds it through the dedicated ``prior_summary``
+    slot, not through this enrichment channel.
     """
     return _gather_session_todos(ctx.deps.session.session_todos)

@@ -34,14 +34,20 @@ from co_cli.context.compaction import (
     _COMPACTION_BREAKER_TRIP,
     STATIC_MARKER_PREFIX,
     SUMMARY_MARKER_PREFIX,
+    TODO_SNAPSHOT_PREFIX,
     CompactionFallbackReason,
+    _partition_dropped,
     _record_proactive_outcome,
     _resolve_proactive_focus,
     _summarization_gate_open,
+    compact_messages,
     is_compaction_marker,
     proactive_window_processor,
+    static_marker,
+    summary_marker,
 )
 from co_cli.context.history_processors import spill_largest_tool_results
+from co_cli.context.summarization import _build_summarizer_prompt, serialize_messages
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
 from co_cli.observability import tracing
@@ -617,6 +623,80 @@ def test_focus_none_when_no_todo_and_no_messages() -> None:
     result = _resolve_proactive_focus(ctx, [])
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_prior_summary_partitioned_into_dedicated_slot() -> None:
+    """Prior summary markers are lifted out of the turns block into a dedicated slot.
+
+    Deterministic, no LLM: exercises the partition (_partition_dropped), the
+    serialized turns (serialize_messages), the gated carry-forward clause
+    (_build_summarizer_prompt), and the assembled output shape (compact_messages
+    with summarize=False, the no-LLM static path).
+
+    Failure mode (pre-fix): the prior summary marker is rendered inline inside the
+    opaque TURNS TO SUMMARIZE: block, where the system prompt's ignore-commands
+    rule collides with the task prompt's integrate-this-summary rule — the
+    carry-forward silently degrades across long sessions.
+    """
+    recap = "## Active Task\nUser asked: 'wire up JWT auth'\n\n## Next Step\nimplement login view"
+    head = _req("HEAD user turn")
+    prior = summary_marker(4, recap, has_tail=True)
+    real_req = _req("real user turn in the dropped middle")
+    real_resp = _resp("real assistant turn in the dropped middle")
+    mid_static = static_marker(2)
+    tail = _req("TAIL user turn")
+    messages = [head, prior, real_req, real_resp, mid_static, tail]
+
+    dropped = messages[1:5]
+    body, prior_summary = _partition_dropped(dropped)
+
+    # (b) the recap is recovered into a dedicated prior_summary value
+    assert prior_summary == recap
+
+    # (a)(c) the body fed to the summarizer carries neither a summary nor a static marker
+    serialized = serialize_messages(body, [])
+    assert SUMMARY_MARKER_PREFIX not in serialized
+    assert STATIC_MARKER_PREFIX not in serialized
+    # the recap text reaches only the slot, never the opaque turns block
+    assert recap not in serialized
+    # real turns survive into the body
+    assert "real user turn in the dropped middle" in serialized
+    assert "real assistant turn in the dropped middle" in serialized
+
+    # (b) the slot-referencing carry-forward clause appears iff a prior summary is present
+    with_clause = _build_summarizer_prompt(None, False, 2000, None, prior_summary)
+    without_clause = _build_summarizer_prompt(None, False, 2000, None, None)
+    assert "PRIOR SUMMARY block above" in with_clause
+    assert "PRIOR SUMMARY block above" not in without_clause
+
+    # (d) assembled output preserves head / tail / todo-snapshot and carries one fresh marker
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(
+            session_todos=[{"id": "1", "content": "ship it", "status": "in_progress"}]
+        ),
+    )
+    ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
+    result, summary_text = await compact_messages(ctx, messages, (1, 5, 4), summarize=False)
+
+    assert summary_text is None
+    assert result[0] is head
+    assert result[-1] is tail
+    marker_count = sum(
+        1
+        for m in result
+        for p in getattr(m, "parts", [])
+        if is_compaction_marker(getattr(p, "content", None))
+    )
+    assert marker_count == 1
+    assert any(
+        getattr(p, "content", "").startswith(TODO_SNAPSHOT_PREFIX)
+        for m in result
+        for p in getattr(m, "parts", [])
+    )
 
 
 @pytest.fixture

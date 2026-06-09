@@ -499,20 +499,25 @@ proactive_window_processor          recover_overflow_history          /compact s
   (L3 proactive)                      (overflow PATH 2)                 (manual)
         └──────────────────────────────────┬──────────────────────────────────┘
                compact_messages(ctx, messages, bounds, focus, summarize=True)
-               │  slices messages by bounds, runs gated summarizer over dropped
-               │  middle (skipped → static marker when summarize=False)
+               │  slices messages by bounds, partitions the dropped middle into a
+               │  marker-free body + the latest prior-summary recap, runs the gated
+               │  summarizer over the body (skipped → static marker when summarize=False)
                │  returns (result, summary_text) — does NOT write runtime
-                    ├── _gated_summarize_or_none(dropped)
+                    ├── _partition_dropped(dropped) → (body, prior_summary)
+                    │        strips summary/static markers from the body; extract_summary_body
+                    │        recovers the latest summary marker's recap as prior_summary
+                    ├── _gated_summarize_or_none(body, prior_summary)
                     │        ├── _summarization_gate_open      ← False if model=None or circuit breaker tripped
                     │        │     announces "Compacting conversation…" on gate-open paths
                     │        └── summarize_dropped_messages
                     │                 ├── gather_compaction_context
                     │                 │        └── _gather_session_todos   ← active only (≤10, ≤1.5K chars)
-                    │                 │              session-orthogonal; file paths / prior summaries
-                    │                 │              are recoverable from history, so handled LLM-side
+                    │                 │              session-orthogonal; file paths recoverable
+                    │                 │              from history, so handled LLM-side
                     │                 └── summarize_messages    ← llm_call(), no tools; _SUMMARIZE_PROMPT
-                    │                       prior summaries via message_history as SUMMARY_MARKER_PREFIX
-                    │                       carry-forward rule handles PENDING→RESOLVED across cycles
+                    │                       prior_summary fed in a dedicated "PRIOR SUMMARY" slot
+                    │                       above the opaque TURNS TO SUMMARIZE: block; carry-forward
+                    │                       clause (PENDING→RESOLVED) emitted iff prior_summary present
                     │
                     └── build_compaction_marker(len(dropped), summary_text, has_tail)
                              has_tail=True  (proactive/overflow) → "Recent messages are preserved verbatim."
@@ -538,7 +543,8 @@ After the turn, `_finalize_turn()` reads `compaction_applied_this_turn` and pass
 **`summarize_messages` output structure** (`_SUMMARIZE_PROMPT`; †omitted when empty):
 
 ```
-  ## Active Task
+  ## Active Task             ← verbatim drift anchor (front-loaded)
+  ## Next Step               ← verbatim drift anchor (front-loaded)
   ## Goal
   ## Constraints & Preferences
   ## Key Decisions
@@ -550,14 +556,18 @@ After the turn, `_finalize_turn()` reads `compaction_applied_this_turn` and pass
   ## Working Set
   ## Pending User Asks       †
   ## Resolved Questions      †
-  ## Next Step               ← verbatim drift anchor
   ## Critical Context        †
 ```
+
+The two verbatim drift-anchor sections (`## Active Task`, `## Next Step`) lead the template by
+design: a hard-cap truncation clips the *end*, and a stub-collapse writes only the *front*, so
+front-loading the anchors keeps them intact under both output-length tails — the small-model
+carry-forward length variance that a trailing-section position would expose to truncation.
 
 **Summary output budget.** The summarizer output is bounded *proportionally to the region it compresses* (`resolve_summary_budget` in `summarization.py`), instead of drifting toward the flat noreason ceiling (8192 on Ollama):
 
 ```
-budget = clamp(SUMMARY_BUDGET_RATIO × estimate_message_tokens(dropped), FLOOR, CEIL)
+budget = clamp(SUMMARY_BUDGET_RATIO × estimate_message_tokens(body), FLOOR, CEIL)
 ```
 
 `budget` drives two levers:
@@ -799,7 +809,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `deps.static_floor_tokens` set at bootstrap from the measured full instruction floor (base + guidance + critique) + ALWAYS-schema floor (not a literal) | `tests/test_orchestrator_schema_budget.py` |
 | `resolve_compaction_budget` returns `deps.model_max_ctx` | `tests/test_flow_compaction_summarization.py` |
 | Summarizer from-scratch branch: returns non-empty structured text | `tests/test_flow_compaction_summarization.py` |
-| Summarizer prompt template does not embed prior summary; carry-forward rule intact | `tests/test_flow_compaction_summarization.py` |
+| Prior summary fed via a dedicated `PRIOR SUMMARY` slot (above the opaque turns block) and excluded from the serialized turns; carry-forward clause emitted iff a prior summary is present | `tests/test_flow_compaction_proactive.py` |
 | `static_marker` / `summary_marker` proactive shape (has_tail=True): "preserved verbatim" in marker text | `tests/test_flow_compaction_summarization.py` |
 | `static_marker` / `summary_marker` /compact shape (has_tail=False): "next message" in marker text, "preserved verbatim" absent | `tests/test_flow_compaction_summarization.py` |
 | Closing status callback: "Compacted." on success; "LLM compaction unavailable…" on no-model; "Summarizer failed…" on circuit-breaker-tripped | `tests/test_flow_compaction_proactive.py` |

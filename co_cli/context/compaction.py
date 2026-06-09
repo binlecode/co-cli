@@ -40,6 +40,7 @@ from co_cli.context._compaction_markers import (
     TODO_SNAPSHOT_PREFIX,
     build_compaction_marker,
     build_todo_snapshot,
+    extract_summary_body,
     gather_compaction_context,
     is_compaction_marker,
     static_marker,
@@ -161,17 +162,59 @@ def _summarization_gate_open(ctx: RunContext[CoDeps]) -> tuple[bool, bool]:
     return (False, False)
 
 
+def _marker_content(msg: ModelMessage) -> str | None:
+    """Return the marker content string if ``msg`` is a compaction marker, else None.
+
+    Markers are single-part ``ModelRequest``s whose ``UserPromptPart`` content
+    starts with a compaction sentinel; the content is needed to recover the recap.
+    """
+    if not isinstance(msg, ModelRequest):
+        return None
+    for part in msg.parts:
+        if isinstance(part, UserPromptPart) and is_compaction_marker(part.content):
+            return part.content
+    return None
+
+
+def _partition_dropped(
+    dropped: list[ModelMessage],
+) -> tuple[list[ModelMessage], str | None]:
+    """Split ``dropped`` into (marker-free body, latest prior-summary recap).
+
+    Compaction markers (summary or static) are stripped from the body so the
+    summarizer never sees a prior marker inline inside the opaque turns block.
+    The latest summary marker's recap is recovered via ``extract_summary_body``
+    and returned as the ``prior_summary`` anchor; static markers carry no recap
+    and contribute None. The todo snapshot is NOT a compaction marker, so it
+    stays in the body (regenerated fresh each pass — unchanged from today).
+    """
+    body: list[ModelMessage] = []
+    prior_summary: str | None = None
+    for msg in dropped:
+        content = _marker_content(msg)
+        if content is None:
+            body.append(msg)
+            continue
+        recap = extract_summary_body(content)
+        if recap is not None:
+            prior_summary = recap
+    return body, prior_summary
+
+
 async def summarize_dropped_messages(
     ctx: RunContext[CoDeps],
     dropped: list[ModelMessage],
     *,
     focus: str | None = None,
+    prior_summary: str | None = None,
 ) -> str:
     """Pure summarizer call over ``dropped`` — no gate, no fallback.
 
     Callers must call ``_summarization_gate_open(ctx)`` first; this function assumes
     a model is configured and the circuit breaker permits the LLM call. Raises on
-    summarizer failure (including ``asyncio.CancelledError``).
+    summarizer failure (including ``asyncio.CancelledError``). ``prior_summary``,
+    when present, is the recovered recap of a previous compaction pass; it is fed
+    to the summarizer in a dedicated slot rather than inline in the turns block.
     """
     enrichment = gather_compaction_context(ctx)
     return await summarize_messages(
@@ -180,6 +223,7 @@ async def summarize_dropped_messages(
         personality_active=bool(ctx.deps.config.personality),
         context=enrichment,
         focus=focus,
+        prior_summary=prior_summary,
     )
 
 
@@ -193,6 +237,7 @@ async def _gated_summarize_or_none(
     dropped: list[ModelMessage],
     *,
     focus: str | None,
+    prior_summary: str | None = None,
 ) -> str | None:
     """Run the summarizer if the gate is open, else return None.
 
@@ -215,7 +260,9 @@ async def _gated_summarize_or_none(
         cb("Compacting conversation...")
 
     try:
-        summary_text = await summarize_dropped_messages(ctx, dropped, focus=focus)
+        summary_text = await summarize_dropped_messages(
+            ctx, dropped, focus=focus, prior_summary=prior_summary
+        )
     except Exception:
         log.warning(
             "Compaction summarization failed — falling back to static marker", exc_info=True
@@ -246,9 +293,12 @@ async def compact_messages(
     """Compact ``messages[head_end:tail_start]`` into a marker; assemble result.
 
     Slices by ``bounds`` and assembles ``head | marker | [todo_snapshot] |
-    tail``. When ``summarize`` is True (default),
-    runs the gated summarizer over the dropped middle so the marker carries an
-    LLM recap; when ``summarize`` is False, the summarizer is skipped entirely
+    tail``. The dropped middle is partitioned (``_partition_dropped``) into a
+    marker-free body and the latest prior-summary recap. When ``summarize`` is
+    True (default), runs the gated summarizer over that body — never over prior
+    compaction markers — with the recovered recap fed through a dedicated
+    ``prior_summary`` slot; when ``summarize`` is False, the summarizer is skipped
+    entirely
     and ``summary_text`` stays None, driving ``build_compaction_marker`` down
     its static-marker branch (no LLM call). Returns ``(result, summary_text)``;
     ``summary_text`` is None when the summarizer fell back to a static marker
@@ -262,7 +312,12 @@ async def compact_messages(
     head = messages[:head_end]
     dropped = messages[head_end:tail_start]
     tail = messages[tail_start:]
-    summary_text = await _gated_summarize_or_none(ctx, dropped, focus=focus) if summarize else None
+    body, prior_summary = _partition_dropped(dropped)
+    summary_text = (
+        await _gated_summarize_or_none(ctx, body, focus=focus, prior_summary=prior_summary)
+        if summarize
+        else None
+    )
     has_tail = len(tail) > 0
     marker = build_compaction_marker(len(dropped), summary_text, has_tail=has_tail)
     todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
