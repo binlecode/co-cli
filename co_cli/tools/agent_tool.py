@@ -26,7 +26,6 @@ def agent_tool(
     *,
     visibility: VisibilityPolicyEnum,
     is_approval_required: bool = False,
-    is_read_only: bool = False,
     is_concurrent_safe: bool = True,
     integration: str | None = None,
     retries: int | None = None,
@@ -44,15 +43,6 @@ def agent_tool(
     functools.wraps preserves __signature__, __doc__, and type hints.
     Pass register=False to attach metadata without adding to TOOL_REGISTRY.
     """
-    # is_read_only implies is_concurrent_safe: read-only tools have no shared
-    # mutable state to race on. Coerce rather than error so the author does
-    # not need to repeat is_concurrent_safe=True alongside is_read_only=True.
-    if is_read_only:
-        is_concurrent_safe = True
-    if is_read_only and is_approval_required:
-        raise ValueError(
-            "@agent_tool: is_read_only=True is incompatible with is_approval_required=True"
-        )
 
     def decorator(fn: F) -> F:
         name = fn.__name__
@@ -63,7 +53,6 @@ def agent_tool(
             source=ToolSourceEnum.NATIVE,
             visibility=visibility,
             is_approval_required=is_approval_required,
-            is_read_only=is_read_only,
             is_concurrent_safe=is_concurrent_safe,
             integration=integration,
             retries=retries,

@@ -98,7 +98,7 @@ async def task_start(
     return tool_output(display, ctx=ctx, task_id=task_id, status="running")
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_read_only=True, is_concurrent_safe=True)
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
 async def task_status(
     ctx: RunContext[CoDeps],
     task_id: str,
@@ -209,7 +209,7 @@ async def task_cancel(
     return tool_output(f"Task {task_id} cancelled.", ctx=ctx, task_id=task_id, status="cancelled")
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_read_only=True, is_concurrent_safe=True)
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
 async def task_list(
     ctx: RunContext[CoDeps],
     status_filter: TaskStatus | None = None,

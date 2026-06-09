@@ -32,7 +32,6 @@ from co_cli.tools.tool_io import tool_error, tool_output
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
-    is_read_only=True,
     is_concurrent_safe=True,
     spill_threshold_chars=math.inf,
 )

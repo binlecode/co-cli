@@ -78,7 +78,7 @@ Hermes surface is unchanged vs the prior refresh (last 30 commits are desktop/do
 
 co-cli uses pydantic-ai's `FunctionToolset` with an `@agent_tool(...)` decorator
 (`tools/agent_tool.py:25–38`) that attaches `ToolInfo` (visibility, approval,
-`is_read_only`, `is_concurrent_safe`, `integration`, `requires_config`, `retries`,
+`is_concurrent_safe`, `integration`, `requires_config`, `retries`,
 `spill_threshold_chars`, optional `check_fn`, optional `approval_subject_fn`) at
 definition site. Each decorated function self-registers into the module-level
 `TOOL_REGISTRY` (list) and `TOOL_REGISTRY_BY_NAME` (dict) at import time
@@ -192,7 +192,7 @@ Columns: **co-cli tool** · **hermes equivalent** · **Parity** (✓ = same sema
 | co-cli tool | hermes equivalent | Parity | Gap & porting notes |
 |---|---|---|---|
 | `web_search(query, max_results=5, domains=None)` (`web/search.py`) | `web_search(query, limit=5)` (`web_tools.py`) | ✓ | co-cli Brave-backed with an SSRF-hardened `web/_ssrf.py` + domain filter; hermes Parallel/Firecrawl-backed with generic `url_safety.py`. ALWAYS. Domains filter is a co-cli policy knob; no port. |
-| `web_fetch(url, format="markdown", timeout=15)` (`web/fetch.py`) | `web_extract(urls: list[str], format, use_llm_processing, min_length, max_length)` | ~ | co-cli accepts a single URL with `format` (markdown/html/text) + per-call `timeout`; **v0.8.280 added trafilatura main-article extraction** (fail-open to full-page `html2text`). Hermes accepts up to 5 URLs and offers optional LLM summarization of the result. ALWAYS. **Multi-URL port rejected as parity-cosmetic:** `web_fetch` is `is_read_only=True` + `is_concurrent_safe=True`, so pydantic-ai's `sequential=False` already dispatches parallel `web_fetch(url=…)` calls concurrently with per-call error isolation. |
+| `web_fetch(url, format="markdown", timeout=15)` (`web/fetch.py`) | `web_extract(urls: list[str], format, use_llm_processing, min_length, max_length)` | ~ | co-cli accepts a single URL with `format` (markdown/html/text) + per-call `timeout`; **v0.8.280 added trafilatura main-article extraction** (fail-open to full-page `html2text`). Hermes accepts up to 5 URLs and offers optional LLM summarization of the result. ALWAYS. **Multi-URL port rejected as parity-cosmetic:** `web_fetch` is `is_concurrent_safe=True`, so pydantic-ai's `sequential=False` already dispatches parallel `web_fetch(url=…)` calls concurrently with per-call error isolation. |
 
 ### 1.5 Execution, Jobs & Delegation
 
@@ -392,7 +392,7 @@ Status legend: ✅ done · 🟢 in flight (active exec-plan) · 🟠 open · ⚪
 | **Medium** | ✅ | Add model-callable `skill_view` / skill-write tools (§2.1) | Skill discovery + authoring required slash commands | Done — `skill_view` (ALWAYS) + `skill_create`/`edit`/`patch`/`delete` (DEFERRED) |
 | **Medium** | ✅ | Concurrent MCP `list_tools()` discovery (§3.3) | Cumulative startup delay = N × timeout | Done — `_discover_one` + `asyncio.gather` (`mcp.py:180`) |
 | **Medium** | 🟢 | `shell_exec` `pty` + interactive `task_write`/`task_close` (§1.5) | CLIs that gate on isatty; no stdin to running tasks | `2026-05-28-200025-toolgap-interactive-terminal.md` (active, not shipped — no `pty` arg, no `task_write`/`task_close` in source) |
-| **Medium** | ⚪ | `web_fetch` `urls: list[str]` parallel fetch (§1.4) | Sequential latency | Rejected as parity-cosmetic — `is_read_only` + `is_concurrent_safe` already parallelize per-call |
+| **Medium** | ⚪ | `web_fetch` `urls: list[str]` parallel fetch (§1.4) | Sequential latency | Rejected as parity-cosmetic — `is_concurrent_safe` already parallelizes per-call |
 | **Medium** | 🟠 | `ModelRetry` / `tool_error` unenforced (§4.2) | Retry-budget waste | Medium — ruff rule or base-class signal |
 | **Medium** | ✅ | `NATIVE_TOOLS` manual tuple (§3.2) | Tool silently omitted | Done — `TOOL_REGISTRY` + `TOOL_REGISTRY_BY_NAME` self-registration |
 | **Medium** | ✅ | Capability-API SDK coupling (methodology) | pydantic-ai capability SDK lock-in | Done — dropped at v0.8.312; explicit `tool_view` + `_tool_visibility_filter` + `_CallSeamToolset` replace it |

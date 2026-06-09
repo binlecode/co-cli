@@ -136,7 +136,6 @@ def _build_fetch_headers(hostname: str | None) -> dict[str, str]:
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
-    is_read_only=True,
     is_concurrent_safe=True,
     retries=3,
 )

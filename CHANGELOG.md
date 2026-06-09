@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.330]
+
+### `ToolInfo` cleanup — remove write-only `is_read_only`, make `is_concurrent_safe` a required field
+
+- **Removed `is_read_only`**: the field was set on ~20 native tools but never read at runtime — its entire effect (coercing `is_concurrent_safe=True`, blocking `is_approval_required=True`) was consumed at decoration time before the value was stored, leaving an inert "semantic tag." Dropped the `ToolInfo` field, the `@agent_tool(...)` decorator kwarg, the coercion, the import-time mutual-exclusion check, and all 20 call sites. Every affected tool already set `is_concurrent_safe=True` explicitly, so removing the coercion is a no-op.
+- **`is_concurrent_safe` now required (no dataclass default)**: the decorator defaulted it to `True` while the `ToolInfo` dataclass defaulted it to `False` — a silent disagreement that any non-decorator construction (the MCP path, test fixtures) inherited wrongly. Removed the dataclass default and moved the field into the required block; the decorator keeps `True` as the sole native-author convenience, and the MCP synthesis path now states `is_concurrent_safe=False` explicitly (sequential until proven concurrent-safe).
+- **Specs + reference synced**: `tools.md` `ToolInfo` field table (dropped the `is_read_only` row, corrected the `is_concurrent_safe` default cell and the `is_approval_required` cross-reference), `RESEARCH-tools-gaps-co-vs-hermes.md`. No behavior change; full suite green (648 passed).
+
 ## [0.8.328]
 
 ### `ToolInfo` field naming consistency — `approval` → `is_approval_required`, drop vestigial `requires_config`

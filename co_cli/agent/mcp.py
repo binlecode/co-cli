@@ -153,6 +153,8 @@ async def _discover_one(
                             is_approval_required=entry.is_approval_required,
                             source=ToolSourceEnum.MCP,
                             visibility=VisibilityPolicyEnum.DEFERRED,
+                            # third-party MCP tools run sequentially until proven concurrent-safe
+                            is_concurrent_safe=False,
                             integration=prefix or None,
                         ),
                     )

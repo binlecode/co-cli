@@ -105,10 +105,9 @@ class ToolInfo:
     is_approval_required: bool
     source: ToolSourceEnum
     visibility: VisibilityPolicyEnum
+    is_concurrent_safe: bool
     integration: str | None = None
     spill_threshold_chars: int | float | None = None
-    is_read_only: bool = False
-    is_concurrent_safe: bool = False
     retries: int | None = None
     check_fn: Callable[[CoDeps], bool] | None = None
     approval_subject_fn: Callable[[dict[str, Any]], ApprovalSubject] | None = None

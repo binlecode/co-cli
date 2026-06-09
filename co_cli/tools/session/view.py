@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.DEFERRED,
-    is_read_only=True,
     is_concurrent_safe=True,
     spill_threshold_chars=math.inf,
 )

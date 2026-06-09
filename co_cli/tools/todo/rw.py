@@ -285,7 +285,7 @@ def todo_write(
     )
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
 def todo_read(
     ctx: RunContext[CoDeps],
 ) -> ToolReturn:

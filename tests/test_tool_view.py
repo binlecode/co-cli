@@ -34,6 +34,7 @@ def _deferred(name: str, description: str) -> ToolInfo:
         is_approval_required=False,
         source=ToolSourceEnum.NATIVE,
         visibility=VisibilityPolicyEnum.DEFERRED,
+        is_concurrent_safe=False,
     )
 
 

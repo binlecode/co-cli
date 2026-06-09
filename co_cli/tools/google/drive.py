@@ -60,7 +60,6 @@ def _format_drive_results(
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.DEFERRED,
-    is_read_only=True,
     is_concurrent_safe=True,
     integration="google_drive",
     retries=3,
@@ -129,7 +128,6 @@ def google_drive_search(ctx: RunContext[CoDeps], query: str, page: int = 1) -> T
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.DEFERRED,
-    is_read_only=True,
     is_concurrent_safe=True,
     integration="google_drive",
     retries=3,

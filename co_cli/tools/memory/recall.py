@@ -167,7 +167,6 @@ def _format_memory_results(query: str, results: list[dict]) -> str:
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
-    is_read_only=True,
     is_concurrent_safe=True,
 )
 async def memory_search(

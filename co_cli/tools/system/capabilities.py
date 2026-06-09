@@ -135,7 +135,7 @@ def _build_mcp_lines(
     return lines
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
 async def capabilities_check(ctx: RunContext[CoDeps]) -> ToolReturn:
     """Report the current runtime capability surface: available tools, approval-gated actions, degraded integrations, active fallbacks.
 

@@ -273,7 +273,6 @@ def _get_api_key(ctx: RunContext[CoDeps]) -> str:
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
-    is_read_only=True,
     is_concurrent_safe=True,
     retries=3,
 )

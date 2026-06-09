@@ -390,7 +390,6 @@ async def _grep_roots(
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
-    is_read_only=True,
     is_concurrent_safe=True,
     spill_threshold_chars=math.inf,
 )
@@ -475,7 +474,7 @@ async def file_read(
     )
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_read_only=True, is_concurrent_safe=True)
+@agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
 async def file_search(
     ctx: RunContext[CoDeps],
     path: str = "**/*",

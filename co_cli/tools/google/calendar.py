@@ -80,7 +80,6 @@ def _fetch_events(service, **kwargs) -> list[dict]:
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.DEFERRED,
-    is_read_only=True,
     is_concurrent_safe=True,
     integration="google_calendar",
     retries=3,
@@ -156,7 +155,6 @@ def google_calendar_list(
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.DEFERRED,
-    is_read_only=True,
     is_concurrent_safe=True,
     integration="google_calendar",
     retries=3,

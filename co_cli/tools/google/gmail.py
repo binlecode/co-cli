@@ -48,7 +48,6 @@ def _format_messages(service, message_ids: list[dict]) -> str:
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.DEFERRED,
-    is_read_only=True,
     is_concurrent_safe=True,
     integration="google_gmail",
     retries=3,
@@ -88,7 +87,6 @@ def google_gmail_list(ctx: RunContext[CoDeps], max_results: int = 5) -> ToolRetu
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.DEFERRED,
-    is_read_only=True,
     is_concurrent_safe=True,
     integration="google_gmail",
     retries=3,

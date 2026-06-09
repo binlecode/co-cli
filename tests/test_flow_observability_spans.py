@@ -102,6 +102,7 @@ async def test_turn_emits_agent_model_tool_span_tree(tmp_path: Path) -> None:
         is_approval_required=False,
         source=ToolSourceEnum.NATIVE,
         visibility=VisibilityPolicyEnum.ALWAYS,
+        is_concurrent_safe=False,
     )
     deps = CoDeps(
         shell=ShellBackend(),

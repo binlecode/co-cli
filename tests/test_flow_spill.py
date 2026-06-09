@@ -94,6 +94,7 @@ def _make_routing_deps(tool_results_dir: Path) -> CoDeps:
         is_approval_required=False,
         source=ToolSourceEnum.MCP,
         visibility=VisibilityPolicyEnum.DEFERRED,
+        is_concurrent_safe=False,
     )
     native_info = ToolInfo(
         name="native_test_tool",
@@ -101,6 +102,7 @@ def _make_routing_deps(tool_results_dir: Path) -> CoDeps:
         is_approval_required=False,
         source=ToolSourceEnum.NATIVE,
         visibility=VisibilityPolicyEnum.ALWAYS,
+        is_concurrent_safe=False,
     )
     return CoDeps(
         shell=ShellBackend(),
