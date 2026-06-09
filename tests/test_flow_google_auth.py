@@ -1,9 +1,8 @@
 """Config-gating and not-configured-return behavior for the Google tool surface.
 
-Traces the three gates that stand between config and a Google tool's return:
+Traces the gates that stand between config and a Google tool's return:
 per-turn visibility (`_google_available`) and the shared not-configured return path
-in `_get_google_service`. The registration gate (`requires_config` drops the tools
-when the config field is absent) is covered in test_agent_build_task_agent.py.
+in `_get_google_service`.
 
 Regression guard: `_get_google_service` must route an unresolved credential to a
 terminal `tool_error` ToolReturn — not raise — so the model sees an actionable
@@ -26,7 +25,7 @@ from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import handle_google_api_error
 
 _SETTINGS = make_settings(mcp_servers={}, google_credentials_path="/nonexistent/creds.json")
-_, _INDEX = build_native_toolset(_SETTINGS)
+_, _INDEX = build_native_toolset()
 
 
 def _deps() -> CoDeps:

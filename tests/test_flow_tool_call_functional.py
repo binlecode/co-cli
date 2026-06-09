@@ -20,7 +20,7 @@ from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
-_TOOLSET, _TOOL_INDEX = build_native_toolset(_CONFIG_NO_MCP)
+_TOOLSET, _TOOL_INDEX = build_native_toolset()
 # Tool-routing tests use the production reasoning settings: Qwen3-family models on
 # Ollama need the reasoning pass to emit a structured tool_calls array reliably.
 # Qwen3-family models on Ollama require reasoning mode to emit structured tool_calls reliably;

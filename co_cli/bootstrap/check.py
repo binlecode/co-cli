@@ -372,7 +372,7 @@ def check_runtime(
         "session_id": deps.session.session_path.stem[-8:],
         "active_skill": deps.runtime.active_skill_name,
         "tool_names": list(tool_catalog.keys()),
-        "tool_approvals": {name: tc.approval for name, tc in tool_catalog.items()},
+        "tool_approvals": {name: tc.is_approval_required for name, tc in tool_catalog.items()},
         "tool_count": len(tool_catalog),
         "skill_count": len(get_skill_catalog(deps.skill_catalog)),
         "mcp_mode": "mcp" if len(deps.config.mcp_servers) > 0 else "native-only",

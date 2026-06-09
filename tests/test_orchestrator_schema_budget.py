@@ -49,7 +49,7 @@ async def test_always_bucket_within_budget() -> None:
     # environments and avoids the Context7 stdio teardown race.
     deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
 
-    native_toolset, _ = build_native_toolset(deps.config)
+    native_toolset, _ = build_native_toolset()
     budget = await measure_always_schema_budget(deps, native_toolset)
 
     assert not budget.empty_descriptions, (
@@ -83,7 +83,7 @@ async def test_static_floor_tokens_measured_at_bootstrap() -> None:
     """
     deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
 
-    native_toolset, _ = build_native_toolset(deps.config)
+    native_toolset, _ = build_native_toolset()
     budget = await measure_always_schema_budget(deps, native_toolset)
     instruction_tokens = estimate_text_tokens(build_base_instructions(deps.config))
     instruction_tokens += estimate_text_tokens(build_toolset_guidance(deps.tool_catalog))

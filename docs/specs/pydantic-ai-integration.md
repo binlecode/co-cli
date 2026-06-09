@@ -95,12 +95,11 @@ build_model(llm) -> LlmModel:
 Native tools self-register into `TOOL_REGISTRY` via `@agent_tool` import side-effects (`agent/toolset.py` imports every tool module for this). Composition is a three-step assembly, wrapped outermost by the call-seam:
 
 ```
-build_native_toolset(config) -> (FunctionToolset, tool_catalog):
+build_native_toolset() -> (FunctionToolset, tool_catalog):
     for fn in TOOL_REGISTRY:
         info = fn.<ToolInfo>
-        skip if not _config_requirement_met(info, config)
         toolset.add_function(fn,
-                             requires_approval = info.approval,
+                             requires_approval = info.is_approval_required,
                              sequential        = not info.is_concurrent_safe,
                              retries            = info.retries (if set),
                              prepare            = _make_prepare(info.check_fn) (if set))
@@ -249,8 +248,8 @@ _build_mcp_toolsets(config):
     for each configured server:
         raw = MCPServerSSE | MCPServerStreamableHTTP | MCPServerStdio   # transport by config shape
         sanitizing = _SanitizingMCPServer(raw)                          # sanitize inputSchema on list_tools()
-        inner = sanitizing.approval_required() if approval else sanitizing
-        record MCPToolsetEntry(toolset=inner, server=sanitizing, approval, prefix, timeout)
+        inner = sanitizing.approval_required() if is_approval_required else sanitizing
+        record MCPToolsetEntry(toolset=inner, server=sanitizing, is_approval_required, prefix, timeout)
 
 build_mcp_entries: wrap each entry.toolset in _SequentialMCPToolset(toolset, tool_catalog)   # patch sequential
 discover_mcp_tools: connect all servers concurrently; list_tools(); register names as DEFERRED ToolInfo
@@ -305,7 +304,7 @@ Orchestrator `usage_limits` is **not** config-driven — it is fixed `request_li
 | `measure_always_schema_budget` | `(CoDeps, FunctionToolset[CoDeps]) -> AlwaysSchemaBudget` | ALWAYS-schema char bucket from the native toolset |
 | `SurrogateRecoveryModel` | `WrapperModel` subclass; `(wrapped, *, repair_tool_args=False)` | Surrogate retry + chat span + gated JSON repair |
 | `SessionAgent` / `SessionRunResult` | `Agent[CoDeps, str \| DeferredToolRequests]` / `AgentRunResult[...]` | Orchestrator type aliases |
-| `ToolInfo` | frozen dataclass | Canonical per-tool metadata (approval, visibility, source, retries, check_fn, …) |
+| `ToolInfo` | frozen dataclass | Canonical per-tool metadata (is_approval_required, visibility, source, retries, check_fn, …) |
 
 Package-private (not callable cross-package, listed for the map): `_CallSeamToolset`, `_SequentialMCPToolset`, `_SanitizingMCPServer`, `_RepairingStreamedResponse`, `_tool_visibility_filter`, `_build_native_toolset`, `_build_mcp_toolsets`.
 

@@ -25,11 +25,10 @@ TOOL_REGISTRY_BY_NAME: dict[str, Callable] = {}
 def agent_tool(
     *,
     visibility: VisibilityPolicyEnum,
-    approval: bool = False,
+    is_approval_required: bool = False,
     is_read_only: bool = False,
     is_concurrent_safe: bool = True,
     integration: str | None = None,
-    requires_config: str | None = None,
     retries: int | None = None,
     spill_threshold_chars: int | float | None = None,
     check_fn: Callable | None = None,
@@ -50,8 +49,10 @@ def agent_tool(
     # not need to repeat is_concurrent_safe=True alongside is_read_only=True.
     if is_read_only:
         is_concurrent_safe = True
-    if is_read_only and approval:
-        raise ValueError("@agent_tool: is_read_only=True is incompatible with approval=True")
+    if is_read_only and is_approval_required:
+        raise ValueError(
+            "@agent_tool: is_read_only=True is incompatible with is_approval_required=True"
+        )
 
     def decorator(fn: F) -> F:
         name = fn.__name__
@@ -61,11 +62,10 @@ def agent_tool(
             description=description,
             source=ToolSourceEnum.NATIVE,
             visibility=visibility,
-            approval=approval,
+            is_approval_required=is_approval_required,
             is_read_only=is_read_only,
             is_concurrent_safe=is_concurrent_safe,
             integration=integration,
-            requires_config=requires_config,
             retries=retries,
             spill_threshold_chars=spill_threshold_chars,
             check_fn=check_fn,

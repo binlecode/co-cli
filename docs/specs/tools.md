@@ -10,7 +10,7 @@ graph LR
         A["@agent_tool\n(module import)"] -->|"self-registers"| B["TOOL_REGISTRY"]
     end
     subgraph Assembly
-        B --> C1["build_native_toolset(config)\n→ (native_toolset, tool_catalog)"]
+        B --> C1["build_native_toolset()\n→ (native_toolset, tool_catalog)"]
         C1 --> C2["build_mcp_entries(config, tool_catalog)"]
         C2 --> C3["MCP connect + discover\n(per-entry timeout / isolation)"]
         C3 --> C4["assemble_routing_toolset\nCombinedToolset.filtered"]
@@ -64,23 +64,48 @@ A tool has **two parallel representations joined by name**: co's *policy* metada
 | Entity | Type · location | Keyed by | Holds | Read by |
 |--------|-----------------|----------|-------|---------|
 | `@agent_tool` | decorator · `tools/agent_tool.py` | — | builds the `ToolInfo`, attaches it to the fn as `__co_tool_info__`, registers the fn | import time |
-| `ToolInfo` | frozen dataclass · `deps.py` | — | per-tool **policy**: `name`, `description`, `source`, `visibility`, `approval`, `is_concurrent_safe`, `retries`, `spill_threshold_chars`, `check_fn`, … | every policy seam |
+| `ToolInfo` | frozen dataclass · `deps.py` | — | per-tool **policy**: all fields below | every policy seam |
 | `TOOL_REGISTRY` | `list[Callable]` · `agent_tool.py` | insertion order | every decorated native fn | `_build_native_toolset` (iterates) |
 | `TOOL_REGISTRY_BY_NAME` | `dict[str, Callable]` · `agent_tool.py` | name | the same fns | `build_task_agent` (resolves `tool_names`) |
 | `tool_catalog` | `dict[str, ToolInfo]` · `deps.tool_catalog` | name | native ToolInfos **+** MCP ToolInfos (added at discovery) | `_tool_visibility_filter`, `_CallSeamToolset`, `_SequentialMCPToolset`, approvals |
-| `FunctionToolset` / `ToolDefinition` | pydantic-ai | name | the callable the SDK runs · the schema the model sees | the agent run · the model |
+| `FunctionToolset` | pydantic-ai | name | the callable the SDK runs | the agent run |
+| `ToolDefinition` | pydantic-ai | name | the schema the model sees | the model |
 
-`_build_native_toolset` is the **bridge** between the two: iterating `TOOL_REGISTRY`, it reads each fn's `ToolInfo` (off `__co_tool_info__`), maps policy fields onto `add_function` kwargs (`approval → requires_approval`, `is_concurrent_safe → sequential`, `retries`, `check_fn → prepare`), and records that same `ToolInfo` into `tool_catalog`. At runtime every seam recovers policy by name — `ctx.deps.tool_catalog.get(name)` — for the tool the SDK is about to run. MCP tools carry no `@agent_tool` decorator: `discover_mcp_tools` synthesizes a `ToolInfo` per tool (`source=MCP`, `visibility=DEFERRED`) and merges it into the same `tool_catalog`, so native and MCP tools are policy-homogeneous everywhere downstream.
+**`ToolInfo` fields** (`co_cli/deps.py` — frozen dataclass, set once at registration):
+
+| Field | Type | Default | Runtime seam | Logic |
+|-------|------|---------|--------------|-------|
+| `name` | `str` | required | span attribute `co.tool.name`; `tool_catalog` key; deferred-unlock key in `unlocked_tools` | Taken from `fn.__name__` by `@agent_tool`; must be unique across the registry |
+| `description` | `str` | required | stub one-liner (DEFERRED tools); `co.tool.name` span | First line of `fn.__doc__`, stripped. Truncated to `_ONE_LINER_MAX_CHARS` (100 chars) in the deferred stub; full description goes into the SDK `ToolDefinition` |
+| `source` | `ToolSourceEnum` | required | span attribute `co.tool.source` | `NATIVE` for `@agent_tool`-decorated functions; `MCP` for tools synthesized by `discover_mcp_tools`. Controls the `co.tool.source` span attribute and is used to identify MCP results for the spill check in `_CallSeamToolset` |
+| `visibility` | `VisibilityPolicyEnum` | required | `_tool_visibility_filter` gate every turn | `ALWAYS` — full schema on every request (static prefix); `DEFERRED` — schema withheld, one-liner stub emitted per turn, full schema loaded on demand via `tool_view` after `unlocked_tools` admits the name. The filter hides a DEFERRED tool until `name ∈ runtime.unlocked_tools` |
+| `is_approval_required` | `bool` | `False` | `_build_native_toolset` → `add_function(requires_approval=…)`; span attribute `co.tool.requires_approval` | When `True`, the SDK suspends the call into the approval loop (`DeferredToolRequest`). Mutually exclusive with `is_read_only=True` (enforced at decoration time) |
+| `integration` | `str \| None` | `None` | `deferred_prompt.py` grouping; MCP `tool_catalog` | Governs stub grouping in the deferred-tool awareness prompt. Native tools derive their family from the first `_`-delimited segment of the tool name (e.g. `google_*` → `google`). MCP tools receive the user-configured server prefix as `integration`. `None` (no prefix) → the tool falls in the general (un-headered) family, rendered first |
+| `is_read_only` | `bool` | `False` | coerces `is_concurrent_safe=True`; blocks `is_approval_required=True` | Semantic tag only — no enforcement beyond coercing concurrent-safety. Incompatible with `is_approval_required=True` (invariant checked at import time) |
+| `is_concurrent_safe` | `bool` | `True` (native) / `False` (MCP) | `_build_native_toolset` → `add_function(sequential=not …)` | `False` forces sequential ordering in a multi-tool batch. `file_write` and `file_patch` are the only ALWAYS native tools that opt out. MCP tools default to `False` (no declared policy); `_SequentialMCPToolset` stamps `sequential` from this field |
+| `retries` | `int \| None` | `None` | `_build_native_toolset` → `add_function(retries=…)` when set | Per-tool retry budget overriding the session default (`tool_retries` config, default 3). `None` means inherit the agent-level default |
+| `check_fn` | `Callable[[CoDeps], bool] \| None` | `None` | `_build_native_toolset` → `add_function(prepare=_make_prepare(check_fn))` | Per-turn prepare hook: the tool is hidden on any turn where `check_fn(deps)` returns `False`. Used by Google tools (`_google_available`) to gate visibility on credential presence. Runs inside the pydantic-ai prepare callback before each model request |
+| `spill_threshold_chars` | `int \| float \| None` | `None` | `_CallSeamToolset.call_tool` → `spill_with_span` | Per-tool override for the char threshold above which a result is spilled to disk. `None` → falls back to the session-wide `SPILL_THRESHOLD_CHARS` constant. `float('inf')` disables spill for that tool |
+| `approval_subject_fn` | `Callable[[dict], ApprovalSubject] \| None` | `None` | `resolve_approval_subject` (highest priority) | Custom resolver for the approval-subject kind and value shown in the approval prompt. When set, bypasses the default kind-detection logic in `approvals.py` (`shell` by path, `domain` for web, `tool` fallback). Used when a tool's meaningful scoping key differs from the defaults (e.g. a tool whose approval should scope to a custom resource key) |
+
+`_build_native_toolset` is the **bridge** between the two: iterating `TOOL_REGISTRY`, it reads each fn's `ToolInfo` (off `__co_tool_info__`), maps policy fields onto `add_function` kwargs (`is_approval_required → requires_approval`, `is_concurrent_safe → sequential`, `retries`, `check_fn → prepare`), and records that same `ToolInfo` into `tool_catalog`. At runtime every seam recovers policy by name — `ctx.deps.tool_catalog.get(name)` — for the tool the SDK is about to run. MCP tools carry no `@agent_tool` decorator: `discover_mcp_tools` synthesizes a `ToolInfo` per tool (`source=MCP`, `visibility=DEFERRED`) and merges it into the same `tool_catalog`, so native and MCP tools are policy-homogeneous everywhere downstream.
+
+**How co uses the two SDK primitives.** co never subclasses either — it builds one and influences the other through `prepare`-style hooks; they differ in granularity (whole container vs per-tool schema) and consumer (the agent run vs the model):
+
+- **`FunctionToolset` — the container the SDK *runs*.** A `name → (callable + schema)` map for one agent. co builds it in `_build_native_toolset` (`add_function` per registered tool — the policy→kwargs bridge above) and again, thinner, in `build_task_agent` (subagent `tool_names` subset, all `requires_approval=False`). It is the innermost layer of the composition stack, and `measure_always_schema_budget` (`bootstrap/schema_budget.py`) reads its `.tools` dict directly to size the ALWAYS prefill floor.
+- **`ToolDefinition` — the per-tool schema the *model* sees.** `name` + `description` + `parameters_json_schema` + flags (`sequential`), which the SDK *derives* from the function signature/docstring — co never constructs one. co touches it only via hooks that receive a `tool_def` and return it (possibly modified) or `None`: `_tool_visibility_filter` (the `.filtered()` per-turn show/hide gate), `_make_prepare(check_fn)` (per-turn availability — `None` hides, e.g. Google credential gating), and `_SequentialMCPToolset.get_tools` (`replace(tool_def, sequential=…)` copying co's concurrency policy onto MCP tools). The floor measurement sums each ALWAYS tool's `ToolDefinition` name + description + minified-params-JSON.
+
+`ToolInfo` policy thus flows into **both**: into the `FunctionToolset` at `add_function` time, and into each `ToolDefinition` at `prepare`/filter time.
 
 ### Tool lifecycle — register → assemble → discover → load → call
 
 co has **no keyword "tool search" stage**: tools are never registered with `defer_loading`, so the SDK's `search_tools` loader never engages — a deferred tool loads by *exact name* via `tool_view`, not by keyword.
 
-1. **Register (import time).** `@agent_tool(visibility=…)` (`co_cli/tools/agent_tool.py`) attaches a frozen `ToolInfo` (`co_cli/deps.py` — `visibility`, `approval`, `source`, `check_fn`, …) to the function and appends it to the flat `TOOL_REGISTRY`. ALWAYS and DEFERRED register identically — visibility is one metadata field, not a separate code path.
-2. **Assemble (bootstrap).** `_build_native_toolset(config)` (`co_cli/agent/toolset.py`) adds every registered tool to one `FunctionToolset` and returns it with `tool_catalog` (`name → ToolInfo`). MCP tools join via `build_mcp_entries` / `assemble_routing_toolset` (`co_cli/agent/core.py`), wrapping native + MCP in `CombinedToolset([...]).filtered(_tool_visibility_filter)`. Visibility lives only in `tool_catalog`; the registry is visibility-agnostic.
+1. **Register (import time).** `@agent_tool(visibility=…)` (`co_cli/tools/agent_tool.py`) attaches a frozen `ToolInfo` (`co_cli/deps.py` — `visibility`, `is_approval_required`, `source`, `check_fn`, …) to the function and appends it to the flat `TOOL_REGISTRY`. ALWAYS and DEFERRED register identically — visibility is one metadata field, not a separate code path.
+2. **Assemble (bootstrap).** `_build_native_toolset()` (`co_cli/agent/toolset.py`) adds every registered tool to one `FunctionToolset` and returns it with `tool_catalog` (`name → ToolInfo`). MCP tools join via `build_mcp_entries` / `assemble_routing_toolset` (`co_cli/agent/core.py`), wrapping native + MCP in `CombinedToolset([...]).filtered(_tool_visibility_filter)`. Visibility lives only in `tool_catalog`; the registry is visibility-agnostic.
 3. **Discover (every turn).** An ALWAYS tool's full schema rides the cached static prefix; a DEFERRED tool's schema is withheld and replaced by its per-turn stub (above).
 4. **Load (DEFERRED only).** `_tool_visibility_filter` (`co_cli/agent/toolset.py`) hides a DEFERRED tool until its name is in `deps.runtime.unlocked_tools`. The model copies the exact name from the stub into `tool_view` (itself ALWAYS — `co_cli/tools/system/tool_view.py`): a normalized-exact match (case / `-` / whitespace folded) unlocks it; a near-miss returns `difflib` "did you mean" candidates and unlocks nothing; no match errors "does not exist — do not retry." The full schema appears on the next model step. Because `unlocked_tools` is runtime state, not message history, unlocks survive compaction. ALWAYS tools skip this stage.
-5. **Call.** `_CallSeamToolset.call_tool` (`co_cli/agent/toolset.py`) is the single per-call seam: it stamps the `tool {name}` span (`co.tool.*` attributes), enforces the per-model-request tool-call cap, and spills oversized MCP string results. Approval-gated tools (`ToolInfo.approval`, or `shell_exec`'s dynamic path check) suspend into the approval loop and resume via `deferred_tool_results` — see the [Approval Loop](#approval-loop) below and [core-loop.md](core-loop.md).
+5. **Call.** `_CallSeamToolset.call_tool` (`co_cli/agent/toolset.py`) is the single per-call seam: it stamps the `tool {name}` span (`co.tool.*` attributes), enforces the per-model-request tool-call cap, and spills oversized MCP string results. Approval-gated tools (`ToolInfo.is_approval_required`, or `shell_exec`'s dynamic path check) suspend into the approval loop and resume via `deferred_tool_results` — see the [Approval Loop](#approval-loop) below and [core-loop.md](core-loop.md).
 
 ### Toolset composition stack
 
@@ -276,9 +301,9 @@ on shared mutation keys is a complementary guard — both layers apply.
 
 | Symbol | Source | Contract |
 |--------|--------|----------|
-| `@agent_tool(visibility=..., approval=..., is_read_only=..., is_concurrent_safe=True, spill_threshold_chars=..., ...)` | `co_cli/tools/agent_tool.py` | Decorator — self-registers a function into both `TOOL_REGISTRY` (list) and `TOOL_REGISTRY_BY_NAME` (dict) at import time. Default: `is_concurrent_safe=True` (concurrent). Set `is_concurrent_safe=False` only when the tool truly cannot tolerate concurrent invocation. `is_read_only=True` automatically implies `is_concurrent_safe=True`. |
+| `@agent_tool(visibility=..., is_approval_required=..., is_read_only=..., is_concurrent_safe=True, spill_threshold_chars=..., ...)` | `co_cli/tools/agent_tool.py` | Decorator — self-registers a function into both `TOOL_REGISTRY` (list) and `TOOL_REGISTRY_BY_NAME` (dict) at import time. Default: `is_concurrent_safe=True` (concurrent). Set `is_concurrent_safe=False` only when the tool truly cannot tolerate concurrent invocation. `is_read_only=True` automatically implies `is_concurrent_safe=True`. |
 | `TOOL_REGISTRY` | `co_cli/tools/agent_tool.py` | Module-level list populated at import time; read by `build_native_toolset()` |
-| `build_native_toolset(config) -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]` | `co_cli/agent/core.py` | Pure-config helper. Returns the unfiltered native toolset and a fresh `tool_catalog` |
+| `build_native_toolset() -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]` | `co_cli/agent/core.py` | Pure registry walk. Returns the unfiltered native toolset and a fresh `tool_catalog` |
 | `build_mcp_entries(config, tool_catalog) -> list[MCPToolsetEntry]` | `co_cli/agent/core.py` | Builds MCP entries wrapped with sequential-flag propagation; not yet connected |
 | `assemble_routing_toolset(native, mcp_toolsets) -> AbstractToolset[CoDeps]` | `co_cli/agent/core.py` | Combines native + connected MCP toolsets via `CombinedToolset(...).filtered(_tool_visibility_filter)`, wrapped in `_CallSeamToolset` |
 
@@ -317,7 +342,7 @@ on shared mutation keys is a complementary guard — both layers apply.
 | File | Role |
 |------|------|
 | `co_cli/agent/core.py` | `build_native_toolset()`, `build_mcp_entries()`, `assemble_routing_toolset()` |
-| `co_cli/agent/toolset.py` | `_build_native_toolset()`, `_tool_visibility_filter()`, `_config_requirement_met()`, `_CallSeamToolset` (per-call span + cap + MCP spill) |
+| `co_cli/agent/toolset.py` | `_build_native_toolset()`, `_tool_visibility_filter()`, `_CallSeamToolset` (per-call span + cap + MCP spill) |
 | `co_cli/agent/mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` (synthesizes MCP `ToolInfo`), `_SequentialMCPToolset`, `_SanitizingMCPServer`, `MCPToolsetEntry` |
 | `co_cli/tools/approvals.py` | approval subject resolution and session-rule persistence |
 | `co_cli/tools/deferred_prompt.py` | per-tool awareness stub list for DEFERRED tools, grouped by integration family under sub-headers |

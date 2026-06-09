@@ -102,7 +102,7 @@ class ToolInfo:
 
     name: str
     description: str
-    approval: bool
+    is_approval_required: bool
     source: ToolSourceEnum
     visibility: VisibilityPolicyEnum
     integration: str | None = None
@@ -110,7 +110,6 @@ class ToolInfo:
     is_read_only: bool = False
     is_concurrent_safe: bool = False
     retries: int | None = None
-    requires_config: str | None = None
     check_fn: Callable[[CoDeps], bool] | None = None
     approval_subject_fn: Callable[[dict[str, Any]], ApprovalSubject] | None = None
 

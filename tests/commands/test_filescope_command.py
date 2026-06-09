@@ -22,7 +22,7 @@ from co_cli.tools.shell_backend import ShellBackend
 
 
 def _make_ctx(workspace_dir: Path, file_search_roots: list[Path]) -> CommandContext:
-    _, tool_catalog = build_native_toolset(SETTINGS)
+    _, tool_catalog = build_native_toolset()
     deps = CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,

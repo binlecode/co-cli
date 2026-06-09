@@ -9,7 +9,6 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset, WrapperToolset
 from pydantic_ai.toolsets.abstract import ToolsetTool
 
-from co_cli.config.core import Settings
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.observability.serialize import serialize_tool_args, truncate_tool_result
 from co_cli.observability.tracing import current_span, pop_span, push_span
@@ -85,10 +84,6 @@ def _tool_visibility_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -
     return entry is None or entry.visibility == VisibilityPolicyEnum.ALWAYS
 
 
-def _config_requirement_met(info: ToolInfo, config: Settings) -> bool:
-    return info.requires_config is None or bool(getattr(config, info.requires_config, None))
-
-
 def _make_prepare(fn: Callable[[CoDeps], bool]):
     """Return a per-turn prepare callback that hides a tool when fn(deps) is False."""
 
@@ -98,9 +93,7 @@ def _make_prepare(fn: Callable[[CoDeps], bool]):
     return prepare
 
 
-def _build_native_toolset(
-    config: Settings,
-) -> "tuple[FunctionToolset[CoDeps], dict[str, ToolInfo]]":
+def _build_native_toolset() -> "tuple[FunctionToolset[CoDeps], dict[str, ToolInfo]]":
     """Build an unfiltered FunctionToolset; deferred visibility is co-owned, not SDK.
 
     Tools are NOT registered with defer_loading: co hides DEFERRED tools via the
@@ -108,10 +101,9 @@ def _build_native_toolset(
     and surfaces them by name through the tool_view tool, so the SDK's keyword loader
     (search_tools) never engages. Visibility lives only in the returned tool_catalog.
 
-    A tool whose requires_config names an absent config field is excluded; no tool
-    currently sets one. Google tools self-gate per-turn via check_fn=_google_available
-    (wired as a prepare hook), so they register here unconditionally and hide each turn
-    until a credential exists on disk.
+    Google tools self-gate per-turn via check_fn=_google_available (wired as a prepare
+    hook), so they register here unconditionally and hide each turn until a credential
+    exists on disk.
 
     Returns (native_toolset, native_tool_catalog) where native_tool_catalog maps each tool name
     to its ToolInfo metadata.
@@ -121,10 +113,8 @@ def _build_native_toolset(
 
     for fn in TOOL_REGISTRY:
         info: ToolInfo = getattr(fn, AGENT_TOOL_ATTR)
-        if not _config_requirement_met(info, config):
-            continue
         kwargs: dict[str, Any] = {
-            "requires_approval": info.approval,
+            "requires_approval": info.is_approval_required,
             "sequential": not info.is_concurrent_safe,
         }
         if info.retries is not None:
@@ -219,6 +209,6 @@ class _CallSeamToolset(WrapperToolset[CoDeps]):
         span.set_attribute("co.tool.result_size", len(str(result)))
         if info:
             span.set_attribute("co.tool.source", info.source.value)
-            span.set_attribute("co.tool.requires_approval", info.approval)
+            span.set_attribute("co.tool.requires_approval", info.is_approval_required)
         pop_span()
         return result

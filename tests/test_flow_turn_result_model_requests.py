@@ -26,7 +26,7 @@ from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
 
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
-_TOOLSET, _TOOL_INDEX = build_native_toolset(_CONFIG_NO_MCP)
+_TOOLSET, _TOOL_INDEX = build_native_toolset()
 
 
 def _make_deps() -> CoDeps:

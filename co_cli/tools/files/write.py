@@ -261,7 +261,10 @@ def _check_patch_preconditions(
 
 # Approval modal cannot be queued safely for two concurrent writes to the same path.
 @agent_tool(
-    visibility=VisibilityPolicyEnum.ALWAYS, approval=True, retries=1, is_concurrent_safe=False
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    is_approval_required=True,
+    retries=1,
+    is_concurrent_safe=False,
 )
 async def file_write(
     ctx: RunContext[CoDeps],
@@ -313,7 +316,10 @@ async def file_write(
 
 # Approval modal cannot be queued safely for concurrent patches; read-modify-write demands no interleaving.
 @agent_tool(
-    visibility=VisibilityPolicyEnum.ALWAYS, approval=True, retries=1, is_concurrent_safe=False
+    visibility=VisibilityPolicyEnum.ALWAYS,
+    is_approval_required=True,
+    retries=1,
+    is_concurrent_safe=False,
 )
 async def file_patch(
     ctx: RunContext[CoDeps],

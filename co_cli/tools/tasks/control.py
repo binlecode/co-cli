@@ -30,7 +30,9 @@ from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.tool_io import tool_error, tool_output
 
 
-@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, approval=True, is_concurrent_safe=True)
+@agent_tool(
+    visibility=VisibilityPolicyEnum.DEFERRED, is_approval_required=True, is_concurrent_safe=True
+)
 @trace("background_task_execute")
 async def task_start(
     ctx: RunContext[CoDeps],

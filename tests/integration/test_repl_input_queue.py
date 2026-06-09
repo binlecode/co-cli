@@ -52,7 +52,7 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 def _make_deps(tmp_path: Path) -> CoDeps:
     skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
-    _, tool_catalog = build_native_toolset(SETTINGS_NO_MCP)
+    _, tool_catalog = build_native_toolset()
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS_NO_MCP,
@@ -68,7 +68,7 @@ def _make_deps(tmp_path: Path) -> CoDeps:
 
 def _make_agent(deps: CoDeps):
     """Build a real orchestrator agent; build_model bakes noreason_model_settings()."""
-    toolset, tool_catalog = build_native_toolset(deps.config)
+    toolset, tool_catalog = build_native_toolset()
     deps.toolset = toolset
     deps.tool_catalog = tool_catalog
     deps.model = build_model(deps.config.llm)

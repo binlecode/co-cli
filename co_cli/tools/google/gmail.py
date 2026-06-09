@@ -142,7 +142,7 @@ def google_gmail_search(ctx: RunContext[CoDeps], query: str, max_results: int = 
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.DEFERRED,
-    approval=True,
+    is_approval_required=True,
     is_concurrent_safe=True,
     integration="google_gmail",
     retries=1,

@@ -70,13 +70,13 @@ class MCPToolsetEntry:
     ``server`` is a ``_SanitizingMCPServer`` wrapping the raw MCPServer (before
     ``approval_required()`` wrapping) so ``list_tools()`` returns sanitized schemas
     and can be called directly without walking the wrapper chain.
-    ``approval``, ``prefix``, and ``timeout`` are recorded at build time; discovery
-    reads them without inspecting wrapper topology.
+    ``is_approval_required``, ``prefix``, and ``timeout`` are recorded at build time;
+    discovery reads them without inspecting wrapper topology.
     """
 
     toolset: AbstractToolset
     server: Any  # MCPServer subclass — lazily imported; avoids top-level pydantic_ai.mcp import
-    approval: bool
+    is_approval_required: bool
     prefix: str
     timeout: float
 
@@ -112,9 +112,11 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
                 env=env or None,
                 tool_prefix=cfg.prefix or name,
             )
-        approval = cfg.approval == "ask"
+        is_approval_required = cfg.approval == "ask"
         sanitizing_server = _SanitizingMCPServer(mcp_server)
-        inner = sanitizing_server.approval_required() if approval else sanitizing_server
+        inner = (
+            sanitizing_server.approval_required() if is_approval_required else sanitizing_server
+        )
         # No DeferredLoadingToolset: it stamps defer_loading=True, which would re-engage
         # the SDK's search_tools loader. MCP tools are DEFERRED in tool_catalog, so co's
         # per-turn visibility filter (agent/toolset.py) hides them until loaded via
@@ -123,7 +125,7 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
             MCPToolsetEntry(
                 toolset=inner,
                 server=sanitizing_server,
-                approval=approval,
+                is_approval_required=is_approval_required,
                 prefix=cfg.prefix or name,
                 timeout=cfg.timeout,
             )
@@ -148,7 +150,7 @@ async def _discover_one(
                         ToolInfo(
                             name=name,
                             description=t.description or "",
-                            approval=entry.approval,
+                            is_approval_required=entry.is_approval_required,
                             source=ToolSourceEnum.MCP,
                             visibility=VisibilityPolicyEnum.DEFERRED,
                             integration=prefix or None,

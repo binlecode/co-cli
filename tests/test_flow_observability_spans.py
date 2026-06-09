@@ -99,7 +99,7 @@ async def test_turn_emits_agent_model_tool_span_tree(tmp_path: Path) -> None:
     echo_info = ToolInfo(
         name="echo",
         description="echo",
-        approval=False,
+        is_approval_required=False,
         source=ToolSourceEnum.NATIVE,
         visibility=VisibilityPolicyEnum.ALWAYS,
     )

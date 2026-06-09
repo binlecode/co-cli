@@ -17,7 +17,7 @@ from co_cli.tools.system.capabilities import capabilities_check
 
 def _make_deps(**settings_overrides) -> CoDeps:
     config = make_settings(**settings_overrides) if settings_overrides else SETTINGS
-    _, tool_catalog = build_native_toolset(config)
+    _, tool_catalog = build_native_toolset()
     return CoDeps(
         shell=ShellBackend(),
         config=config,

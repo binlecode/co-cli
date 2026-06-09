@@ -11,15 +11,13 @@ tool_view resolution tests and behavioral evals, not here.
 
 import re
 
-from tests._settings import SETTINGS
-
 from co_cli.agent.core import build_native_toolset
 from co_cli.deps import ToolInfo, VisibilityPolicyEnum
 from co_cli.tools.deferred_prompt import build_deferred_tool_awareness_prompt
 
 
 def _real_tool_index() -> dict[str, ToolInfo]:
-    _, tool_catalog = build_native_toolset(SETTINGS)
+    _, tool_catalog = build_native_toolset()
     return tool_catalog
 
 

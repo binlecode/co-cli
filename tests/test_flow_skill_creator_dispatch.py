@@ -19,7 +19,7 @@ _BUNDLED_SKILLS_DIR = Path("co_cli/skills")
 
 def _make_ctx(tmp_path: Path) -> CommandContext:
     skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
-    _, tool_catalog = build_native_toolset(SETTINGS)
+    _, tool_catalog = build_native_toolset()
     deps = CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,

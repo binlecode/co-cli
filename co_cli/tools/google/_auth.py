@@ -49,8 +49,8 @@ def ensure_google_credentials(
 def _google_available(deps: Any) -> bool:
     """Per-turn availability check for all Google tools.
 
-    This is the sole gate (the tools carry no requires_config): registration is
-    unconditional and visibility is decided here each turn.
+    This is the sole gate: registration is unconditional and visibility is
+    decided here each turn.
 
     Before first resolution: show the tool only when a credential source exists on
     disk — an explicit google_credentials_path file, or the default GOOGLE_TOKEN_PATH

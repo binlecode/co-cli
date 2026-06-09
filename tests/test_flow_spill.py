@@ -91,14 +91,14 @@ def _make_routing_deps(tool_results_dir: Path) -> CoDeps:
     mcp_info = ToolInfo(
         name="mcp_test_tool",
         description="test",
-        approval=False,
+        is_approval_required=False,
         source=ToolSourceEnum.MCP,
         visibility=VisibilityPolicyEnum.DEFERRED,
     )
     native_info = ToolInfo(
         name="native_test_tool",
         description="test",
-        approval=False,
+        is_approval_required=False,
         source=ToolSourceEnum.NATIVE,
         visibility=VisibilityPolicyEnum.ALWAYS,
     )

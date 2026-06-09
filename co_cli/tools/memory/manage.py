@@ -36,7 +36,7 @@ def _subject_fn(tool_name: str, arg_key: str) -> Callable[[dict], ApprovalSubjec
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
-    approval=True,
+    is_approval_required=True,
     approval_subject_fn=_subject_fn("memory_create", "name_title"),
     is_concurrent_safe=True,
     retries=1,
@@ -73,7 +73,7 @@ async def memory_create(
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
-    approval=True,
+    is_approval_required=True,
     approval_subject_fn=_subject_fn("memory_append", "filename_stem"),
     is_concurrent_safe=True,
     retries=1,
@@ -94,7 +94,7 @@ async def memory_append(
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
-    approval=True,
+    is_approval_required=True,
     approval_subject_fn=_subject_fn("memory_replace", "filename_stem"),
     is_concurrent_safe=True,
     retries=1,
@@ -119,7 +119,7 @@ async def memory_replace(
 
 @agent_tool(
     visibility=VisibilityPolicyEnum.ALWAYS,
-    approval=True,
+    is_approval_required=True,
     approval_subject_fn=_subject_fn("memory_delete", "filename_stem"),
     is_concurrent_safe=True,
     retries=1,

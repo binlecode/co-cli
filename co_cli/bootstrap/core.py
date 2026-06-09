@@ -355,7 +355,7 @@ async def create_deps(
 
     llm_model = build_model(config.llm)
     judge_llm_model = build_judge_model(config.llm)
-    native_toolset, tool_catalog = build_native_toolset(config)
+    native_toolset, tool_catalog = build_native_toolset()
 
     degradations: dict[str, str] = {}
     connected: list[MCPToolsetEntry] = []

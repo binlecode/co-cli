@@ -31,7 +31,7 @@ def _deferred(name: str, description: str) -> ToolInfo:
     return ToolInfo(
         name=name,
         description=description,
-        approval=False,
+        is_approval_required=False,
         source=ToolSourceEnum.NATIVE,
         visibility=VisibilityPolicyEnum.DEFERRED,
     )
@@ -128,7 +128,7 @@ async def test_deferred_tool_hidden_until_loaded_by_name(tmp_path) -> None:
     Also asserts no tool carries the SDK defer_loading flag — so the auto-injected
     search_tools loader can never engage (co owns deferral via the filter).
     """
-    native_toolset, tool_catalog = build_native_toolset(SETTINGS_NO_MCP)
+    native_toolset, tool_catalog = build_native_toolset()
     toolset = assemble_routing_toolset(native_toolset, [])
     deps = _make_deps(tmp_path, tool_catalog)
     ctx = _ctx(deps)
@@ -158,7 +158,7 @@ async def test_visibility_independent_of_message_history(tmp_path) -> None:
     visibility, proving the gate does not re-derive unlocks from messages (what made
     the old search_tools preservation coupling necessary).
     """
-    native_toolset, tool_catalog = build_native_toolset(SETTINGS_NO_MCP)
+    native_toolset, tool_catalog = build_native_toolset()
     toolset = assemble_routing_toolset(native_toolset, [])
     deps = _make_deps(tmp_path, tool_catalog)
     deps.runtime.unlocked_tools.add("skill_create")

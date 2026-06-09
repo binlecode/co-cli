@@ -42,7 +42,7 @@ def _make_deps(tmp_path: Path) -> CoDeps:
     # Write skill file so is_agent_created returns True
     (user_skills_dir / "test-recall-skill.md").write_text(_SKILL_CONTENT, encoding="utf-8")
     skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
-    _, tool_catalog = build_native_toolset(SETTINGS)
+    _, tool_catalog = build_native_toolset()
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
@@ -68,7 +68,7 @@ def test_bump_recall_no_op_when_usage_tracking_disabled(tmp_path: Path) -> None:
     user_skills_dir = tmp_path / "skills"
     user_skills_dir.mkdir(parents=True, exist_ok=True)
     (user_skills_dir / "test-recall-skill.md").write_text(_SKILL_CONTENT, encoding="utf-8")
-    _, tool_catalog = build_native_toolset(config)
+    _, tool_catalog = build_native_toolset()
     deps = CoDeps(
         shell=ShellBackend(),
         config=config,

@@ -48,7 +48,9 @@ def _build_tool_surface_lines(deps: CoDeps) -> list[str]:
     deferred = sorted(
         name for name, tc in tool_catalog.items() if tc.visibility == VisibilityPolicyEnum.DEFERRED
     )
-    approval_required = sorted(name for name, tc in tool_catalog.items() if tc.approval)
+    approval_required = sorted(
+        name for name, tc in tool_catalog.items() if tc.is_approval_required
+    )
     return [
         "Capability summary:",
         f"  Available now: {_format_tool_list(always_visible)}",
@@ -177,7 +179,9 @@ async def capabilities_check(ctx: RunContext[CoDeps]) -> ToolReturn:
             for name, tc in tool_catalog.items()
             if tc.visibility == VisibilityPolicyEnum.DEFERRED
         ),
-        approval_required_tools=sorted(name for name, tc in tool_catalog.items() if tc.approval),
+        approval_required_tools=sorted(
+            name for name, tc in tool_catalog.items() if tc.is_approval_required
+        ),
         tool_count=st["tool_count"],
         native_tool_count=native_tool_count,
         mcp_tool_count=mcp_tool_count,

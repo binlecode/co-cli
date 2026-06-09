@@ -40,7 +40,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ config.llm.validate_config()
 │  ├─ [if ollama] probe_ollama_model() → model_max_ctx = min(probe.num_ctx, llm.max_ctx)
 │  ├─ build_model(config.llm)
-│  ├─ build_native_toolset(config) → (native_toolset, tool_catalog)
+│  ├─ build_native_toolset() → (native_toolset, tool_catalog)
 │  ├─ build_mcp_entries(config, tool_catalog)
 │  ├─ enter MCP toolsets on stack (per-entry timeout + failure isolation)
 │  ├─ discover_mcp_tools(connected); merge MCP entries into tool_catalog

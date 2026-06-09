@@ -44,7 +44,7 @@ def _make_deps(tmp_path: Path, extra_skills: dict[str, SkillInfo] | None = None)
     skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
     if extra_skills:
         skill_catalog = {**skill_catalog, **extra_skills}
-    _, tool_catalog = build_native_toolset(SETTINGS)
+    _, tool_catalog = build_native_toolset()
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,
@@ -340,7 +340,7 @@ def _make_deps_with_preloaded_skills(tmp_path: Path, *, extra_user_skill_count: 
             encoding="utf-8",
         )
     skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
-    _, tool_catalog = build_native_toolset(SETTINGS)
+    _, tool_catalog = build_native_toolset()
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,

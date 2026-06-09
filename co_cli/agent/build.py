@@ -58,11 +58,9 @@ def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> SessionAgent:
 def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoDeps, Any]:
     """Build a task agent from a spec.
 
-    Resolves spec.tool_names against TOOL_REGISTRY_BY_NAME, filtered by
-    _config_requirement_met (drops a tool whose requires_config names an absent
-    config field; no tool currently sets one — Google tools self-gate per-turn via
-    check_fn instead). Unknown tool names raise ValueError at build time.
-    All resolved tools are registered with requires_approval=False.
+    Resolves spec.tool_names against TOOL_REGISTRY_BY_NAME. Unknown tool names
+    raise ValueError at build time. All resolved tools are registered with
+    requires_approval=False.
 
     When spec.include_skill_manifest is True, prepends the rendered skill
     manifest to spec.instructions(deps) output.
@@ -74,17 +72,14 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
     """
     from pydantic_ai.toolsets import FunctionToolset
 
-    from co_cli.agent.toolset import _CallSeamToolset, _config_requirement_met
-    from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY_BY_NAME
+    from co_cli.agent.toolset import _CallSeamToolset
+    from co_cli.tools.agent_tool import TOOL_REGISTRY_BY_NAME
 
     tool_fns: list[Any] = []
     for name in spec.tool_names:
         fn = TOOL_REGISTRY_BY_NAME.get(name)
         if fn is None:
             raise ValueError(f"{spec.name}: unknown tool {name!r}")
-        info = getattr(fn, AGENT_TOOL_ATTR)
-        if not _config_requirement_met(info, deps.config):
-            continue
         tool_fns.append(fn)
 
     instructions = spec.instructions(deps)

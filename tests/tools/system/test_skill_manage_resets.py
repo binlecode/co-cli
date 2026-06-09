@@ -54,7 +54,7 @@ def _make_deps(tmp_path: Path, initial_iters: int = 8) -> CoDeps:
     user_skills_dir = tmp_path / "skills"
     user_skills_dir.mkdir(parents=True, exist_ok=True)
     skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
-    _, tool_catalog = build_native_toolset(SETTINGS)
+    _, tool_catalog = build_native_toolset()
     session = CoSessionState()
     session.model_requests_since_skill_review = initial_iters
     return CoDeps(

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.328]
+
+### `ToolInfo` field naming consistency — `approval` → `is_approval_required`, drop vestigial `requires_config`
+
+- **`approval` → `is_approval_required`**: the bare-noun boolean now matches the `is_*` predicate form of its peers (`is_read_only`, `is_concurrent_safe`). Renamed the `ToolInfo` field, the `@agent_tool(...)` decorator kwarg, the import-time mutual-exclusion check, every `.approval` read (`_build_native_toolset` bridge, `co.tool.requires_approval` span, `capabilities`, `bootstrap/check`), and all 13 `@agent_tool(approval=True)` call sites. `MCPToolsetEntry.approval` renamed in lockstep (it feeds the synthesized MCP `ToolInfo`). The bridge mapping stays legible: `add_function(requires_approval=info.is_approval_required)`.
+- **Deleted vestigial `requires_config`**: no tool set it, so the `_config_requirement_met` gate always passed (Google tools self-gate per-turn via `check_fn`). Removed the field, the decorator kwarg, the gate function, and its two callers (`_build_native_toolset`, `build_task_agent`).
+- **Dead-orphan cleanup**: deleting the gate made the `config` parameter of `build_native_toolset` / `_build_native_toolset` unused — dropped it (and the now-orphaned `Settings` / `AGENT_TOOL_ATTR` imports), updating the `bootstrap/core.py` caller and ~22 test call sites.
+- **Specs synced**: `tools.md` (full `ToolInfo` field table + new clarification on how co uses the SDK's `FunctionToolset` vs `ToolDefinition`), `agents.md`, `pydantic-ai-integration.md`, `01-system.md`, `bootstrap.md`. No behavior change; full suite green.
+
 ## [0.8.327]
 
 ### Compaction production-logic fixes (convergence guard + floor-aware tail + metric fixes)

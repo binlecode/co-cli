@@ -44,7 +44,7 @@ No shared base. The two specs do not feed a polymorphic dispatcher — inheritan
 
 `build_orchestrator(spec, deps)` (`co_cli/agent/build.py`) composes the orchestrator. Static instructions are assembled by calling each `spec.static_instruction_builders` closure in order and joining with double newlines; per-turn instructions are registered via `agent.instructions(...)`; history processors are attached as a list. Output type is fixed `[str, DeferredToolRequests]`; retries from `deps.config.tool_retries`. No `capabilities=[...]` attachment — the tool span, per-request cap, and MCP spill ride the `_CallSeamToolset` wrapper on the toolset, and the model span + arg repair ride `SurrogateRecoveryModel` (see [tools.md](tools.md) and [observability.md](observability.md)). Toolset comes from `deps.toolset` directly — orchestrator is a singleton, no factory abstraction.
 
-`build_task_agent(spec, deps, model)` (`co_cli/agent/build.py`) resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME` (populated by `@agent_tool` at import time), filters through `_config_requirement_met` to drop integration tools whose credentials are absent, and adds each resolved tool to a `FunctionToolset` with `requires_approval=False`, wrapped in `_CallSeamToolset` so subagent tool calls get the same span/cap/spill seam as the orchestrator. Unknown names raise `ValueError` at build time. When `spec.include_skill_manifest=True`, the rendered skill manifest is prepended to `spec.instructions(deps)`.
+`build_task_agent(spec, deps, model)` (`co_cli/agent/build.py`) resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME` (populated by `@agent_tool` at import time) and adds each resolved tool to a `FunctionToolset` with `requires_approval=False`, wrapped in `_CallSeamToolset` so subagent tool calls get the same span/cap/spill seam as the orchestrator. Unknown names raise `ValueError` at build time. When `spec.include_skill_manifest=True`, the rendered skill manifest is prepended to `spec.instructions(deps)`.
 
 `run_standalone(spec, deps, prompt, budget, model_settings)` (`co_cli/agent/run.py`) is the daemon task-agent runner and the only task-agent runner — every task agent runs as a top-level daemon.
 
@@ -80,9 +80,6 @@ for name in spec.tool_names:
     fn = TOOL_REGISTRY_BY_NAME.get(name)
     if fn is None:
         raise ValueError(f"{spec.name}: unknown tool {name!r}")
-    info = fn.<agent-tool-metadata>
-    if not _config_requirement_met(info, deps.config):
-        continue                              # drop tools whose requires_config is unset (none today)
     tool_fns.append(fn)
 
 instructions = spec.instructions(deps)
@@ -150,7 +147,7 @@ Daemons are top-level task agents with three defining properties: (1) **no depth
 | Symbol | Source | Contract |
 |--------|--------|----------|
 | `build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> Agent[CoDeps, Any]` | `co_cli/agent/build.py` | Constructs the orchestrator from `deps.toolset`; raises `ValueError` if `deps.toolset` or `deps.model` is unset |
-| `build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoDeps, Any]` | `co_cli/agent/build.py` | Resolves `spec.tool_names` via `TOOL_REGISTRY_BY_NAME` filtered by `_config_requirement_met`; raises `ValueError` on unknown names; registers each tool with `requires_approval=False` |
+| `build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoDeps, Any]` | `co_cli/agent/build.py` | Resolves `spec.tool_names` via `TOOL_REGISTRY_BY_NAME`; raises `ValueError` on unknown names; registers each tool with `requires_approval=False` |
 
 ### Runners
 

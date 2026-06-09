@@ -35,7 +35,7 @@ Do the test task.
 
 def _make_deps(tmp_path: Path, config=SETTINGS) -> CoDeps:
     skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=tmp_path)
-    _, tool_catalog = build_native_toolset(config)
+    _, tool_catalog = build_native_toolset()
     return CoDeps(
         shell=ShellBackend(),
         config=config,

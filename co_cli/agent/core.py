@@ -15,19 +15,17 @@ if TYPE_CHECKING:
     from co_cli.agent.mcp import MCPToolsetEntry
 
 
-def build_native_toolset(
-    config: Settings,
-) -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]:
+def build_native_toolset() -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]:
     """Build the unfiltered native toolset and its tool_catalog.
 
-    Pure config — no IO. Returns the native FunctionToolset and a fresh
-    dict copy of the native tool metadata. Caller is responsible for
+    Pure registry walk — no IO, no config. Returns the native FunctionToolset
+    and a fresh dict copy of the native tool metadata. Caller is responsible for
     combining with MCP toolsets (if any) and applying the approval-resume
     filter via assemble_routing_toolset().
     """
     from co_cli.agent.toolset import _build_native_toolset
 
-    native_toolset, native_tool_catalog = _build_native_toolset(config)
+    native_toolset, native_tool_catalog = _build_native_toolset()
     return native_toolset, dict(native_tool_catalog)
 
 
