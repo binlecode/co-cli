@@ -167,6 +167,47 @@ def test_merge_excludes_articles(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# _write_consolidated_item — save-time dedup honors configured threshold
+# ---------------------------------------------------------------------------
+
+
+def test_consolidated_write_honors_configured_threshold(tmp_path: Path):
+    """Dream consolidated write dedups at the configured threshold, not the 0.75 default.
+
+    Seeds one existing note, then writes a consolidated body ~0.43 Jaccard-similar
+    (3 shared / 7 union tokens). With consolidation_similarity_threshold=0.3 the
+    save-time dedup must fold it into the existing item (no second file). Under the
+    old hardcoded 0.75 the body fell below threshold and a distinct file was created.
+    """
+    from types import SimpleNamespace
+
+    from co_cli.daemons.dream._housekeeping import _write_consolidated_item
+
+    memory_dir = tmp_path / "memory"
+    existing = _item(
+        memory_kind="note", content="alpha bravo charlie delta echo", title="existing"
+    )
+    _write_md(memory_dir, existing)
+
+    deps = SimpleNamespace(
+        memory_dir=memory_dir,
+        memory_store=None,
+        index_store=None,
+        config=SimpleNamespace(memory=MemorySettings(consolidation_similarity_threshold=0.3)),
+    )
+    anchor = _item(memory_kind="note", content="unused", title="merged")
+    merged_body = "alpha bravo charlie foxtrot golf"
+
+    _write_consolidated_item(deps, [anchor], anchor, merged_body)
+
+    md_files = list(memory_dir.glob("*.md"))
+    assert len(md_files) == 1, (
+        "consolidated write must dedup into the existing note at threshold 0.3; "
+        f"got {len(md_files)} files: {[p.name for p in md_files]}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # find_decay_candidates — recall_protection_days window
 # ---------------------------------------------------------------------------
 

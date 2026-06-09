@@ -32,9 +32,7 @@
     "min_proactive_savings": 0.10,
     "proactive_thrash_window": 2
   },
-  "memory": {
-    "recall_half_life_days": 30
-  },
+  "memory": {},
   "web": {
     "fetch_allowed_domains": [],
     "fetch_blocked_domains": [],

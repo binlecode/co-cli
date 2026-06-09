@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.323]
+
+### Config surface cleanup — dead settings removed, dream consolidation threshold fix
+
+- **Dead settings removed**: `memory.max_item_count` and `memory.recall_half_life_days` (plus their env-var mappings `CO_MEMORY_MAX_ITEM_COUNT`/`CO_MEMORY_RECALL_HALF_LIFE_DAYS` and the `DEFAULT_MEMORY_RECALL_HALF_LIFE_DAYS` const) had zero consumers — no corpus-size cap or time-decay recall scoring exists. Operators setting these env vars would have seen no effect; both are now hard-removed under the zero-backward-compat rule.
+- **Dream consolidation threshold fix**: `_write_consolidated_item` now passes `deps.config.memory.consolidation_similarity_threshold` to `save_memory_item`. Previously the save-time Jaccard re-dedup fell back to the hardcoded `0.75` default regardless of the configured value; the cluster-decision path already honored config, making the two-step inconsistent.
+- **`settings.reference.json` updated**: `recall_half_life_days` entry removed; reference config round-trips cleanly under `MemorySettings(extra="forbid")`.
+- **Specs synced**: `docs/specs/config.md` and `docs/specs/memory.md` rows for both dead settings removed; orphan duplicate `Memory` subsection in config.md cleaned up.
+
 ## [0.8.321]
 
 ### Spec sync — stale paths, config defaults, phantom settings

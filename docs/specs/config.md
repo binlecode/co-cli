@@ -181,7 +181,6 @@ user-configurable — they live in `_LLM_SETTINGS` keyed by provider/model/mode.
 | `memory.tei_rerank_batch_size` | `CO_MEMORY_TEI_RERANK_BATCH_SIZE` | `50` | Reranker batch size (overridden by TEI `/info` response) |
 | `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | Token size per memory chunk |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Token overlap between chunks |
-| `memory.max_item_count` | `CO_MEMORY_MAX_ITEM_COUNT` | `300` | Max memory items before decay |
 | `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Minimum item age before decay eligibility |
 | `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | Recent-recall window that protects an aged item from decay |
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for write-time dedup and daemon merge |
@@ -218,12 +217,6 @@ Shape invariant: `tail_fraction < compaction_ratio` and `spill_ratio <= compacti
 | `shell.safe_commands` | `CO_SHELL_SAFE_COMMANDS` | see below | Comma-separated prefix list for auto-approved commands |
 
 Default safe commands: `ls`, `tree`, `find`, `fd`, `cat`, `head`, `tail`, `grep`, `rg`, `ag`, `wc`, `sort`, `uniq`, `cut`, `tr`, `jq`, `echo`, `printf`, `pwd`, `whoami`, `hostname`, `uname`, `date`, `env`, `which`, `file`, `stat`, `id`, `du`, `df`, `git status`, `git diff`, `git log`, `git show`, `git branch`, `git tag`, `git blame`.
-
-### Memory (`memory.*`)
-
-| Setting | Env Var | Default | Description |
-|---------|---------|---------|-------------|
-| `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | Half-life for time-decay scoring in recall ranking |
 
 ### Observability (`observability.*`)
 

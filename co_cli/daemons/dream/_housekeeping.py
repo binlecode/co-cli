@@ -141,6 +141,7 @@ def _write_consolidated_item(
         memory_kind=anchor.memory_kind,
         title=anchor.title or f"consolidated {anchor.memory_kind}",
         source_type=SourceTypeEnum.CONSOLIDATED.value,
+        consolidation_similarity_threshold=deps.config.memory.consolidation_similarity_threshold,
         index_store=deps.index_store,
     )
     if deps.memory_store is not None and result.action != "skipped":

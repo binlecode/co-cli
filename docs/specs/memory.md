@@ -71,10 +71,8 @@ Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross
 | `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | paragraph-aware chunking budget for memory items |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | chunk overlap |
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | token-Jaccard threshold for write-time dedup and daemon merge clusters |
-| `memory.max_item_count` | `CO_MEMORY_MAX_ITEM_COUNT` | `300` | soft corpus-size cap; not directly enforced |
 | `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | minimum age before an item is eligible for decay |
 | `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | recent-recall window that protects an aged item from decay |
-| `memory.recall_half_life_days` | `CO_MEMORY_RECALL_HALF_LIFE_DAYS` | `30` | lifecycle setting; not currently consumed by recall ranking |
 
 Session search is file-based (ripgrep) and has no configurable settings; the `memory.*` knobs above govern the memory/canon hybrid index only. See [sessions.md](sessions.md) for the session tier.
 
