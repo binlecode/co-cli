@@ -62,7 +62,7 @@ _finalize_turn()  (main.py)
 | **L0** | `_CallSeamToolset.call_tool` per `ToolCallPart` | `tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 3) | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
 | **L1** | `tool_output()` in native tools, `_CallSeamToolset.call_tool` for MCP | `len(content) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS = 4_000`) | Persist to `tool-results/<sha16>.txt`; replace content with `<persisted-output>` placeholder + preview | No |
 | **L2** | `spill_largest_tool_results` history processor | `static_floor_tokens + estimate_message_tokens > deps.spill_threshold_tokens` (realtime-local, no provider-reported floor) | Force-spill largest unspilled string `ToolReturnPart`s **outside the protected tail** (index `< tail_start`, the same boundary as L3), largest-first, until aggregate ≤ threshold | No |
-| **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | tail`. When the anti-thrash gate is tripped, the same assembly runs with `summarize=False` (static marker, no LLM) — the gate demotes the pass, it never skips it | Yes (static marker fallback when anti-thrash-tripped or breaker-open) |
+| **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | tail`. When the anti-thrash gate is tripped, the same assembly runs with `summarize=False` (static marker, no LLM) — the gate demotes the pass, it never skips it. No-progress guard: an applied pass that fails to shrink (`tokens_after ≥ token_count`) escalates once to `recover_overflow_history` rather than returning a no-op that would re-fire next request | Yes (static marker fallback when anti-thrash-tripped or breaker-open) |
 | **Recovery** | `run_turn` overflow branch | `is_context_overflow(e)` AND `overflow_recovery_attempted == False` | `strip_all_tool_returns`; if still over budget, planner + `compact_messages` + `commit_compaction` on stripped history | Yes (static marker fallback) |
 | **Manual** | `/compact [focus]` slash command | User-invoked | `compact_messages` with full-history bounds `(0, n, n)` + `commit_compaction`; same degradation policy as L3 | Yes (static marker fallback) |
 
@@ -200,7 +200,7 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Per-turn fields a
 | Field | Written by | Read by | Reset by |
 |---|---|---|---|
 | `compaction_applied_this_turn` | `commit_compaction` (sole writer; called by `proactive_window_processor`, `recover_overflow_history` both paths, `/compact`) | `main.py` (session-branching via `TurnResult.history_compacted`); `proactive_window_processor` (OTEL span attr only) | `reset_for_turn` |
-| `current_request_tokens_estimate` | `spill_largest_tool_results` (always — even fast paths) | `proactive_window_processor` (OTEL only, no logic branch); `main.py` `_build_status_snapshot` (status-line context %) | `reset_for_turn`; `/new`, `/clear` |
+| `current_request_tokens_estimate` | `spill_largest_tool_results` (always — even fast paths); `_record_proactive_outcome` (after an applied L3 pass — writes the post-compaction size) | `proactive_window_processor` (OTEL only, no logic branch); `main.py` `_build_status_snapshot` (status-line context %) | `reset_for_turn`; `/new`, `/clear` |
 | `tool_call_limit_run_step`, `tool_calls_in_model_request` | `_CallSeamToolset.call_tool` per call | L0 cap check + consecutive-violation streak | `_CallSeamToolset.call_tool` on `ctx.run_step` change |
 | `compaction_skip_count` | `_summarization_gate_open` (block path), `_gated_summarize_or_none` (failure paths) | `_summarization_gate_open` (probe cadence) | `_gated_summarize_or_none` (success → 0) |
 | `consecutive_low_yield_proactive_compactions` | `proactive_window_processor` (++ on low yield) | proactive gate; anti-thrash static-marker demotion (`summarize=False`) | proactive on good savings; `_reset_thrash_state` from `recover_overflow_history`; `/compact` |
@@ -352,7 +352,7 @@ L2's per-request cap. Operates on the **full message list** at `ModelRequestNode
 
 **Chain placement.** Fires after `dedup_tool_results` and `evict_old_tool_results` (so cheap reductions happen first — no point spilling content the next processor would have deduped) and before `proactive_window_processor` (which fast-paths whenever spill brought total under `compaction_ratio × budget`, sparing the LLM call).
 
-**Scope.** The full message list visible at MRN entry. Walks every `ModelRequest` and collects every string `ToolReturnPart` with its message index, then **excludes the protected recent tail** from the spillable set: returns at index `≥ tail_start` are preserved, so the freshest tool result — the content the model is about to read — survives at least one request before becoming spill-eligible. `tail_start` comes from the **same** `plan_compaction_boundaries(messages, resolve_compaction_budget(deps), cfg.tail_fraction)` boundary L3 (§2.5) and overflow recovery (§3) use; when it returns `None` (fewer than 2 turn groups) every candidate is spillable. This protects the tail on the **size** axis — distinct from, and complementary to, `evict_old_tool_results`' count/duplication recency protection.
+**Scope.** The full message list visible at MRN entry. Walks every `ModelRequest` and collects every string `ToolReturnPart` with its message index, then **excludes the protected recent tail** from the spillable set: returns at index `≥ tail_start` are preserved, so the freshest tool result — the content the model is about to read — survives at least one request before becoming spill-eligible. Returns of `len(content) ≤ TOOL_RESULT_PREVIEW_CHARS` (1,500) are also excluded — they cannot shrink, so they never reach `spill_if_oversized` and never miscount as a spill error (see span note below). `tail_start` comes from the **same** floor-aware `plan_compaction_boundaries(messages, resolve_compaction_budget(deps), cfg.tail_fraction, static_floor_tokens=deps.static_floor_tokens, compaction_ratio=cfg.compaction_ratio)` boundary L3 (§2.5) and overflow recovery (§3) use; when it returns `None` (fewer than 2 turn groups) every candidate is spillable. This protects the tail on the **size** axis — distinct from, and complementary to, `evict_old_tool_results`' count/duplication recency protection.
 
 **Skip cases:**
 
@@ -363,15 +363,15 @@ L2's per-request cap. Operates on the **full message list** at `ModelRequestNode
 | All candidates already persisted (content starts with `PERSISTED_OUTPUT_TAG`) | `all_spilled` | No rewrite. |
 | Spill exhausted candidates but aggregate still > threshold | `fallback_to_summarize` | Returns the (possibly partially-rewritten) message list; `proactive_window_processor` runs next and decides whether to fire LLM summarization. |
 | Spill brought aggregate ≤ threshold | `""` (empty) | Rewritten message list returned. |
-| Spill `OSError` on a candidate | (per-candidate, counted in `spill_errors`) | That candidate skipped (`new == old`); loop continues. |
+| Spill I/O failure on a `> TOOL_RESULT_PREVIEW_CHARS` candidate | (per-candidate, counted in `spill_errors`) | That candidate skipped (`new == old`); loop continues. Too-small candidates are pre-filtered out of the spillable set, so `spill_errors` counts only genuine I/O failures, never "too small to spill". |
 
 **Algorithm.**
 
 1. `total = deps.static_floor_tokens + estimate_message_tokens(messages)` — the floor-inclusive realtime-local estimate (static prefill floor + message list); no provider-reported floor (see §1.5).
 2. If `total ≤ deps.spill_threshold_tokens`, fast-path.
-3. Walk every `ModelRequest`, collect all `ToolReturnPart`s with string content as candidates **with their message index**. Compute `tail_start` via `plan_compaction_boundaries(messages, resolve_compaction_budget(deps), cfg.tail_fraction)` — the same boundary L3 and overflow recovery use (`None` → `tail_start = len(messages)`, no protection). Filter spillable: index `< tail_start` **and** content does not start with `PERSISTED_OUTPUT_TAG`.
+3. Walk every `ModelRequest`, collect all `ToolReturnPart`s with string content as candidates **with their message index**. Compute `tail_start` via the floor-aware `plan_compaction_boundaries(messages, resolve_compaction_budget(deps), cfg.tail_fraction, static_floor_tokens=deps.static_floor_tokens, compaction_ratio=cfg.compaction_ratio)` — the same boundary L3 and overflow recovery use (`None` → `tail_start = len(messages)`, no protection). Filter spillable: index `< tail_start`, content does not start with `PERSISTED_OUTPUT_TAG`, **and** `len(content) > TOOL_RESULT_PREVIEW_CHARS` (too-small returns cannot shrink, so they are excluded rather than attempted-and-failed).
 4. Sort spillable largest-first by `len(content)`.
-5. Force-spill via `spill_if_oversized(content, deps.tool_results_dir, tool_name, force=True)` until aggregate ≤ threshold or candidates exhaust. Track replacements by `id(part)`. The loop accumulator is tracked in message-only local-char space (`starting_tokens = estimate_message_tokens(messages)` — the non-spillable floor is excluded from the spill budget); the floor-inclusive `static_floor_tokens + local` is the trigger only, not the loop baseline. After spill, `effective_after = static_floor_tokens + local_after` reconstructs the floor-inclusive post-spill estimate for the terminal span and `fallback_to_summarize` gate.
+5. Force-spill via `spill_if_oversized(content, deps.tool_results_dir, tool_name, force=True)` until aggregate ≤ threshold or candidates exhaust. Track replacements by `id(part)`. The loop accumulates **freed chars** as an int and floor-divides **once** (`aggregate = starting_tokens − chars_freed // CHARS_PER_TOKEN`) — both the in-loop `aggregate ≤ threshold` break and the terminal value use this single non-drifting division, not a per-item floor-division. The accumulator is tracked in message-only local-char space (`starting_tokens = estimate_message_tokens(messages)` — the non-spillable floor is excluded from the spill budget); the floor-inclusive `static_floor_tokens + local` is the trigger only, not the loop baseline. After spill, `effective_after = static_floor_tokens + local_after` reconstructs the floor-inclusive post-spill estimate for the terminal span and `fallback_to_summarize` gate.
 6. Apply rewrites via `_rewrite_tool_returns(messages, len(messages), replacement_for=lambda p: spilled.get(id(p)))` — only messages with rewritten parts are rebuilt; unchanged messages pass through verbatim.
 
 **Span.** `tool_budget.spill_largest_tool_results` — emitted by tracer `co-cli.tool_budget` on every call. Attributes: `budget.context_window_tokens`, `request.threshold_tokens / tokens_before / local_tokens / static_floor_tokens / tail_start / tail_protected_count / tokens_after / candidates_count / spillable_count / spilled_count / spill_errors / spill_fired (bool) / skip_reason`.
@@ -427,10 +427,17 @@ proactive_window_processor — full path
           marker, fall through to STEP 3; never skips the trim)
 
   ─ STEP 3: boundary planner (plan_compaction_boundaries) ────────
-    budget       = resolve_compaction_budget(deps)    (= model_max_ctx)
-    head_end     = find_first_run_end(messages) + 1
-    groups       = group_by_turn(messages)            e.g., [G0, G1, G2, G3]
-    tail_budget  = tail_fraction × budget             e.g., 0.10 × 32K ≈ 3.2K
+    budget         = resolve_compaction_budget(deps)    (= model_max_ctx)
+    head_end       = find_first_run_end(messages) + 1
+    groups         = group_by_turn(messages)            e.g., [G0, G1, G2, G3]
+    usable_trigger = max(0, int(compaction_ratio × budget) − static_floor_tokens)
+    tail_budget    = tail_fraction / compaction_ratio × usable_trigger
+                       ↑ FLOOR-AWARE: sized off the usable trigger headroom, not the
+                         raw window. Reduces to tail_fraction × budget at static_floor=0.
+                         e.g. ratio 0.50, budget 32K, floor 0, tail_fraction 0.20:
+                              usable=16K → tail = 0.20/0.50 × 16K ≈ 6.5K
+                         The planner is pure, so the caller passes static_floor_tokens
+                         (deps) and compaction_ratio (cfg) as keyword args.
 
     if len(groups) < _MIN_RETAINED_TURN_GROUPS + 1 (= 2)
         → return None                  (nothing to drop)
@@ -448,7 +455,11 @@ proactive_window_processor — full path
         if G3 alone = 10K > 6.5K, len=1 ≥ min=1 → keep anyway
 
   ─ STEP 4: assembly (compact_messages — see §2.6) ───────────────
-    summary = _gated_summarize_or_none(messages[head_end:tail_start]) if summarize else None
+    focus   = _resolve_proactive_focus(ctx, messages)
+                ↑ in-progress todo, else the latest real user message. Skips
+                  UserPromptParts that are compaction markers (summary/static) or
+                  the todo snapshot, so focus never anchors on inserted boilerplate
+    summary = _gated_summarize_or_none(messages[head_end:tail_start], focus) if summarize else None
                 ↑ anti-thrash gate passes summarize=False → static marker, no LLM
     result  = head | marker | [todo_snapshot] | tail
 
@@ -456,18 +467,38 @@ proactive_window_processor — full path
     savings = (tokens_before − tokens_after) / tokens_before
                 tokens_before = token_count                       (floor-inclusive realtime local)
                 tokens_after  = static_floor_tokens + estimate_message_tokens(result)
-                ↑ both bases floor-inclusive — no savings overstatement
+                ↑ both SAVINGS bases floor-inclusive — no overstatement. NOTE the
+                  intentional basis asymmetry vs STEP 3: the TAIL budget is floor-AWARE
+                  (subtracts the floor from usable headroom) while SAVINGS stays
+                  floor-INCLUSIVE (floor on both sides). Different levers, different
+                  bases, by design — a future editor must not collapse them to one.
     if savings ≥ min_proactive_savings
         consecutive_low_yield = 0      (re-arm)
     else
         consecutive_low_yield += 1     (steps toward thrash gate)
+    runtime.current_request_tokens_estimate = tokens_after   ← status-line write-back
+                ↑ L3 now writes the post-compaction size (was L2-spill-only); the
+                  status line reflects the compacted size after a proactive pass
 
   ─ STEP 6: commit (last step before return) ─────────────────────
     commit_compaction(ctx, result)           ← sole writer of:
       runtime.compaction_applied_this_turn  = True
+    _record_proactive_outcome returns tokens_after to the processor.
+
+  ─ STEP 7: no-progress guard (convergence) ──────────────────────
+    if tokens_after ≥ token_count            (the applied pass did not shrink)
+        log.error(...) ; span "compaction.no_progress_escalation" = True
+        recovered = await recover_overflow_history(ctx, messages)
+        return recovered if recovered is not None else messages   (FAIL-OPEN)
+    ↑ Prevents a static-marker-per-request treadmill: an applied pass that holds or
+      grows tokens escalates ONCE to strip-then-summarize recovery instead of
+      re-firing an identical no-op next request. STEP 6 already committed + bumped
+      the thrash counter; recover_overflow_history re-commits (idempotent) and resets
+      thrash state — the desired post-recovery state, not a double-count. The
+      anti-thrash static path (summarize=False) flows through this same guard.
 ```
 
-All STEPs above live inside `proactive_window_processor` — the trigger gates (threshold + anti-thrash gate), trigger-check OTEL span, and the post-compaction policy (savings, status callback, OTEL execution attributes, thrash counter, commit) are co-located. STEP 4 calls `compact_messages` — the shared assembly primitive also used by recovery PATH 2 and `/compact`. STEPs 5–6 are bundled in the private helper `_record_proactive_outcome`, which is proactive-only (recovery and `/compact` skip it: they don't track savings, don't fire the closing callback, and `/compact` resets the thrash counter unconditionally upstream). See §2.6 for the assembly logic, enrichment helper, summarizer LLM call, and circuit breaker.
+All STEPs above live inside `proactive_window_processor` — the trigger gates (threshold + anti-thrash gate), trigger-check OTEL span, and the post-compaction policy (savings, status callback, OTEL execution attributes, thrash counter, commit) are co-located. STEP 4 calls `compact_messages` — the shared assembly primitive also used by recovery PATH 2 and `/compact`. STEPs 5–6 are bundled in the private helper `_record_proactive_outcome` (which returns `tokens_after`), proactive-only (recovery and `/compact` skip it: they don't track savings, don't fire the closing callback, and `/compact` resets the thrash counter unconditionally upstream). STEP 7's no-progress guard lives in `proactive_window_processor` itself, reading the returned `tokens_after` to decide escalation. See §2.6 for the assembly logic, enrichment helper, summarizer LLM call, and circuit breaker.
 
 **Single-writer atomicity.** STEPs 4 and 5 happen *before* STEP 6's `commit_compaction` call. If anything between STEP 4 and STEP 6 raises (e.g. `estimate_message_tokens` on malformed content, savings calc edge cases), the exception propagates with runtime untouched; `proactive_window_processor`'s bare `except` returns the original `messages` reference. `commit_compaction` itself computes the token estimate before any write so a token-estimator failure inside the helper also leaves runtime untouched. Partial-commit state cannot leak across turns.
 
@@ -478,7 +509,7 @@ All STEPs above live inside `proactive_window_processor` — the trigger gates (
 
 **Budget resolution.** `resolve_compaction_budget(deps)` returns `deps.model_max_ctx` (Ollama probe capped by `config.llm.max_ctx`, set at bootstrap).
 
-**Boundary planner invariant.** `_MIN_RETAINED_TURN_GROUPS = 1` is non-configurable: the last turn group is retained unconditionally even when its tokens alone exceed `tail_fraction × budget`. Since `group_by_turn` splits at every `UserPromptPart`, this also guarantees `tail_start ≤ latest_user_idx` — active-user anchoring needs no explicit step.
+**Boundary planner invariant.** `_MIN_RETAINED_TURN_GROUPS = 1` is non-configurable: the last turn group is retained unconditionally even when its tokens alone exceed the floor-aware `tail_budget`. Since `group_by_turn` splits at every `UserPromptPart`, this also guarantees `tail_start ≤ latest_user_idx` — active-user anchoring needs no explicit step. This unconditional retention is exactly what STEP 7's no-progress guard backstops: when the retained last group alone keeps `tokens_after ≥ token_count`, the proactive pass escalates to recovery rather than re-firing.
 
 Edge cases: returns `None` when `len(groups) < 2` or when the backward walk produces `tail_start ≤ head_end` (head and tail would overlap).
 
@@ -603,7 +634,7 @@ Single-tier strip-then-summarize. Inlined in `run_turn`'s overflow branch (no se
 
 1. **Strip** every `ToolReturnPart` to a per-tool semantic marker via `strip_all_tool_returns`. No recency cap, no boundary protection — every tool return, including writes / approvals / memory ops, collapses to a one-line stub. Pairing is preserved (only `.content` is rewritten; `tool_name` and `tool_call_id` survive). Idempotent: returns whose content is already a marker (`is_cleared_marker(content)` true) pass through unchanged so re-running over an EVICT-stripped history does not degrade the size signal. Differs from `evict_old_tool_results` only in scope (universal vs. recency-protected), not in tool selectivity — both share the same content-shape eligibility.
 2. **PATH 1 — Budget gate.** If `estimate_message_tokens(stripped) <= budget`, call `commit_compaction(ctx, stripped)` and return the stripped history. No LLM call, no marker.
-3. **PATH 2 — Summarize.** Else run `plan_compaction_boundaries(stripped, budget, tail_fraction)`; if the planner returns `None` (`len(groups) < 2`, or `tail_start <= head_end`), terminal error. Otherwise call `compact_messages(ctx, stripped, bounds, focus=None)` to compose the marker and assemble the result, then `commit_compaction(ctx, result)` to write runtime atomically.
+3. **PATH 2 — Summarize.** Else run the floor-aware `plan_compaction_boundaries(stripped, budget, tail_fraction, static_floor_tokens=deps.static_floor_tokens, compaction_ratio=cfg.compaction_ratio)`; if the planner returns `None` (`len(groups) < 2`, or `tail_start <= head_end`), terminal error. Otherwise call `compact_messages(ctx, stripped, bounds, focus=None)` to compose the marker and assemble the result, then `commit_compaction(ctx, result)` to write runtime atomically.
 4. **Reset thrash.** Both return paths call `_reset_thrash_state(ctx)` — recovery proves the system needed to compact, so the next proactive run is unblocked. The shared primitive `compact_messages` does NOT touch thrash state (it's policy-free); proactive callers manage their own thrash gate via `_record_proactive_outcome`.
 
 **Message-list shape at each path:**
@@ -651,6 +682,7 @@ Peer parity: hermes embeds an inline `Use file tools to read the full file.` in 
 | `compaction_skip_count >= 3` | Circuit breaker tripped — static markers used; LLM probed once every 10 skips |
 | `ctx.deps.model is None` (sub-agent context) | Static marker without LLM attempt |
 | `plan_compaction_boundaries` returns `None` (proactive) | Return messages unchanged; provider may then reject → overflow path |
+| Applied proactive pass makes no progress (`tokens_after ≥ token_count`) | Escalate once to `recover_overflow_history` (re-commits + resets thrash); fail-open to the original `messages` if recovery returns `None` |
 | `plan_compaction_boundaries` returns `None` (overflow, after strip) | `recover_overflow_history` returns `None`; caller emits `"Context overflow — unrecoverable."` |
 | Second overflow in same turn | Terminal error (gated by `overflow_recovery_attempted`) |
 
@@ -671,7 +703,7 @@ Peer parity: hermes embeds an inline `Use file tools to read the full file.` in 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
 | `compaction.compaction_ratio` | `CO_COMPACTION_RATIO` | `0.50` | Fraction of budget above which `proactive_window_processor` fires |
-| `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.10` | Fraction of budget targeted for the preserved tail (≈20% of the operational budget = `compaction_ratio` × budget) |
+| `compaction.tail_fraction` | `CO_COMPACTION_TAIL_FRACTION` | `0.10` | Fraction of budget targeted for the preserved tail. Sized off the *usable* trigger headroom, not the raw window: `tail_budget = tail_fraction / compaction_ratio × usable_trigger`, `usable_trigger = max(0, compaction_ratio × budget − static_floor_tokens)`. Reduces to `tail_fraction × budget` at a zero floor. |
 | `compaction.spill_ratio` | `CO_COMPACTION_SPILL_RATIO` | `0.50` | Fraction of context window above which `spill_largest_tool_results` force-spills tool returns. Validated `≤ compaction_ratio` so post-spill aggregate falls below proactive's trigger and proactive fast-paths. |
 | `compaction.min_proactive_savings` | `CO_COMPACTION_MIN_PROACTIVE_SAVINGS` | `0.10` | Minimum token savings fraction to count a proactive compaction as effective (anti-thrashing) |
 | `compaction.proactive_thrash_window` | `CO_COMPACTION_PROACTIVE_THRASH_WINDOW` | `2` | Consecutive low-yield proactive compactions before anti-thrashing gate activates |
@@ -785,6 +817,8 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `_CallSeamToolset.call_tool`: MCP results above threshold spilled to disk; below-threshold pass through; native results not coerced (their tools call the helper themselves) | `tests/test_flow_spill.py` |
 | `spill_largest_tool_results`: below-threshold fast path; largest-first spill across full message list; cross-batch accumulation (multiple `ModelRequest`s); already-spilled exclusion; tail protection (fresh read in last turn group survives while an aged read spills; protected tail alone over threshold defers without stubbing; single turn group → no protection); OTEL span `tool_budget.spill_largest_tool_results` | `tests/test_flow_compaction_spill_largest_tool_results.py` |
 | `spill_largest_tool_results` cached threshold: `spill_threshold_tokens` from `CoDeps` used without recompute | `tests/test_flow_compaction_spill_largest_tool_results.py` |
+| `spill_largest_tool_results` accumulator: ≥3 spills landing under threshold classified `below_threshold` (single floor-division, no per-item drift) | `tests/test_flow_compaction_spill_largest_tool_results.py` |
+| `spill_largest_tool_results` `spill_errors`: many ≤`TOOL_RESULT_PREVIEW_CHARS` returns emit `spill_errors == 0` (too-small excluded, not counted as I/O failures) | `tests/test_flow_compaction_spill_largest_tool_results.py` |
 | L0 tool-call cap: `MAX_TOOL_CALLS_PER_MODEL_REQUEST` constant pinned; allow up to cap; reject above cap with JSON payload | `tests/test_flow_tool_call_limit.py` |
 | L0 run_step counter: resets on `ctx.run_step` transition | `tests/test_flow_tool_call_limit.py` |
 | `dedup_tool_results`: identical return collapses to back-reference; short content and distinct content pass through | `tests/test_flow_compaction_history_processors.py` |
@@ -798,11 +832,15 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | Realtime-only trigger: a small payload does not compact even when the prior response reports a high provider input count | `tests/test_flow_compaction_proactive.py` |
 | Spill→summarize chain: after L2 spill fits the payload, L3 fast-paths (below_threshold, zero summarizer calls) | `tests/test_flow_compaction_proactive.py` |
 | Savings basis: low-yield pass increments the thrash counter (both bases floor-inclusive — no overstatement) | `tests/test_flow_compaction_proactive.py` |
+| Status write-back: after an applied L3 pass, `current_request_tokens_estimate` equals the post-compaction `effective_request_tokens(result)` | `tests/test_flow_compaction_proactive.py` |
+| No-progress guard: an applied pass with `tokens_after ≥ token_count` escalates to `recover_overflow_history` exactly once; a `None` recovery returns `messages` unchanged (fail-open) | `tests/test_flow_compaction_proactive.py` |
+| Focus resolution: skips compaction markers and the todo snapshot, falling through to the latest real user message | `tests/test_flow_compaction_proactive.py` |
 | Circuit breaker cadence: counts 0–2 open, 3–12 closed, 13 probe, 14–22 closed, 23 probe | `tests/test_flow_compaction_proactive.py` |
 | Circuit breaker counter resets to 0 after a successful (non-empty) LLM compaction | `tests/test_flow_compaction_proactive.py` |
 | Boundary planner: valid `(head_end, tail_start, dropped_count)` for 3-turn history | `tests/test_flow_compaction_boundaries.py` |
 | Boundary planner: returns `None` when only 1 turn group (nothing to drop) | `tests/test_flow_compaction_boundaries.py` |
 | Boundary planner: oversized last-group retained unconditionally even over tail budget | `tests/test_flow_compaction_boundaries.py` |
+| Boundary planner floor-aware tail: a large `static_floor_tokens` yields a strictly smaller tail (larger `tail_start`) than the floor-blind call | `tests/test_flow_compaction_boundaries.py` |
 | `find_first_run_end` anchors at first `TextPart` response, skips tool-only responses | `tests/test_flow_compaction_boundaries.py` |
 | `estimate_message_tokens` scales with content length; returns 0 for empty list | `tests/test_flow_compaction_summarization.py` |
 | `effective_request_tokens` adds `static_floor_tokens` to the message-list estimate; default floor (0) equals `estimate_message_tokens` | `tests/test_flow_compaction_summarization.py` |

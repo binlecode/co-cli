@@ -99,6 +99,39 @@ def test_last_turn_group_always_retained_even_over_tail_budget() -> None:
     )
 
 
+def test_floor_aware_tail_strictly_smaller_than_floor_blind() -> None:
+    """A large static floor shrinks the planned tail below the floor-blind result.
+
+    The tail must fit the usable trigger headroom (compaction_ratio * budget minus
+    the static floor), not the raw window. With a large floor the usable headroom
+    collapses, so the planner retains strictly fewer tail groups (larger tail_start)
+    than the floor-blind call -- preventing post-compaction headroom from undershooting
+    the next trigger.
+    """
+    messages: list = []
+    for i in range(8):
+        messages.append(_req(f"user turn {i} " + "u" * 150))
+        messages.append(_resp(f"model turn {i} " + "m" * 150))
+
+    # Defaults (static_floor_tokens=0, compaction_ratio=1.0) -> tail_budget = 0.4 * 1000 = 400.
+    blind = plan_compaction_boundaries(messages, budget=1000, tail_fraction=0.4)
+    # usable_trigger = max(0, 0.5*1000 - 400) = 100 -> tail_budget = 0.4/0.5 * 100 = 80.
+    aware = plan_compaction_boundaries(
+        messages,
+        budget=1000,
+        tail_fraction=0.4,
+        static_floor_tokens=400,
+        compaction_ratio=0.5,
+    )
+
+    assert blind is not None
+    assert aware is not None
+    # Floor-aware retains strictly fewer tail groups -> larger tail_start -> more dropped.
+    assert aware[1] > blind[1], (
+        f"floor-aware tail_start ({aware[1]}) must exceed floor-blind ({blind[1]})"
+    )
+
+
 def test_find_first_run_end_anchors_at_first_text_response() -> None:
     """find_first_run_end skips tool-only responses and anchors at the first TextPart response.
 

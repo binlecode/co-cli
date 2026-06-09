@@ -60,7 +60,11 @@ from co_cli.context.summarization import (
 from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.observability.tracing import current_span
-from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, spill_if_oversized
+from co_cli.tools.tool_io import (
+    PERSISTED_OUTPUT_TAG,
+    TOOL_RESULT_PREVIEW_CHARS,
+    spill_if_oversized,
+)
 
 COMPACTABLE_KEEP_RECENT = 5
 """Keep the N most-recent tool returns per tool name; clear older.
@@ -347,10 +351,12 @@ def _spill_largest_first(
     ``_rewrite_tool_returns``.
     """
     spilled_by_id: dict[int, ToolReturnPart] = {}
+    chars_freed = 0
     aggregate = starting_tokens
     spilled_count = 0
     spill_errors = 0
     for part in sorted(spillable, key=lambda p: len(p.content), reverse=True):
+        aggregate = starting_tokens - chars_freed // CHARS_PER_TOKEN
         if aggregate <= threshold:
             break
         old_content = part.content
@@ -368,8 +374,9 @@ def _spill_largest_first(
             content=new_content,
             tool_call_id=part.tool_call_id,
         )
-        aggregate -= (len(old_content) - len(new_content)) // CHARS_PER_TOKEN
+        chars_freed += len(old_content) - len(new_content)
         spilled_count += 1
+    aggregate = starting_tokens - chars_freed // CHARS_PER_TOKEN
     return spilled_by_id, aggregate, spilled_count, spill_errors
 
 
@@ -419,14 +426,22 @@ def spill_largest_tool_results(
 
     budget = resolve_compaction_budget(deps)
     cfg = deps.config.compaction
-    boundary = plan_compaction_boundaries(messages, budget, cfg.tail_fraction)
+    boundary = plan_compaction_boundaries(
+        messages,
+        budget,
+        cfg.tail_fraction,
+        static_floor_tokens=deps.static_floor_tokens,
+        compaction_ratio=cfg.compaction_ratio,
+    )
     tail_start = boundary[1] if boundary else len(messages)
 
     candidates = _collect_tool_return_candidates(messages)
     spillable = [
         part
         for index, part in candidates
-        if index < tail_start and not part.content.startswith(PERSISTED_OUTPUT_TAG)
+        if index < tail_start
+        and not part.content.startswith(PERSISTED_OUTPUT_TAG)
+        and len(part.content) > TOOL_RESULT_PREVIEW_CHARS
     ]
     tail_protected_count = sum(1 for index, _ in candidates if index >= tail_start)
 

@@ -24,7 +24,9 @@ from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.context.history_processors import spill_largest_tool_results
+from co_cli.context.summarization import estimate_message_tokens
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
+from co_cli.observability import tracing
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
@@ -65,6 +67,24 @@ def _tool_request(tool_name: str, call_id: str, content: str) -> ModelRequest:
     return ModelRequest(
         parts=[ToolReturnPart(tool_name=tool_name, content=content, tool_call_id=call_id)]
     )
+
+
+def _run_capturing_event(
+    deps: CoDeps, messages: list[ModelMessage]
+) -> tuple[list[ModelMessage], dict]:
+    """Run the processor inside a real span and return (out, terminal event attrs).
+
+    Uses the live tracing stack (push_span/pop_span) — no mocks — so the
+    ``tool_budget.spill_largest_tool_results`` event the processor emits via
+    ``current_span().add_event`` is captured on the span dict.
+    """
+    span = tracing.push_span("test.spill")
+    try:
+        out = spill_largest_tool_results(_ctx(deps), messages)
+    finally:
+        tracing.pop_span()
+    events = [e for e in span["events"] if e["name"] == "tool_budget.spill_largest_tool_results"]
+    return out, events[-1]["attributes"]
 
 
 def _collect_returns(messages: list[ModelMessage]) -> dict[str, str]:
@@ -369,3 +389,98 @@ def test_large_realtime_spills_and_post_spill_estimate_is_realtime(tmp_path: Pat
     returns = _collect_returns(result)
     assert returns["tc1"].startswith(PERSISTED_OUTPUT_TAG)
     assert deps.runtime.current_request_tokens_estimate <= 8_000
+
+
+def _spill_content_lengths_for_drift(tmp_path: Path) -> list[int]:
+    """Pick three content lengths whose freed-char remainders sum to a clean multiple of 4.
+
+    The persisted-stub length depends on the (path-dependent) tool_results_dir,
+    so it is measured at runtime. Freed-char remainders are tuned to ``1, 1, 2``
+    (mod 4): the old per-item floor-division discards each remainder separately
+    (losing a whole token), while a single final division recovers it — a
+    1-token gap the threshold is wedged into. Because the remainders sum to a
+    multiple of 4, the single-division aggregate equals a fresh full recount
+    exactly (within 0 tokens), pinning the success_signal.
+    """
+    from co_cli.tools.tool_io import spill_if_oversized
+
+    probe = "z" * 30_000
+    stub_len = len(spill_if_oversized(probe, tmp_path, "shell_exec", force=True))
+    base = 30_000
+    target_remainders = [1, 1, 2]
+    lengths: list[int] = []
+    for i, remainder in enumerate(target_remainders):
+        length = base + i * 1_000
+        freed = length - stub_len
+        length += (remainder - freed % 4) % 4
+        lengths.append(length)
+    return lengths
+
+
+@pytest.mark.asyncio
+async def test_three_spills_under_threshold_classified_below_not_fallback(tmp_path: Path):
+    """Three spills land just under threshold: classified done (empty skip_reason).
+
+    Content lengths are tuned (at runtime, accounting for the path-dependent
+    stub size) so each freed amount is ``≡ 3 (mod 4)``. With the old per-item
+    floor-division the three terms each drop 3 chars, leaving the aggregate 2
+    tokens HIGHER than a single final division. The threshold is wedged into
+    that drift window — exactly one below the drift-free aggregate — so the
+    buggy per-item path would misclassify this as ``fallback_to_summarize``
+    while the correct single-division path classifies it done (empty
+    skip_reason). Single turn group → no tail protection, all three spill.
+    """
+    lengths = _spill_content_lengths_for_drift(tmp_path)
+    chars = ["a", "b", "c"]
+    messages: list[ModelMessage] = [_user_request("do stuff")]
+    for i, (length, ch) in enumerate(zip(lengths, chars, strict=True)):
+        cid = f"tc{i}"
+        messages.append(_tool_response("shell_exec", cid))
+        messages.append(_tool_request("shell_exec", cid, ch * length))
+
+    probe_messages = [type(m)(parts=list(m.parts)) for m in messages]
+    probe_deps = _make_deps(tmp_path, threshold_tokens=1)
+    probe_out, _ = _run_capturing_event(probe_deps, probe_messages)
+    drift_free_aggregate = estimate_message_tokens(probe_out)
+
+    deps = _make_deps(tmp_path, threshold_tokens=drift_free_aggregate)
+
+    out, attrs = _run_capturing_event(deps, messages)
+
+    spilled = sum(1 for c in _collect_returns(out).values() if PERSISTED_OUTPUT_TAG in c)
+    assert spilled == 3, "all three returns spill in a single un-protected turn group"
+    assert attrs["request.skip_reason"] == "", (
+        "drift-free single division lands at threshold — must classify done, "
+        "not fallback_to_summarize"
+    )
+    assert estimate_message_tokens(out) == deps.runtime.current_request_tokens_estimate, (
+        "spill terminal decision must match a fresh full recount within 0 tokens"
+    )
+
+
+@pytest.mark.asyncio
+async def test_many_small_returns_emit_zero_spill_errors(tmp_path: Path):
+    """Many ≤1500-char tool returns are not spill candidates: spill_errors stays 0.
+
+    Each return is below ``TOOL_RESULT_PREVIEW_CHARS`` (1500), so
+    ``spill_if_oversized`` would return it unchanged — formerly counted as a
+    spill I/O error per candidate. With the size pre-filter these are excluded
+    from the spillable set entirely, so the terminal reason is ``all_spilled``
+    (nothing spillable) and zero errors are recorded. Threshold is forced low
+    so the processor proceeds past the fast path.
+    """
+    messages: list[ModelMessage] = [_user_request("do stuff")]
+    for i in range(8):
+        cid = f"tc{i}"
+        messages.append(_tool_response("shell_exec", cid))
+        messages.append(_tool_request("shell_exec", cid, "x" * 1_400))
+    deps = _make_deps(tmp_path, threshold_tokens=100)
+
+    out, attrs = _run_capturing_event(deps, messages)
+
+    assert out is messages, "no return is large enough to spill — messages unchanged"
+    assert attrs["request.spill_errors"] == 0, (
+        "too-small returns must not count as spill I/O errors"
+    )
+    returns = _collect_returns(out)
+    assert all(PERSISTED_OUTPUT_TAG not in c for c in returns.values())

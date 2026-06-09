@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.327]
+
+### Compaction production-logic fixes (convergence guard + floor-aware tail + metric fixes)
+
+- **No-progress convergence guard (ISSUE-2)**: after an applied proactive pass, if `tokens_after >= token_count` the processor escalates **once** to `recover_overflow_history` (strip-then-summarize) instead of re-firing an identical no-op — kills the static-marker-per-request treadmill a small-window model could enter. `_record_proactive_outcome` now returns `tokens_after`; the guard is fail-open (a `None` recovery returns the original `messages`) and reachable from both the summarize and anti-thrash static paths.
+- **Floor-aware tail sizing (ISSUE-1)**: `plan_compaction_boundaries` sizes the tail off the *usable* trigger headroom (`tail_fraction / compaction_ratio × usable_trigger`, `usable_trigger = max(0, compaction_ratio × budget − static_floor_tokens)`) instead of the raw window, so post-compaction headroom below the next trigger no longer undershoots. Two pure-function kwargs (`static_floor_tokens=0`, `compaction_ratio=1.0`) reduce to the legacy `tail_fraction × budget` at defaults; all three callers pass the real config. Both `CompactionSettings` Field docstrings corrected.
+- **Spill accumulator drift (ISSUE-4)**: `_spill_largest_first` accumulates freed chars and floor-divides once (`starting_tokens − chars_freed // CHARS_PER_TOKEN`) — no per-item rounding drift in the terminal classification.
+- **`spill_errors` semantics (ISSUE-6)**: spillable candidates pre-filtered to `> TOOL_RESULT_PREVIEW_CHARS`, so `request.spill_errors` counts only genuine I/O failures, never "too small to spill".
+- **L3 status write-back (ISSUE-7)**: a proactive pass writes the post-compaction estimate to `current_request_tokens_estimate`, so the status line reflects the compacted size.
+- **Focus marker-skip (ISSUE-5)**: `_resolve_proactive_focus` skips compaction markers and the todo snapshot (and guards non-str content) so focus anchors on a real user message.
+- **ISSUE-8 / eval re-pin (TASK-7)**: `eval_context_stability.py` re-run validated the floor-aware tail (CS.A `SOFT_FAIL → PASS`, coherence recalled); levers kept (`tail_fraction=0.10`, `min_proactive_savings=0.10`, floor-inclusive savings basis). `docs/specs/compaction.md` synced.
+
 ## [0.8.326]
 
 ### Prior-summary dedicated `PRIOR SUMMARY` slot — fix carry-forward erosion

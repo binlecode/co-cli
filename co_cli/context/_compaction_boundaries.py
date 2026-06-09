@@ -131,6 +131,9 @@ def plan_compaction_boundaries(
     messages: list[ModelMessage],
     budget: int,
     tail_fraction: float,
+    *,
+    static_floor_tokens: int = 0,
+    compaction_ratio: float = 1.0,
 ) -> CompactionBoundaries | None:
     """Plan ``(head_end, tail_start, dropped_count)`` for a compaction pass.
 
@@ -139,12 +142,22 @@ def plan_compaction_boundaries(
       2. ``groups = group_by_turn(messages)``; abort when
          ``len(groups) < _MIN_RETAINED_TURN_GROUPS + 1``.
       3. Walk groups from the end, accumulating token estimates. Stop BEFORE
-         adding a group that would push accumulated tokens over
-         ``tail_fraction * budget``, UNLESS fewer than ``_MIN_RETAINED_TURN_GROUPS``
-         groups have been accumulated. In that case the group is retained
-         regardless.
+         adding a group that would push accumulated tokens over ``tail_budget``,
+         UNLESS fewer than ``_MIN_RETAINED_TURN_GROUPS`` groups have been
+         accumulated. In that case the group is retained regardless.
       4. ``tail_start = accumulated_groups[0].start_index``.
       5. Abort when ``tail_start <= head_end`` (head/tail overlap — nothing to drop).
+
+    Floor-aware tail sizing: the tail must fit the *usable* trigger headroom, not
+    the raw window. ``usable_trigger = max(0, int(budget * compaction_ratio) -
+    static_floor_tokens)`` is the message-token room below the trigger after the
+    fixed instruction+schema floor is reserved; ``tail_budget = tail_fraction /
+    compaction_ratio * usable_trigger`` sizes the tail as ``tail_fraction`` of the
+    full window expressed in that usable frame, so post-compaction headroom below
+    the next trigger does not undershoot. The pure function cannot read config, so
+    the floor and ratio are passed in. At the defaults (``static_floor_tokens=0``,
+    ``compaction_ratio=1.0``) the formula reduces to ``tail_fraction * budget`` —
+    the floor-blind behavior — keeping positional callers unchanged.
 
     Active-user anchoring is structurally guaranteed and requires no explicit
     step: ``group_by_turn`` splits at every ``UserPromptPart``, so the last
@@ -167,7 +180,8 @@ def plan_compaction_boundaries(
     if len(groups) < _MIN_RETAINED_TURN_GROUPS + 1:
         return None
 
-    tail_budget = tail_fraction * budget
+    usable_trigger = max(0, int(budget * compaction_ratio) - static_floor_tokens)
+    tail_budget = tail_fraction / compaction_ratio * usable_trigger
     acc_groups: list[TurnGroup] = []
     acc_tokens = 0
     for group in reversed(groups):

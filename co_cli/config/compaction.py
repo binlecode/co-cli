@@ -30,9 +30,10 @@ class CompactionSettings(BaseModel):
             "Fraction of budget above which the proactive mid-turn trigger fires. "
             "Post-compact state ≈ tail_fraction + head (~3%) + marker (~3%); "
             "headroom per pass ≈ compaction_ratio - post_compact_state. "
-            "At 0.50 with a 32k context, the trigger fires at ~16k tokens; "
-            "tail budget = tail_fraction × 32k ≈ 3.2k tokens (≈20% of the 16k trigger); "
-            "headroom per pass ≈ 34% (message-only; the live trigger also counts the fixed "
+            "At 0.50 with a 32k context, the trigger fires at ~16k tokens; the preserved "
+            "tail is sized off the usable trigger headroom (compaction_ratio × budget minus "
+            "the fixed instruction+schema floor), not the raw window — see tail_fraction. "
+            "Headroom per pass ≈ 34% (message-only; the live trigger also counts the fixed "
             "instruction+schema floor, which this estimate excludes)."
         ),
     )
@@ -40,10 +41,13 @@ class CompactionSettings(BaseModel):
         default=0.10,
         description=(
             "Fraction of budget targeted for the preserved tail in plan_compaction_boundaries. "
-            "Sized so the tail is ~20% of the operational budget (compaction_ratio × budget): "
-            "at 0.10 with compaction_ratio 0.50, tail = 0.10 × budget = 20% of the trigger point, "
-            "not 20% of the full window. Must be < compaction_ratio. Cross-compaction memory "
-            "lives in the iterative summary marker, so the tail carries only the recent reasoning chain."
+            "The planner sizes the tail off the *usable* trigger headroom, not the raw window: "
+            "tail_budget = tail_fraction / compaction_ratio × usable_trigger, where "
+            "usable_trigger = max(0, compaction_ratio × budget − static_floor_tokens). At a zero "
+            "floor this reduces to tail_fraction × budget; a large static floor shrinks the tail "
+            "so post-compaction headroom below the next trigger does not undershoot. Must be < "
+            "compaction_ratio. Cross-compaction memory lives in the iterative summary marker, so "
+            "the tail carries only the recent reasoning chain."
         ),
     )
     spill_ratio: float = Field(

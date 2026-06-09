@@ -47,7 +47,11 @@ from co_cli.context.compaction import (
     summary_marker,
 )
 from co_cli.context.history_processors import spill_largest_tool_results
-from co_cli.context.summarization import _build_summarizer_prompt, serialize_messages
+from co_cli.context.summarization import (
+    _build_summarizer_prompt,
+    effective_request_tokens,
+    serialize_messages,
+)
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
 from co_cli.observability import tracing
@@ -297,6 +301,111 @@ def test_savings_uses_floor_inclusive_basis() -> None:
     assert deps.runtime.consecutive_low_yield_proactive_compactions == 1, (
         "Floor-inclusive savings (5%) is below the 10% min — counter must increment"
     )
+
+
+def test_status_estimate_written_back_after_proactive() -> None:
+    """After a proactive pass, runtime.current_request_tokens_estimate is the compacted size.
+
+    The status line reads current_request_tokens_estimate; an L3 pass must overwrite
+    the stale pre-compaction (L2 spill) estimate with the post-compaction count, else
+    the status line keeps reporting the larger pre-compaction size.
+    """
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_TIGHT_MODEL,
+        config=_tight_settings(),
+        session=CoSessionState(),
+        static_floor_tokens=500,
+    )
+    # Seed a stale (pre-compaction) estimate to prove the write-back overwrites it.
+    deps.runtime.current_request_tokens_estimate = 999_999
+    ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
+    result = [_resp("x" * 1800)]
+
+    returned = _record_proactive_outcome(ctx, [_req("q")], result, "a summary", token_count=1000)
+
+    expected = effective_request_tokens(deps, result)
+    assert deps.runtime.current_request_tokens_estimate == expected, (
+        "current_request_tokens_estimate must equal the post-compaction effective size"
+    )
+    assert returned == expected, "_record_proactive_outcome must return tokens_after"
+
+
+def _no_progress_messages() -> list[ModelMessage]:
+    """A transcript where the applied static-marker pass cannot shrink the payload.
+
+    Head pins [u0, r0] (first run). The only droppable middle is a 1-char user
+    message; the huge final turn group is retained unconditionally. Replacing the
+    tiny middle with a (larger) static marker means tokens_after >= token_count —
+    a genuine no-progress pass, not an engineered counter.
+    """
+    return [
+        _req("u"),
+        _resp("r"),
+        _req("m"),
+        _req("X" * 2000),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_progress_escalates_to_recovery_once(monkeypatch) -> None:
+    """A no-progress applied pass escalates to recover_overflow_history exactly once.
+
+    done_when (plan TASK-5): with a spy on recover_overflow_history, a transcript
+    whose retained last turn group alone exceeds the tail budget calls it exactly
+    once and returns its output — not a re-fired identical no-op proactive pass.
+    model=None keeps the summarizer gated off, so the path is deterministic.
+    """
+    calls: list[list[ModelMessage]] = []
+    sentinel: list[ModelMessage] = [_req("recovered")]
+
+    async def spy(ctx_, messages_):
+        calls.append(messages_)
+        return sentinel
+
+    monkeypatch.setattr("co_cli.context.compaction.recover_overflow_history", spy)
+
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=None,
+        config=_tight_settings(),
+        session=CoSessionState(),
+        model_max_ctx=200,
+    )
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    messages = _no_progress_messages()
+
+    result = await proactive_window_processor(ctx, messages)
+
+    assert len(calls) == 1, "no-progress pass must escalate to recovery exactly once"
+    assert result is sentinel, "processor must return the recovery output"
+
+
+@pytest.mark.asyncio
+async def test_no_progress_recovery_none_is_fail_open(monkeypatch) -> None:
+    """When escalated recovery returns None, the processor returns messages unchanged.
+
+    done_when (plan TASK-5): a None recovery leaves messages unchanged (fail-open).
+    """
+
+    async def none_recovery(ctx_, messages_):
+        return None
+
+    monkeypatch.setattr("co_cli.context.compaction.recover_overflow_history", none_recovery)
+
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=None,
+        config=_tight_settings(),
+        session=CoSessionState(),
+        model_max_ctx=200,
+    )
+    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
+    messages = _no_progress_messages()
+
+    result = await proactive_window_processor(ctx, messages)
+
+    assert result is messages, "fail-open: a None recovery must return the original messages"
 
 
 # --- Circuit breaker gate tests ---
@@ -623,6 +732,58 @@ def test_focus_none_when_no_todo_and_no_messages() -> None:
     result = _resolve_proactive_focus(ctx, [])
 
     assert result is None
+
+
+def test_focus_skips_compaction_marker() -> None:
+    """Focus falls through an inserted compaction marker to the latest real user message.
+
+    Failure mode: a compaction marker is the most-recent UserPromptPart, so focus
+    anchors on marker boilerplate instead of the user's task — every proactive
+    summary after the first compaction loses its on-task anchor.
+    """
+    real = "Z" * 300
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content=real)]),
+        static_marker(3),
+    ]
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(),
+    )
+    ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
+
+    result = _resolve_proactive_focus(ctx, messages)
+
+    assert result == real[-200:]
+
+
+def test_focus_skips_todo_snapshot() -> None:
+    """Focus falls through a todo-snapshot marker (not matched by is_compaction_marker).
+
+    The todo snapshot is NOT a compaction marker, so is_compaction_marker alone
+    would not skip it — TODO_SNAPSHOT_PREFIX must be tested explicitly. Failure
+    mode: focus anchors on the snapshot boilerplate during a pre-input thrash.
+    """
+    real = "W" * 300
+    messages = [
+        ModelRequest(parts=[UserPromptPart(content=real)]),
+        ModelRequest(
+            parts=[UserPromptPart(content=f"{TODO_SNAPSHOT_PREFIX}\n- [ ] do the thing")]
+        ),
+    ]
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=_LLM_MODEL,
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(),
+    )
+    ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
+
+    result = _resolve_proactive_focus(ctx, messages)
+
+    assert result == real[-200:]
 
 
 @pytest.mark.asyncio

@@ -352,15 +352,18 @@ def _record_proactive_outcome(
     *,
     token_count: int,
     summary_skipped: bool = False,
-) -> None:
-    """Apply proactive-specific post-compaction policy.
+) -> int:
+    """Apply proactive-specific post-compaction policy; return the post-pass token count.
 
     Fires the closing status callback, computes savings using ``token_count``
     (the trigger's realtime-local ``effective_request_tokens``), emits execution OTEL attributes
-    onto the wrapper span, updates the anti-thrash counter, then commits
-    runtime as the final step. Any exception before ``commit_compaction``
-    leaves runtime untouched — single-writer atomicity for the "applied"
-    fields.
+    onto the wrapper span, updates the anti-thrash counter, writes the
+    post-compaction estimate back to runtime so the status line reflects the
+    compacted size, then commits runtime as the final step. Returns
+    ``tokens_after`` (the post-compaction ``effective_request_tokens``) so the
+    caller can detect a no-progress pass without recomputing. Any exception
+    before ``commit_compaction`` leaves runtime untouched — single-writer
+    atomicity for the "applied" fields.
 
     The closing status callback has four cases. ``summary_skipped`` is True
     only on the anti-thrash static fallback, where the summarizer was *never
@@ -403,7 +406,9 @@ def _record_proactive_outcome(
     else:
         ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
 
+    ctx.deps.runtime.current_request_tokens_estimate = tokens_after
     commit_compaction(ctx, result)
+    return tokens_after
 
 
 async def recover_overflow_history(
@@ -440,7 +445,13 @@ async def recover_overflow_history(
         return stripped
 
     cfg = ctx.deps.config.compaction
-    bounds = plan_compaction_boundaries(stripped, budget, cfg.tail_fraction)
+    bounds = plan_compaction_boundaries(
+        stripped,
+        budget,
+        cfg.tail_fraction,
+        static_floor_tokens=ctx.deps.static_floor_tokens,
+        compaction_ratio=cfg.compaction_ratio,
+    )
     if bounds is None:
         log.warning(
             "Compaction: overflow recovery boundary planning returned None after strip. "
@@ -468,8 +479,18 @@ def _resolve_proactive_focus(
     for msg in reversed(messages):
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
-                if isinstance(part, UserPromptPart):
-                    return part.content[-200:]
+                if not isinstance(part, UserPromptPart):
+                    continue
+                content = part.content
+                if not isinstance(content, str):
+                    continue
+                # Skip inserted compaction markers (summary/static) and the todo
+                # snapshot — focus must anchor on a real user message, never on
+                # marker boilerplate. is_compaction_marker does not match the todo
+                # snapshot, so TODO_SNAPSHOT_PREFIX is tested explicitly.
+                if is_compaction_marker(content) or content.startswith(TODO_SNAPSHOT_PREFIX):
+                    continue
+                return content[-200:]
     return None
 
 
@@ -572,7 +593,13 @@ async def proactive_window_processor(
             span.set_attribute("compaction.skip_reason", "anti_thrash_gate")
             summarize = False
 
-        bounds = plan_compaction_boundaries(messages, budget, cfg.tail_fraction)
+        bounds = plan_compaction_boundaries(
+            messages,
+            budget,
+            cfg.tail_fraction,
+            static_floor_tokens=ctx.deps.static_floor_tokens,
+            compaction_ratio=cfg.compaction_ratio,
+        )
         if bounds is None:
             log.warning(
                 "Compaction: boundary planning returned None. "
@@ -604,7 +631,7 @@ async def proactive_window_processor(
         if summary_text is not None:
             log.info("Sliding window: summarised %d messages inline", dropped_count)
 
-        _record_proactive_outcome(
+        tokens_after = _record_proactive_outcome(
             ctx,
             messages,
             result,
@@ -612,6 +639,21 @@ async def proactive_window_processor(
             token_count=token_count,
             summary_skipped=not summarize,
         )
+        # No-progress guard: if the applied pass did not shrink the payload, a
+        # re-fired identical pass would thrash forever. Escalate once to overflow
+        # recovery (strip-then-summarize). _record_proactive_outcome already
+        # committed + bumped the thrash counter; recover_overflow_history
+        # re-commits (idempotent) and resets the thrash state — the desired
+        # post-recovery state. Fail-open: a None recovery returns messages.
+        if tokens_after >= token_count:
+            log.error(
+                "Compaction made no progress: tokens %d→%d — escalating to overflow recovery",
+                token_count,
+                tokens_after,
+            )
+            span.set_attribute("compaction.no_progress_escalation", True)
+            recovered = await recover_overflow_history(ctx, messages)
+            return recovered if recovered is not None else messages
         return result
     except Exception:
         log.warning("Mid-turn compaction failed — skipping", exc_info=True)

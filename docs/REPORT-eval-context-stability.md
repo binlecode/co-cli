@@ -1,5 +1,45 @@
 # REPORT: context-stability
 
+## Run 2026-06-09T05:26:43+00:00
+
+**Summary:** 2 PASS · 0 FAIL · 1 SOFT_PASS · 0 SOFT_FAIL · 1 SKIP (total 3)
+
+### Cases
+
+| Case | Verdict | Duration | Model-call s | Tokens | Reason |
+|------|---------|----------|--------------|--------|--------|
+| CS.A | PASS | 432.71s | 432.69s | 240355 | turns=10 fired_passes=4 anti_thrash_passes=0 overflow=False | anti-thrash gate did NOT engage this run (summarizer kept savings high or middle stayed thin) — bounded-loop invariants verified; TASK-3 owns the deterministic trip | coherence OK — agent recalled 'SILVER-FALCON-2029' after 4 compaction pass(es) | carry_forward summarizer_passes=5 prior_summary_slot_chars=2205 prior_summary_carried=True | prior_summary_slot_head='## Active Task\n"nt, no duplicate.\nRecord bd1771056ad4f643288f0b07cb3d5be2: serial 6442685, sensor at lat 98.213590 reported calibration offset 4134 with checksum 6a3d2b112aa34ce8 — verified independen' | probe_answer='SILVER-FALCON-2029' |
+| CS.B | PASS | 0.00s | 0.00s | - | summarizer_passes=5 focus_passes=5 | FLOOR-budget pass exercised (budget=2000, no mid-template truncation)
+  pass 0: budget=2000 cap=2600 output_tokens=619 focus=True overshoot=0.31 cap_pressure=0.24 savings_pct=16.1 critical_ctx=True
+  pass 1: budget=2000 cap=2600 output_tokens=641 focus=True overshoot=0.32 cap_pressure=0.25 savings_pct=25.1 critical_ctx=True
+  pass 2: budget=2000 cap=2600 output_tokens=656 focus=True overshoot=0.33 cap_pressure=0.25 savings_pct=20.8 critical_ctx=True
+  pass 3: budget=2000 cap=2600 output_tokens=762 focus=True overshoot=0.38 cap_pressure=0.29 savings_pct=18.5 critical_ctx=True
+  pass 4: budget=2000 cap=2600 output_tokens=645 focus=True overshoot=0.32 cap_pressure=0.25 savings_pct=23.7 critical_ctx=True |
+| CS.C | SKIP:eval-scaffold-limit | 0.00s | 0.00s | - | DISABLED — at 32k eval ctx the ~10.8k static floor + 4k auto-spill cap route every oversized request into L3 fallback_to_summarize before a fitting L2 spill can occur. Eval-scaffold sizing limit, not a production defect; chain guarded by test_l3_fastpaths_after_l2_spill_fits_payload |
+
+### Review signals
+
+- **CS.C** [SKIP:eval-scaffold-limit] — DISABLED — at 32k eval ctx the ~10.8k static floor + 4k auto-spill cap route every oversized request into L3 fallback_to_summarize before a fitting L2 spill can occur. Eval-scaffold sizing limit, not a production defect; chain guarded by test_l3_fastpaths_after_l2_spill_fits_payload
+
+### Slow ops (top 3)
+
+| Rank | Case | Model-call s |
+|------|------|--------------|
+| 1 | CS.A | 432.69s |
+
+### Regression vs prior run
+
+- CS.A: verdict SOFT_FAIL → PASS
+- CS.A: model-call ↑ 294.5s → 432.7s (+138.1s)
+
+### Trace files
+
+- **CS.A** — [case_CS.A.jsonl](../evals/_outputs/context-stability-20260609T052643Z/case_CS.A.jsonl) · `co trace t_e830e7d0b468832c`
+- **CS.B** — _(no trace)_
+- **CS.C** — _(no trace)_
+
+---
+
 ## Run 2026-06-09T03:55:53+00:00
 
 **Summary:** 1 PASS · 0 FAIL · 1 SOFT_PASS · 1 SOFT_FAIL · 1 SKIP (total 3)
