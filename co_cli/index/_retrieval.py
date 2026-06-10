@@ -15,8 +15,9 @@ from co_cli.index._circuit import CircuitBreaker
 from co_cli.index._embedding import EmbeddingService
 from co_cli.index.schema import (
     CHUNK_DEDUP_FETCH_MULTIPLIER,
+    FTS_CANDIDATE_MULTIPLIER,
     FTS_SNIPPET_TOKENS,
-    RERANKER_CANDIDATE_MULTIPLIER,
+    VECTOR_CANDIDATE_MULTIPLIER,
 )
 from co_cli.index.search_util import (
     kind_clause,
@@ -163,6 +164,7 @@ class RetrievalService:
         embedding: EmbeddingService | None,
         cross_encoder_url: str | None,
         tei_batch_size: int,
+        rerank_text_char_budget: int,
     ) -> None:
         self._conn = conn
         self._backend = backend
@@ -170,6 +172,7 @@ class RetrievalService:
         self._embedding = embedding
         self._cross_encoder_url = cross_encoder_url
         self._tei_batch_size = tei_batch_size
+        self._rerank_text_char_budget = rerank_text_char_budget
         self._reranker_provider = "tei" if cross_encoder_url is not None else "none"
         self._rerank_breaker: CircuitBreaker | None = (
             CircuitBreaker() if cross_encoder_url is not None else None
@@ -200,7 +203,7 @@ class RetrievalService:
                 limit=limit,
             )
         fetch_limit = (
-            limit * RERANKER_CANDIDATE_MULTIPLIER if self._reranker_provider != "none" else limit
+            limit * FTS_CANDIDATE_MULTIPLIER if self._reranker_provider != "none" else limit
         )
         results = self._fts_search(
             fts_query,
@@ -229,7 +232,7 @@ class RetrievalService:
             kinds=kinds,
             created_after=created_after,
             created_before=created_before,
-            fetch_limit=limit * RERANKER_CANDIDATE_MULTIPLIER,
+            fetch_limit=limit * FTS_CANDIDATE_MULTIPLIER,
         )
         try:
             if self._embedding is not None:
@@ -241,7 +244,7 @@ class RetrievalService:
                         kinds=kinds,
                         created_after=created_after,
                         created_before=created_before,
-                        limit=limit * 16,
+                        limit=limit * VECTOR_CANDIDATE_MULTIPLIER,
                     )
                     merged = self._hybrid_merge(fts_chunks, vec_chunks)
                     return self._rerank(fts_query, merged, limit)
@@ -497,7 +500,9 @@ class RetrievalService:
                 (r.source, r.path, r.chunk_index),
             ).fetchone()
             if row and row["content"]:
-                chunk_texts[(r.source, r.path, r.chunk_index)] = row["content"]
+                chunk_texts[(r.source, r.path, r.chunk_index)] = row["content"][
+                    : self._rerank_text_char_budget
+                ]
 
         return [
             f"{r.title or ''}\n{chunk_texts.get((r.source, r.path, r.chunk_index), '')}".strip()

@@ -29,6 +29,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
+from evals._settings import apply_eval_judge
 from pydantic_ai import Agent
 
 from co_cli.agent.build import build_orchestrator
@@ -48,7 +49,18 @@ class EvalFrontend(TerminalFrontend):
     output a real REPL would produce.
     """
 
+    approval_override: str | None = None
+    """Per-case scripted approval choice. When set, ``prompt_approval`` returns it
+    verbatim for every subject — ``"n"`` to deny, ``"y"``/``"a"`` to approve — so a
+    case can drive either side of the trust boundary (W8 approval-discipline needs
+    a real denial). ``None`` (default) keeps the auto-approve behavior every other
+    eval relies on. The eval sets/resets it on the yielded frontend instance per
+    turn; the value is still a real ``y/n/a`` choice fed through the production
+    approval path, not a mock."""
+
     async def prompt_approval(self, subject: ApprovalSubject) -> str:
+        if self.approval_override is not None:
+            return self.approval_override
         return "a" if subject.can_remember else "y"
 
     async def prompt_question(self, prompt: QuestionPrompt) -> str:
@@ -77,6 +89,7 @@ async def eval_deps(
             on_status=frontend.on_status, stack=stack, theme_override=theme_override
         )
         agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
+        print(f"[eval_deps] {apply_eval_judge(deps)}")
         yield deps, agent, frontend
 
 
@@ -93,4 +106,5 @@ async def make_eval_deps() -> tuple[CoDeps, Agent[CoDeps, Any], EvalFrontend, As
     await stack.__aenter__()
     deps = await create_deps(on_status=frontend.on_status, stack=stack, theme_override=None)
     agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
+    print(f"[eval_deps] {apply_eval_judge(deps)}")
     return deps, agent, frontend, stack

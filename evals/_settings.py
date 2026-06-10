@@ -19,9 +19,12 @@ real ``CoDeps`` builder). This module owns sizing/config constants. Mirrors
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from co_cli.config.core import Settings, load_config
+from co_cli.config.llm import LlmSettings
+from co_cli.llm.factory import LlmModel, build_model
 
 _BASE: Settings | None = None
 
@@ -58,6 +61,52 @@ def eval_max_ctx(override: int | None = None) -> int:
     set ``deps.model_max_ctx`` to a literal inline in an eval body.
     """
     return EVAL_MAX_CTX if override is None else override
+
+
+EVAL_JUDGE_PROVIDER = "gemini"
+EVAL_JUDGE_MODEL = "gemini-3.5-flash"
+"""Eval-only judge: a frontier Gemini model, distinct from the local-Ollama agent
+under test. Pinning a strong cross-provider judge is what makes the behavioral
+verdicts trustworthy (Constraint #17) — a self-judging local model both produces
+and grades the output. This lives in the EVAL layer only: production
+``build_judge_model`` (``co_cli/llm/factory.py``) deliberately keeps the judge on
+the agent's provider (cross-provider judges are out of scope there). Override the
+model id with ``CO_EVAL_JUDGE_MODEL``."""
+
+
+def make_eval_judge() -> tuple[LlmModel, str] | None:
+    """Build the eval-only Gemini judge, or None when no API key is present.
+
+    Resolves the key from ``GEMINI_API_KEY`` (fallback ``CO_LLM_API_KEY``) — store
+    it under ``~/env-secrets/`` and export it for the eval run. Returns
+    ``(LlmModel, model_name)`` so the caller can set both ``deps.judge_model`` and
+    ``deps.config.llm.judge_model`` (the latter only drives the
+    ``[judge_model=<name>]`` annotation). Returns None when no key is set, so evals
+    still run — they fall back to the agent model and flag
+    ``[judge_model_same_as_agent]`` (Constraint #17).
+    """
+    model_name = os.environ.get("CO_EVAL_JUDGE_MODEL", EVAL_JUDGE_MODEL)
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("CO_LLM_API_KEY")
+    if not api_key:
+        return None
+    judge_llm = LlmSettings(provider=EVAL_JUDGE_PROVIDER, model=model_name, api_key=api_key)
+    return build_model(judge_llm), model_name
+
+
+def apply_eval_judge(deps: Any) -> str:
+    """Override ``deps.judge_model`` with the eval-only Gemini judge if configured.
+
+    Returns a short status string for the eval to print. No-op (self-judge) when
+    no API key is set. Call right after ``make_eval_deps()`` / ``eval_deps()``,
+    alongside :func:`apply_eval_window`.
+    """
+    built = make_eval_judge()
+    if built is None:
+        return f"judge: self (no {EVAL_JUDGE_PROVIDER.upper()} api key — set GEMINI_API_KEY)"
+    judge_model, model_name = built
+    deps.judge_model = judge_model
+    deps.config.llm.judge_model = model_name
+    return f"judge: {model_name} (eval-only, distinct from agent)"
 
 
 def apply_eval_window(deps: Any) -> None:

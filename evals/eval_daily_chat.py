@@ -8,8 +8,6 @@ behavior that single-turn evals can't see — are actually exercised.
 
 Cases:
   W1.A  multi_turn_coherence        3-turn ask → follow-up → recap. Judge rubric on coherence + voice.
-  W1.B  tool_chain                  2-turn: list files → read a listed file.
-  W1.C  recall_reuse                2-turn: memory_view a seed → follow-up uses the recalled content.
   W1.D  dream_propagates_to_recall  Seed pair → dream merge → merged artifact in active store.
   W1.E  tool_spill_summary          Oversized memory_view result spills; PERSISTED_OUTPUT_TAG in ToolReturnPart.
 
@@ -60,10 +58,6 @@ from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, SPILL_THRESHOLD_CHARS
 
 _REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-daily-chat.md"
 
-_SEED_STEM = "eval_W1_seed"
-_SEED_TOKEN = "MNEMONIC_TOKEN_42"
-_SEED_BODY = f"{_SEED_TOKEN} my staging deploy id reminder."
-
 
 @dataclass(frozen=True)
 class _TurnSlice:
@@ -92,17 +86,6 @@ def _tool_calls_from(messages: list[Any]) -> list[ToolCallPart]:
     return calls
 
 
-def _used_shell_command(calls: list[ToolCallPart], cmd: str) -> bool:
-    """True if any ``shell_exec`` call's args mention the given command substring."""
-    for tc in calls:
-        if tc.tool_name != "shell_exec":
-            continue
-        args_repr = tc.args if isinstance(tc.args, str) else repr(tc.args)
-        if cmd in args_repr.lower():
-            return True
-    return False
-
-
 def _aggregate_trace_stats(slices: list[_TurnSlice]) -> tuple[float, dict[str, int]]:
     """Sum ``model_call_seconds`` and ``token_usage`` across turns."""
     total_seconds = sum(getattr(s.trace, "model_call_seconds", 0.0) for s in slices)
@@ -111,29 +94,6 @@ def _aggregate_trace_stats(slices: list[_TurnSlice]) -> tuple[float, dict[str, i
         for k, v in (getattr(s.trace, "token_usage", None) or {}).items():
             totals[k] = totals.get(k, 0) + int(v)
     return total_seconds, totals
-
-
-def _seed_knowledge_artifact(knowledge_dir: Path) -> Path:
-    """Write the W1.C seed artifact to disk under a deterministic filename.
-
-    The path is fixed (``eval_W1_seed.md``) so reruns overwrite in place per
-    Behavioral Constraint #12 (no accumulation). Body is < 100 chars and opens
-    with the distinctive token so the recall snippet (capped at 100 chars in
-    ``co_cli/tools/memory/recall.py``) actually carries the token.
-    """
-    knowledge_dir.mkdir(parents=True, exist_ok=True)
-    artifact_path = knowledge_dir / f"{_SEED_STEM}.md"
-    frontmatter = {
-        "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, _SEED_STEM)),
-        "memory_kind": MemoryKindEnum.NOTE.value,
-        "title": _SEED_STEM,
-        "created_at": datetime.now(UTC).isoformat(),
-    }
-    artifact_path.write_text(
-        render_frontmatter(frontmatter, _SEED_BODY),
-        encoding="utf-8",
-    )
-    return artifact_path
 
 
 _DREAM_A_STEM = "eval_w1d_pair_a"
@@ -305,184 +265,6 @@ async def _case_w1_a_multi_turn_coherence(
         if not all_nonempty:
             empty_idx = [i for i, t in enumerate(per_turn_text) if not t]
             reason_parts.append(f"empty_turns={empty_idx!r}")
-    except Exception as exc:
-        passed = False
-        reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
-
-    duration = time.monotonic() - case_t0
-    return CaseResult(
-        name=case_id,
-        verdict=Verdict.PASS if passed else Verdict.FAIL,
-        duration_s=duration,
-        model_call_seconds=model_call_seconds,
-        token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
-        reason=" ".join(reason_parts).strip(),
-    )
-
-
-async def _case_w1_b_tool_chain(
-    deps: Any,
-    agent: Any,
-    frontend: Any,
-    run: Any,
-) -> CaseResult:
-    """W1.B — 2-turn tool chain.
-
-    Turn 0 asks for a directory listing (expects ``file_search`` with a path glob or ``shell_exec ls``).
-    Turn 1 asks to read a specific file by name (expects ``file_read`` or
-    ``shell_exec cat/head``). PASS requires both turns picked an appropriate
-    tool — the second turn proves the agent can carry on after a tool result
-    and pick a different tool for a different ask.
-    """
-    case_id = "W1.B"
-    case_t0 = time.monotonic()
-    inputs = [
-        "list files in the current directory",
-        "now show me the contents of pyproject.toml",
-    ]
-    reason_parts: list[str] = []
-    passed = False
-    model_call_seconds = 0.0
-    token_usage: dict[str, int] = {}
-
-    try:
-        slices = await _drive_turns(
-            case_id=case_id,
-            deps=deps,
-            agent=agent,
-            frontend=frontend,
-            case_dir_path=run.case_trace_path(case_id),
-            inputs=inputs,
-        )
-        model_call_seconds, token_usage = _aggregate_trace_stats(slices)
-
-        t0_calls = slices[0].tool_calls
-        t1_calls = slices[1].tool_calls
-        t0_names = [tc.tool_name for tc in t0_calls]
-        t1_names = [tc.tool_name for tc in t1_calls]
-
-        t0_tool_ok = "file_search" in t0_names or _used_shell_command(t0_calls, "ls")
-        t1_tool_ok = (
-            "file_read" in t1_names
-            or "file_view" in t1_names
-            or _used_shell_command(t1_calls, "cat")
-            or _used_shell_command(t1_calls, "head")
-        )
-
-        # Tool-effect verification: the response must reflect actual tool output,
-        # not a hallucinated listing / file body. Without this floor, an agent
-        # could emit ceremonial tool calls and confabulate the rest.
-        t0_text = slices[0].assistant_text
-        t1_text = slices[1].assistant_text
-        t0_effect_ok = any(
-            stem in t0_text for stem in ("pyproject.toml", "README.md", "CLAUDE.md")
-        )
-        t1_effect_ok = "[project]" in t1_text
-
-        t0_ok = t0_tool_ok and t0_effect_ok
-        t1_ok = t1_tool_ok and t1_effect_ok
-
-        if t0_ok and t1_ok:
-            passed = True
-            reason_parts.append(f"t0={t0_names!r} t1={t1_names!r} effects=ok")
-        else:
-            if not t0_tool_ok:
-                reason_parts.append(f"t0_no_listing tools={t0_names!r}")
-            elif not t0_effect_ok:
-                reason_parts.append(f"t0_no_listed_file_in_response text={t0_text[:120]!r}")
-            if not t1_tool_ok:
-                reason_parts.append(f"t1_no_read tools={t1_names!r}")
-            elif not t1_effect_ok:
-                reason_parts.append(f"t1_no_pyproject_marker text={t1_text[:120]!r}")
-
-        budget = TOOL_TURN_BUDGET_S * len(inputs)
-        if model_call_seconds > budget:
-            passed = False
-            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {budget:.0f}s")
-    except Exception as exc:
-        passed = False
-        reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
-
-    duration = time.monotonic() - case_t0
-    return CaseResult(
-        name=case_id,
-        verdict=Verdict.PASS if passed else Verdict.FAIL,
-        duration_s=duration,
-        model_call_seconds=model_call_seconds,
-        token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
-        reason=" ".join(reason_parts).strip(),
-    )
-
-
-async def _case_w1_c_recall_reuse(
-    deps: Any,
-    agent: Any,
-    frontend: Any,
-    run: Any,
-) -> CaseResult:
-    """W1.C — 2-turn recall + reuse.
-
-    Turn 0 forces a knowledge-channel read of the seeded artifact and expects
-    the token verbatim. Turn 1 asks a follow-up that only the seed content
-    can answer — proving the recalled snippet persisted into working memory
-    rather than vanishing after turn 0. Turn 1 may or may not re-tool; the
-    check is that the answer references the seed content correctly.
-    """
-    case_id = "W1.C"
-    case_t0 = time.monotonic()
-    reason_parts: list[str] = []
-    passed = False
-    model_call_seconds = 0.0
-    token_usage: dict[str, int] = {}
-
-    try:
-        _seed_knowledge_artifact(deps.memory_dir)
-        deps.memory_store.sync_dir(deps.memory_dir)
-
-        inputs = [
-            (
-                f"Use the `memory_view` tool to read the artifact whose filename_stem is "
-                f"`{_SEED_STEM}`, then quote its body verbatim in your response."
-            ),
-            "In one sentence, what did that snippet say the token referred to?",
-        ]
-        slices = await _drive_turns(
-            case_id=case_id,
-            deps=deps,
-            agent=agent,
-            frontend=frontend,
-            case_dir_path=run.case_trace_path(case_id),
-            inputs=inputs,
-        )
-        model_call_seconds, token_usage = _aggregate_trace_stats(slices)
-
-        t0_names = [tc.tool_name for tc in slices[0].tool_calls]
-        t0_knowledge = any(n in {"memory_view", "memory_search"} for n in t0_names)
-        t0_token = _SEED_TOKEN in slices[0].assistant_text
-
-        t1_text_lower = slices[1].assistant_text.lower()
-        t1_uses_seed = (
-            "staging" in t1_text_lower
-            or "deploy" in t1_text_lower
-            or _SEED_TOKEN.lower() in t1_text_lower
-        )
-
-        t0_ok = t0_knowledge or t0_token
-        if t0_ok and t1_uses_seed:
-            passed = True
-            reason_parts.append(f"t0_knowledge={t0_knowledge} t0_token={t0_token} t1_seed=True")
-        else:
-            reason_parts.append(
-                f"t0_knowledge={t0_knowledge} t0_token={t0_token} "
-                f"t1_seed={t1_uses_seed} t1_text={slices[1].assistant_text[:120]!r}"
-            )
-
-        budget = TURN_BUDGET_S * len(inputs)
-        if model_call_seconds > budget:
-            passed = False
-            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {budget:.0f}s")
     except Exception as exc:
         passed = False
         reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
@@ -739,8 +521,6 @@ async def main() -> int:
 
         for runner in (
             _case_w1_a_multi_turn_coherence,
-            _case_w1_b_tool_chain,
-            _case_w1_c_recall_reuse,
             _case_w1_d_dream_propagates_to_recall,
             _case_w1_e_tool_spill_summary,
         ):

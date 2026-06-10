@@ -13,6 +13,7 @@ DEFAULT_MEMORY_CROSS_ENCODER_RERANKER_URL = "http://127.0.0.1:8282"
 DEFAULT_MEMORY_CHUNK_TOKENS = 600
 DEFAULT_MEMORY_CHUNK_OVERLAP_TOKENS = 80
 DEFAULT_TEI_RERANK_BATCH_SIZE = 50
+DEFAULT_RERANK_TEXT_CHAR_BUDGET = 512
 
 
 MEMORY_ENV_MAP: dict[str, str] = {
@@ -22,6 +23,7 @@ MEMORY_ENV_MAP: dict[str, str] = {
     "embedding_dims": "CO_MEMORY_EMBEDDING_DIMS",
     "cross_encoder_reranker_url": "CO_MEMORY_CROSS_ENCODER_RERANKER_URL",
     "tei_rerank_batch_size": "CO_MEMORY_TEI_RERANK_BATCH_SIZE",
+    "rerank_text_char_budget": "CO_MEMORY_RERANK_TEXT_CHAR_BUDGET",
     "embed_api_url": "CO_MEMORY_EMBED_API_URL",
     "chunk_tokens": "CO_MEMORY_CHUNK_TOKENS",
     "chunk_overlap_tokens": "CO_MEMORY_CHUNK_OVERLAP_TOKENS",
@@ -48,6 +50,7 @@ class MemorySettings(BaseModel):
         default=DEFAULT_MEMORY_CROSS_ENCODER_RERANKER_URL
     )
     tei_rerank_batch_size: int = Field(default=DEFAULT_TEI_RERANK_BATCH_SIZE)
+    rerank_text_char_budget: int = Field(default=DEFAULT_RERANK_TEXT_CHAR_BUDGET, ge=1)
     embed_api_url: str = Field(default=DEFAULT_MEMORY_EMBED_API_URL)
     chunk_tokens: int = Field(default=DEFAULT_MEMORY_CHUNK_TOKENS, ge=0)
     chunk_overlap_tokens: int = Field(default=DEFAULT_MEMORY_CHUNK_OVERLAP_TOKENS, ge=0)

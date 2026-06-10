@@ -57,6 +57,8 @@ co_cli/index/            Infrastructure facade — IndexStore (public) + retriev
 
 Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`); unconfigured = pass-through.
 
+Each candidate's text sent to the reranker is truncated to `rerank_text_char_budget` chars (default 512; the title is prepended and never clipped). The cross-encoder runs one forward pass per `(query, candidate)` pair, so its latency scales with `candidate_count × tokens_per_candidate` — an untruncated batch of ~50 large chunks costs ~14s, while a 512-char cap holds it to ~2s. Relevance scoring saturates well within 512 chars, so the cap is a no-op for the ~54% of chunks already shorter than it and preserves ranking fidelity on the rest (see `docs/REPORT-rerank-latency-calibration.md` for the calibration).
+
 ## 3. Config
 
 | Setting | Env Var | Default | Description |
@@ -68,6 +70,7 @@ Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross
 | `memory.embed_api_url` | `CO_MEMORY_EMBED_API_URL` | `http://127.0.0.1:8283` | embedding service URL |
 | `memory.cross_encoder_reranker_url` | `CO_MEMORY_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI cross-encoder reranker URL |
 | `memory.tei_rerank_batch_size` | `CO_MEMORY_TEI_RERANK_BATCH_SIZE` | `50` | batch size for TEI rerank HTTP requests |
+| `memory.rerank_text_char_budget` | `CO_MEMORY_RERANK_TEXT_CHAR_BUDGET` | `512` | per-candidate char cap on reranker input (bounds cross-encoder latency) |
 | `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | paragraph-aware chunking budget for memory items |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | chunk overlap |
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | token-Jaccard threshold for write-time dedup and daemon merge clusters |

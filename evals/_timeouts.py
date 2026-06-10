@@ -36,6 +36,7 @@ __all__ = [
     "LLM_TOOL_CONTEXT_TIMEOUT_SECS",
     "MULTI_TURN_COMPACT_BUDGET_S",
     "TURN_BUDGET_S",
+    "WARM_CALL_BUDGET_S",
 ]
 
 CALL_TIMEOUT_S: int = LLM_TOOL_CONTEXT_TIMEOUT_SECS
@@ -81,4 +82,16 @@ MULTI_TURN_COMPACT_BUDGET_S: int = 180
 Inflation drives ~10 brief turns to push history past compaction_ratio, then
 ``/compact`` runs the LLM summarizer. 180s covers worst-case 10x non-reasoning
 turns + one compaction call.
+"""
+
+WARM_CALL_BUDGET_S: float = 20.0
+"""PROVISIONAL — re-pinned by T-8b once the T-2..7 suite exists to calibrate against.
+
+Per-*model-request* warm-latency band: a single LLM call within a turn, distinct
+from the per-turn ``TURN_BUDGET_S`` (35s) and the ``CALL_TIMEOUT_S`` stall ceiling
+(50s). The context-stability appendix observed trivial warm calls ≈ 2.4–17.4s
+(prefill-bound) and summarizer calls ≈ 15–18s; 20s flags a call running above
+normal warm prefill without firing on it. ``evals/_perf.perf_verdict`` only gates
+on this band when ``PERF_BANDS_GATING`` is True — flipped on by T-8b after
+calibration. Until then the Perf column is record-only.
 """

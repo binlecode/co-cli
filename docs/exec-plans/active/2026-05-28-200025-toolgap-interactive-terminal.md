@@ -43,7 +43,16 @@ CLI" capability hermes exposes via `terminal(pty=True)` + `process(write/close)`
   instead Phase 2 adds **`task_write`** (write + optional newline = the "submit"
   case) and **`task_close`** (close stdin / EOF).
 
-### Verified current state (2026-05-28)
+### Verified current state (2026-05-28; re-verified 2026-06-09 @ v0.8.323)
+
+> Re-verification (2026-06-09): `shell_backend.py:ShellBackend.run_command` (`:19`,
+> `create_subprocess_exec` `:38`), `background.py` `BackgroundTaskState` (`:29`),
+> `spawn_task` (`:65`, `create_subprocess_shell` `:78`), `_monitor` (`:97`), `kill_task`
+> (`:153`), and the four DEFERRED `task_*` tools (`tools/tasks/control.py`) all still hold.
+> `task_write`/`task_close`/`commands/write.py` do not exist (this plan adds them). **One
+> correction:** the `shell_exec` param is `work_dir` (not `workdir`) — signature is
+> `shell_exec(ctx, cmd, timeout=120, work_dir=None)` (`shell/execute.py:18`). Native tool
+> count is **36** today; `task_write` + `task_close` (both DEFERRED) → 38 (pty adds no tool).
 
 **Phase 1 (pty):**
 - `shell_exec` (`co_cli/tools/shell/execute.py:17`) → `ctx.deps.shell.run_command`
@@ -52,7 +61,7 @@ CLI" capability hermes exposes via `terminal(pty=True)` + `process(write/close)`
   with `asyncio.wait_for(timeout)`, `kill_process_tree` on timeout. **No stdin,
   no pty.** Docstring states "No interactive input — commands that prompt for
   stdin will hang and timeout."
-- Signature is `shell_exec(ctx, cmd, timeout=120, workdir=None)` — no `pty` param.
+- Signature is `shell_exec(ctx, cmd, timeout=120, work_dir=None)` — no `pty` param.
 - `run_command(cmd, timeout, cwd, extra_env)` — no `pty` param, no pty branch.
 - No `pty` import anywhere in `co_cli/`. No existing `tests/test_flow_shell.py`.
 
@@ -78,6 +87,12 @@ CLI" capability hermes exposes via `terminal(pty=True)` + `process(write/close)`
 buffering, "not a terminal" refusals). And any process that prompts for input
 stalls until it times out and is killed, because co can see the prompt in the log
 but cannot answer it.
+
+**Failure cost:** any interactive command line — a REPL, `gh auth login`,
+`Continue? [y/N]`, a migration prompt — is a dead end: the process hangs on the prompt
+and is killed at timeout, so the task simply fails with no path to completion. The user
+must drop out of co and run it by hand. (Phase 1's pty gap is milder: TTY-gated tools
+silently degrade output rather than failing outright.)
 
 **Outcome.**
 1. **`shell_exec(pty=True)`** runs the one-shot command under a pseudo-terminal so
@@ -109,7 +124,8 @@ but cannot answer it.
 - Tests: `tests/test_flow_background_tasks.py` (extended).
 
 ### In scope — shared
-- `docs/specs/tools.md` — both surfaces documented with their caveats.
+- Specs (`docs/specs/tools.md`) document both surfaces with their caveats — applied by
+  `sync-doc` post-delivery, not a task here.
 
 ### Out of scope
 - **`shell_exec` stdin** — one-shot; the write channel is background-only.
@@ -158,12 +174,21 @@ if pty:
         stdin=slave, stdout=slave, stderr=slave,
     )
     os.close(slave)
-    # drain master fd via loop.add_reader / asyncio.to_thread os.read until EOF,
-    # bounded by asyncio.wait_for(timeout); kill_process_tree on timeout.
+    # drain master fd via loop.add_reader(master) into a buffer + an asyncio.Event
+    # signalled on EOF (NOT asyncio.to_thread os.read — that blocks a thread and
+    # complicates timeout cancellation). Bound by asyncio.wait_for(timeout);
+    # kill_process_tree on timeout. In a finally: loop.remove_reader(master) +
+    # os.close(master) to avoid an fd leak. The reader callback drains until the
+    # child exits and the master returns b"" / OSError (EOF) — handle the
+    # partial-read-on-exit case so trailing buffered bytes are not dropped.
     return proc.returncode, decoded_output
 ```
-- Output is combined (the TTY merges stdout/stderr); decode with
-  `errors="replace"`. Document that ANSI escapes may appear (the point of pty).
+- Because the child's std fds are the *slave*, `proc.stdout` is `None` and
+  `proc.communicate()` cannot be reused — the drain reads the raw `master` fd. The
+  existing non-pty `else` branch (`proc.communicate()`) is kept verbatim so the
+  `pty=False` path is structurally byte-for-byte unchanged.
+- Output is combined (the TTY merges stdout/stderr); decode with `errors="replace"`.
+  Keep raw ANSI (the point of pty); document the strip path in the docstring (Open Q2).
 
 ### Phase 2 — interactive task drive
 
@@ -202,48 +227,30 @@ The interactive loop: `task_start` → `task_status` (see prompt) → `task_writ
 
 ## Tasks
 
-### TODO — TASK-1 — `shell_exec` `pty=True` (output fidelity)
-Files: `co_cli/tools/shell/execute.py`, `co_cli/tools/shell_backend.py`.
-Impl: add `pty` flag; pty branch in `run_command` using stdlib `pty.openpty()`
-+ asyncio master-fd drain; preserve timeout/kill semantics.
-**done_when:**
-- `pty=False` path is unchanged (existing shell tests pass untouched).
-- `shell_exec("python3 -c 'import sys;print(sys.stdout.isatty())'", pty=True)`
-  returns `True`; with `pty=False` returns `False`.
-- Timeout under pty still kills the process group and surfaces partial output
-  (mirror the existing timeout test, with `pty=True`).
-- No `ptyprocess`/`pywinpty` import; `uv pip list` unchanged.
-- Docstring states pty = output fidelity, **not** interactive stdin drive (point
-  interactive needs at `task_write`, see TASK-3).
+### TASK-1 — `shell_exec` `pty=True` (output fidelity)
+- **files:** `co_cli/tools/shell/execute.py`, `co_cli/tools/shell_backend.py`
+- **prerequisites:** none
+- **done_when:** `tests/test_flow_shell.py` asserts (real subprocess, no mocks) that `shell_exec("python3 -c 'import sys;print(sys.stdout.isatty())'", pty=True)` returns `True` and `pty=False` returns `False`, and that `shell_exec("echo hi")` (pty off) still returns exit 0 + `"hi\n"`; the new pty code lives entirely inside an `if pty:` branch with the existing `proc.communicate()` body kept verbatim as the `else` (structural guarantee of the byte-for-byte-unchanged invariant); the master fd is drained via `loop.add_reader` and closed in a `finally`; a timeout under `pty=True` still kills the process group and surfaces partial output; no `ptyprocess`/`pywinpty` import is added (stdlib `pty` only).
+- **success_signal:** A TTY-gated CLI run via `shell_exec(pty=True)` emits its full (e.g. colored/interactive-mode) output instead of the degraded non-TTY form.
 
-### TODO — TASK-2 — stdin pipe on spawn + write/close helpers
-Files: `co_cli/tools/background.py`.
-Impl: `spawn_task` opens `stdin=PIPE`; add `write_to_task` / `close_task_stdin`;
-`kill_task` closes stdin defensively during cleanup.
-**done_when:**
-- Existing 6 `test_flow_background_tasks.py` tests pass unchanged.
-- A stdin-reading command can be written to and produces expected log output.
-- Write to a completed/cancelled task raises a typed error.
+### TASK-2 — stdin pipe on spawn + write/close helpers
+- **files:** `co_cli/tools/background.py`
+- **prerequisites:** none (independent of TASK-1)
+- **done_when:** `tests/test_flow_background_tasks.py` (extended, real subprocess) shows a stdin-reading command driven via `write_to_task` produces the expected log output, and a write to a completed/cancelled task raises a typed error; the existing background-task tests pass unchanged (the unused pipe is inert for non-interactive tasks). `write_to_task` wraps both `proc.stdin.write` and `await proc.stdin.drain()` in one try (BrokenPipe surfaces on drain, not write). `kill_task`'s defensive stdin-close runs *before* `kill_process_tree`, swallows `BrokenPipeError`, and never aborts the kill path (cosmetic — the process-group teardown is what guarantees death).
+- **success_signal:** N/A (helper plumbing; observable only via TASK-3 tools).
 
-### TODO — TASK-3 — `task_write` + `task_close` tools + `/write` command
-Files: `co_cli/tools/tasks/control.py`, `co_cli/commands/write.py` (new),
-`co_cli/commands/core.py`.
-**done_when:**
-- `task_write(id, "y")` on a `Continue? [y/N]` prompt advances the process;
-  `task_status` shows post-prompt output.
-- `task_close(id)` lets an EOF-reader complete with exit 0.
-- Both tools clean-error on not-found / not-running; BrokenPipe → `tool_error`.
-- `/write <id> <input>` works from the REPL.
-- Registry count goes 37 → 39 (pty adds no tool; `task_write` + `task_close` add two).
+### TASK-3 — `task_write` + `task_close` tools + `/write` command
+- **files:** `co_cli/tools/tasks/control.py`, `co_cli/agent/toolset.py` (add the two new tools to the registry-walk import block alongside the existing `task_*` imports), `co_cli/commands/write.py` (new), `co_cli/commands/core.py`
+- **prerequisites:** TASK-2
+- **done_when:** an end-to-end test drives a real interactive subprocess — `task_write(id, "y")` on a `Continue? [y/N]` prompt advances it and `task_status` shows the post-prompt output; `task_close(id)` lets an EOF-reader exit 0; both tools clean-error (`tool_error`) on not-found / not-running; the BrokenPipe case is exercised by first letting the reader exit (or `task_close`) and *then* writing, so the broken pipe is reliable (not racy); `/write <id> <input>` works from the REPL; a toolset-build assertion confirms `task_write` and `task_close` resolve via `tool_view` (DEFERRED; the ALWAYS floor is unchanged).
+- **success_signal:** The agent can complete an interactive command (e.g. answer a REPL or a `[y/N]` prompt) start-to-finish without the task hanging to timeout.
+- **note:** `/write` is the least mission-central item; if TASK-3 runs long it is the first thing to drop (the model-facing `task_write`/`task_close` are the actual capability).
 
-### TODO — TASK-4 — docstrings + spec + gate
-Files: `co_cli/tools/tasks/control.py` (`task_start`), `co_cli/tools/shell/execute.py`,
-`docs/specs/tools.md`.
-**done_when:** `task_start`/`shell_exec` docstrings point interactive needs at the
-write channel (no longer claim interactive input is impossible / only available
-nowhere); `shell_exec` entry documents `pty` (fidelity-only caveat); `task_write`
-and `task_close` documented in the spec with their caveats;
-`scripts/quality-gate.sh full` clean.
+### TASK-4 — docstrings + full-suite gate
+- **files:** `co_cli/tools/tasks/control.py` (`task_start` docstring), `co_cli/tools/shell/execute.py` (`shell_exec` docstring)
+- **prerequisites:** TASK-1, TASK-3
+- **done_when:** the `task_start` and `shell_exec` docstrings point interactive needs at the write channel (no longer claim interactive input is impossible) and document the `pty` fidelity-only caveat; `scripts/quality-gate.sh full` clean. (Spec — `docs/specs/tools.md` for `pty`, `task_write`, `task_close` — is applied by `sync-doc` post-delivery, not in this plan's `files:`. sync-doc must update **both** the "Total: 36 native tools / 17 DEFERRED" count line *and* the "4 `task_*`" enumeration → 38 / 19 / "6 `task_*`".)
+- **success_signal:** N/A (docstrings + gate).
 
 ## Testing
 - `tests/test_flow_shell.py` — real `pty=True` isatty assertion + pty timeout
@@ -254,19 +261,18 @@ and `task_close` documented in the spec with their caveats;
   `tool_error`. Real subprocesses, no mocks.
 
 ## Open Questions
-1. **pty value vs effort** — given Phase 1 alone can't drive interactive CLIs (no
-   stdin channel), is output-fidelity pty worth it standalone? **Rec:** yes —
-   ship the cheap fidelity pty (Phase 1, small, self-contained); Phase 2 is the
-   actual interactive-drive blocker and now lives in the same plan.
-2. **pty output decoding** — strip ANSI escapes before returning, or keep them?
-   **Rec:** keep raw (ANSI is the reason to use pty); note it in the docstring so
-   callers can strip if needed.
-3. **(Phase 2) Approval on `task_write`?** `task_start` already gates the
-   *command* (the risk surface). **Rec:** no approval on `task_write`/`task_close`
-   — the dangerous act was approved at launch; gating keystrokes is UX-hostile and
-   adds nothing. Confirm at Gate 1.
-4. **(Phase 2) Encoding.** v1 is UTF-8 text + optional newline; binary stdin out of
-   scope (`input: str` only).
+None — all resolved at C1:
+1. **pty value vs effort — RESOLVED.** Phase 1 pty is a cheap (stdlib-only, one branch)
+   output-fidelity rider, *not* the interactive driver. Resequenced: **Phase 2 is the
+   priority deliverable; Phase 1 is the optional tail** (see Shipping order). pty alone
+   closes none of the Failure-cost scenarios.
+2. **pty output decoding — RESOLVED: keep raw ANSI** (the reason to use pty); the docstring
+   notes the strip path for callers who want it.
+3. **Approval on `task_write` — RESOLVED: no approval.** `task_start` gates the command
+   (the risk surface) at launch; `task_write`/`task_close` match the unapproved DEFERRED
+   peers (`task_cancel`/`task_status`/`task_list`). Gating keystrokes adds nothing.
+4. **Encoding — RESOLVED.** v1 is UTF-8 text + optional newline; binary stdin out of scope
+   (`input: str` only).
 
 ## Deferred items
 - Interactive stdin drive on `shell_exec` — out of scope by design; the write
@@ -278,8 +284,17 @@ and `task_close` documented in the spec with their caveats;
 - Binary stdin; auto prompt-detection / synchronous request-response framing.
 
 ## Shipping order
-Phase 1 (pty: TASK-1) is self-contained and ships regardless. Phase 2 (interactive
-drive: TASK-2 → TASK-3) rides the background subsystem; TASK-2 (spawn + helpers)
-before TASK-3 (tools + command). TASK-4 (docs + gate) lands whatever shipped.
-Does not block Batches 1–2 or the sibling `session_search role_filter` /
-`vision-input` plans.
+**Phase 2 is the priority deliverable** — it closes the actual failure (a prompting
+process is a dead end today): TASK-2 (spawn + helpers) → TASK-3 (tools + command). **Phase 1
+(pty: TASK-1) is the optional tail**, not the head — it's a cheap output-fidelity rider that
+closes none of the Failure-cost scenarios, so if effort is constrained Phase 2 ships first
+and Phase 1 follows. TASK-4 (docs + gate) lands whatever shipped. Independent of the
+`documents` and `vision-input` plans.
+
+## Final — Team Lead
+
+Plan approved.
+
+> Gate 1 — PO review required before proceeding.
+> Review this plan: right problem? correct scope?
+> Once approved, run: `/orchestrate-dev toolgap-interactive-terminal`

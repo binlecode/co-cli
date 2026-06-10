@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.333]
+
+### Reranker input truncation — bound cross-encoder latency
+
+- **`rerank_text_char_budget` (default 512)**: each candidate's text sent to the TEI cross-encoder is now truncated to this many chars (title prepended, never clipped). The cross-encoder runs one forward pass per `(query, candidate)` pair, so latency scales with `candidate_count × tokens_per_candidate` — an untruncated batch of ~50 large chunks cost ~14s. Config-plumbed (`CO_MEMORY_RERANK_TEXT_CHAR_BUDGET`) like its sibling `tei_rerank_batch_size`; applied in `_fetch_reranker_texts`.
+- **Calibration**: root-caused the `multistep_plan` W11.C stall to rerank payload size (not cold-start/idle/concurrency/co-residency — all falsified). 512 is Pareto-optimal: 2.63s vs 14.5s untruncated, with top-1 100% / top-5 97–98% fidelity to the full reranker; it is a no-op for the 54% of chunks already ≤512 chars. Full investigation in `docs/REPORT-rerank-latency-calibration.md`. End-to-end re-run: W11.C `index.search` fell from ~14s to ~1.3–2.4s (case scored 10/10).
+
+### Eval suite expansion (build-time)
+
+- New eval scenarios + harness: `agentic_loop`, `approval_discipline`, `bounded_autonomy`, `groundedness`, `multistep_plan`, `user_model`; shared `_perf`/`_drift` instrumentation, rubrics, fixtures, and the phase2 migration (`test_flow_phase2_migrated`, `test_eval_perf`). Per-eval markdown REPORTs under `docs/`.
+- Retrieval constant rename: `RERANKER_CANDIDATE_MULTIPLIER` → split into `FTS_CANDIDATE_MULTIPLIER` (4) + `VECTOR_CANDIDATE_MULTIPLIER` (16). Full suite green (654 passed).
+
 ## [0.8.332]
 
 ### Skill folder model — every skill is a `<name>/SKILL.md` directory

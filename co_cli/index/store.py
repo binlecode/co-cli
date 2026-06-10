@@ -188,6 +188,7 @@ class IndexStore:
             embedding=self._embedding if self._backend == "hybrid" else None,
             cross_encoder_url=config.memory.cross_encoder_reranker_url,
             tei_batch_size=config.memory.tei_rerank_batch_size,
+            rerank_text_char_budget=config.memory.rerank_text_char_budget,
         )
 
     @property

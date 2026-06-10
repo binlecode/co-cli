@@ -19,6 +19,10 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from evals._perf import PerfRecord
 
 _OUTPUTS_DIR = Path(__file__).parent / "_outputs"
 
@@ -60,6 +64,10 @@ class CaseResult:
       reason                — short tag for FAIL/SKIP/SOFT; empty for plain PASS.
       skipped               — True when this is a SKIPPED:* record (mcp / product-gap).
       skip_category         — "mcp" | "product-gap" | "" when skipped is False.
+      perf                  — span-derived performance overlay (``evals/_perf.py``),
+                              or None when the case did not collect perf. Folded into
+                              the REPORT Perf column + review signals; never overrides
+                              the behavioral ``verdict``.
 
     The ``passed`` property is True iff verdict ∈ {PASS, SOFT_PASS} — kept for
     exit-code logic and read-site backward-compat. Construction sites must use
@@ -76,6 +84,7 @@ class CaseResult:
     reason: str = ""
     skipped: bool = False
     skip_category: str = ""
+    perf: PerfRecord | None = None
 
     @property
     def passed(self) -> bool:
@@ -194,4 +203,8 @@ def load_prior_cases(run_dir: Path) -> dict[str, CaseResult]:
             skip_category=data.get("skip_category", ""),
         )
         out[case.name] = case
+        # perf is intentionally not reconstructed here: the regression diff
+        # (_report._build_regression_diff) keys off verdict + model_call_seconds
+        # only, and the drift aggregator (T-9) reads the REPORT markdown, not
+        # this JSONL. Leaving it None avoids importing PerfRecord at runtime.
     return out

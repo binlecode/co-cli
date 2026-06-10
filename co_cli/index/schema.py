@@ -75,5 +75,19 @@ FTS_SNIPPET_TOKENS = 40
 CHUNK_DEDUP_FETCH_MULTIPLIER = 20
 """Chunks fetched per requested doc — dedup by path collapses many chunks per doc."""
 
-RERANKER_CANDIDATE_MULTIPLIER = 4
-"""Reranker pool size — gives the reranker meaningful signal to reorder."""
+FTS_CANDIDATE_MULTIPLIER = 4
+"""Lexical (BM25) arm candidate-pool depth — chunks fetched = limit × this.
+
+Symmetric with VECTOR_CANDIDATE_MULTIPLIER. The lexical arm is fetched shallower
+than the vector arm: exact-match recall is precise, so a tight pool already
+catches what BM25 will catch. Feeds RRF fusion + the cross-encoder reranker with
+enough lexical signal to reorder."""
+
+VECTOR_CANDIDATE_MULTIPLIER = 16
+"""Semantic (vector) arm candidate-pool depth — chunks fetched = limit × this.
+
+Symmetric with FTS_CANDIDATE_MULTIPLIER, fetched deeper (4×) on purpose: vector
+recall is broader and fuzzier than lexical match, so cast a wider net, then let
+RRF + the reranker tighten it. Sized for limit << corpus; on a small corpus this
+approaches a full scan, so the reranker batch size (tei_rerank_batch_size) is the
+backstop that bounds per-call cross-encoder cost."""

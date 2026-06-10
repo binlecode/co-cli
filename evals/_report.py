@@ -14,6 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from evals._observability import CaseResult, Verdict, load_prior_cases, prior_run_dir
+from evals._perf import perf_verdict
 
 _VERDICT_CHIP = {
     Verdict.PASS: "PASS",
@@ -42,15 +43,24 @@ def _fmt_tokens(usage: dict[str, int]) -> str:
     return "/".join(parts) if parts else "-"
 
 
+def _fmt_perf(case: CaseResult) -> str:
+    """Compact ``p95 / peak-ctx / goal%`` cell, or ``-`` when no perf was collected."""
+    p = case.perf
+    if p is None:
+        return "-"
+    return f"{p.call_p95_s:.1f}s / {p.peak_input_tokens} / {p.goal_fulfillment * 100:.0f}%"
+
+
 def _build_header_table(cases: list[CaseResult]) -> list[str]:
     lines = [
-        "| Case | Verdict | Duration | Model-call s | Tokens | Reason |",
-        "|------|---------|----------|--------------|--------|--------|",
+        "| Case | Verdict | Duration | Model-call s | Tokens | Perf (p95/ctx/goal) | Reason |",
+        "|------|---------|----------|--------------|--------|---------------------|--------|",
     ]
     for c in cases:
         lines.append(
             f"| {c.name} | {_verdict_chip(c)} | {c.duration_s:.2f}s | "
-            f"{c.model_call_seconds:.2f}s | {_fmt_tokens(c.token_usage)} | {c.reason or '-'} |"
+            f"{c.model_call_seconds:.2f}s | {_fmt_tokens(c.token_usage)} | "
+            f"{_fmt_perf(c)} | {c.reason or '-'} |"
         )
     return lines
 
@@ -67,13 +77,24 @@ def _build_slow_ops(cases: list[CaseResult]) -> list[str]:
 
 
 def _build_review_signals(cases: list[CaseResult]) -> list[str]:
-    soft = [c for c in cases if c.soft]
-    if not soft:
+    lines: list[str] = []
+    for c in cases:
+        if c.soft:
+            chip = _verdict_chip(c)
+            lines.append(f"- **{c.name}** [{chip}] — {c.reason or '_(no reason)_'}")
+    for c in cases:
+        if c.perf is None:
+            continue
+        pv = perf_verdict(c.perf)
+        if pv in (Verdict.FAIL, Verdict.SOFT_FAIL):
+            p = c.perf
+            lines.append(
+                f"- **{c.name}** [perf {pv.value}] — p95={p.call_p95_s:.1f}s "
+                f"peak-ctx={p.peak_input_tokens} goal={p.goal_fulfillment * 100:.0f}% "
+                f"(perf signal only — does not override behavioral verdict)"
+            )
+    if not lines:
         return ["_(no review signals this run)_"]
-    lines = []
-    for c in soft:
-        chip = _verdict_chip(c)
-        lines.append(f"- **{c.name}** [{chip}] — {c.reason or '_(no reason)_'}")
     return lines
 
 
