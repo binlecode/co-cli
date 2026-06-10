@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from co_cli.config.core import Settings, load_config
+from co_cli.config.core import USER_DIR, Settings, load_config
 from co_cli.config.llm import LlmSettings
 from co_cli.llm.factory import LlmModel, build_model
 
@@ -107,6 +107,28 @@ def apply_eval_judge(deps: Any) -> str:
     deps.judge_model = judge_model
     deps.config.llm.judge_model = model_name
     return f"judge: {model_name} (eval-only, distinct from agent)"
+
+
+EVAL_WORKSPACE_DIR = USER_DIR / "eval-workspace"
+"""Isolated write/read anchor for evals — a real, stable dir under CO_HOME, NOT the
+repo. ``create_deps`` resolves ``workspace_dir`` to ``Path.cwd()`` when
+``config.workspace_path`` is unset (``deps.py``); under an eval that cwd is the repo
+root, so a relative ``file_write`` by the agent escapes into the working tree —
+``enforce_write_boundary`` permits it because the boundary IS the repo root. Pinning a
+dedicated dir keeps eval side effects real (Constraint: all data real, no cleanup) but
+contained."""
+
+
+def apply_eval_workspace(deps: Any) -> None:
+    """Re-anchor built ``deps`` to :data:`EVAL_WORKSPACE_DIR` so agent file writes during
+    an eval land in an isolated dir, never the repo. Sets the write boundary
+    (``workspace_dir``) AND ``file_search_roots`` together — mirroring production's
+    ``resolve_workspace_paths`` default (``file_search_roots = [workspace_dir]``). Applied
+    centrally in ``_deps`` for every eval; isolation is a safety invariant, not opt-in.
+    """
+    EVAL_WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
+    deps.workspace_dir = EVAL_WORKSPACE_DIR
+    deps.file_search_roots = [EVAL_WORKSPACE_DIR]
 
 
 def apply_eval_window(deps: Any) -> None:

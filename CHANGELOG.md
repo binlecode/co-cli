@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.335]
+
+### Fix: eval agent file-writes escaped to the repo root
+
+- **Eval workspace isolation**: `eval_deps`/`make_eval_deps` built `CoDeps` without a `workspace_path`, so `create_deps` fell back to `Path.cwd()` (the repo root) as the write boundary. A relative `file_write` by the agent under test (e.g. `multistep_plan` W11.C creating a decision doc) therefore landed in — and was permitted within — the repo working tree (`enforce_write_boundary` saw the repo root *as* the boundary). New `apply_eval_workspace(deps)` in `evals/_settings.py` re-anchors `workspace_dir` and `file_search_roots` to a dedicated `EVAL_WORKSPACE_DIR` (`USER_DIR / "eval-workspace"`); applied centrally in `_deps` for every eval (safety invariant, not opt-in). Real, stable dir — no temp, no cleanup.
+- Bundled: in-progress exec-plan refinements for the pending `skill-documents`/`skill-office` features (pymupdf dependency rationale).
+
 ## [0.8.333]
 
 ### Reranker input truncation — bound cross-encoder latency

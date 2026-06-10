@@ -29,7 +29,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
-from evals._settings import apply_eval_judge
+from evals._settings import apply_eval_judge, apply_eval_workspace
 from pydantic_ai import Agent
 
 from co_cli.agent.build import build_orchestrator
@@ -88,6 +88,7 @@ async def eval_deps(
         deps = await create_deps(
             on_status=frontend.on_status, stack=stack, theme_override=theme_override
         )
+        apply_eval_workspace(deps)
         agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
         print(f"[eval_deps] {apply_eval_judge(deps)}")
         yield deps, agent, frontend
@@ -105,6 +106,7 @@ async def make_eval_deps() -> tuple[CoDeps, Agent[CoDeps, Any], EvalFrontend, As
     stack = AsyncExitStack()
     await stack.__aenter__()
     deps = await create_deps(on_status=frontend.on_status, stack=stack, theme_override=None)
+    apply_eval_workspace(deps)
     agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
     print(f"[eval_deps] {apply_eval_judge(deps)}")
     return deps, agent, frontend, stack
