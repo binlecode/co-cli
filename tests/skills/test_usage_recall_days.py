@@ -38,9 +38,10 @@ Do it.
 
 def _make_deps(tmp_path: Path) -> CoDeps:
     user_skills_dir = tmp_path / "skills"
-    user_skills_dir.mkdir(parents=True, exist_ok=True)
-    # Write skill file so is_agent_created returns True
-    (user_skills_dir / "test-recall-skill.md").write_text(_SKILL_CONTENT, encoding="utf-8")
+    # Write skill folder so is_agent_created returns True
+    skill_path = user_skills_dir / "test-recall-skill" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
+    skill_path.write_text(_SKILL_CONTENT, encoding="utf-8")
     skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
     _, tool_catalog = build_native_toolset()
     return CoDeps(
@@ -66,8 +67,9 @@ def test_bump_recall_no_op_when_usage_tracking_disabled(tmp_path: Path) -> None:
         update={"skills": SETTINGS.skills.model_copy(update={"usage_tracking_enabled": False})}
     )
     user_skills_dir = tmp_path / "skills"
-    user_skills_dir.mkdir(parents=True, exist_ok=True)
-    (user_skills_dir / "test-recall-skill.md").write_text(_SKILL_CONTENT, encoding="utf-8")
+    skill_path = user_skills_dir / "test-recall-skill" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
+    skill_path.write_text(_SKILL_CONTENT, encoding="utf-8")
     _, tool_catalog = build_native_toolset()
     deps = CoDeps(
         shell=ShellBackend(),
@@ -83,7 +85,7 @@ def test_bump_recall_no_op_when_usage_tracking_disabled(tmp_path: Path) -> None:
     skill_usage.bump_recall(deps, "test-recall-skill")
 
     # Per-skill sidecar should not have been written
-    sidecar = user_skills_dir / "test-recall-skill.usage.json"
+    sidecar = user_skills_dir / "test-recall-skill" / "SKILL.usage.json"
     assert not sidecar.exists()
 
 
@@ -96,7 +98,7 @@ def test_bump_recall_skips_skill_not_in_user_skills_dir(tmp_path: Path) -> None:
     """bump_recall skips skills that don't exist under user_skills_dir."""
     deps = _make_deps(tmp_path)
 
-    # Call with a name that has no .md in user_skills_dir
+    # Call with a name that has no <name>/SKILL.md in user_skills_dir
     skill_usage.bump_recall(deps, "no-such-skill")
 
     assert skill_usage.read_record(deps, "no-such-skill") is None

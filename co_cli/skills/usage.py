@@ -1,12 +1,13 @@
-"""Per-skill usage tracking sidecars (~/.co-cli/skills/<name>.usage.json).
+"""Per-skill usage tracking sidecars (~/.co-cli/skills/<name>/SKILL.usage.json).
 
 Tracks counters and timestamps only for agent-created skills (any user skill
-file under user_skills_dir). Bundled skills (under co_cli/skills/) are
+folder under user_skills_dir). Bundled skills (under co_cli/skills/) are
 upstream-managed and excluded.
 
-Each agent-created skill has its own sidecar file next to its <name>.md.
-This bounds the blast radius of concurrent writes to a single skill and
-avoids whole-library rewrites on every bump.
+Each agent-created skill has its own sidecar file inside its <name>/ folder,
+beside SKILL.md. This bounds the blast radius of concurrent writes to a single
+skill, avoids whole-library rewrites on every bump, and makes folder deletion
+self-cleaning (removing <name>/ takes its sidecar with it).
 
 Sidecar I/O is best-effort: exceptions are logged and swallowed so usage
 tracking never blocks the underlying skill operation. Atomic writes via
@@ -54,7 +55,7 @@ def _utcnow_iso() -> str:
 
 
 def _sidecar_path(deps: CoDeps, name: str) -> Path:
-    return deps.user_skills_dir / f"{name}{SIDECAR_SUFFIX}"
+    return deps.user_skills_dir / name / f"SKILL{SIDECAR_SUFFIX}"
 
 
 def _enabled(deps: CoDeps) -> bool:
@@ -62,12 +63,12 @@ def _enabled(deps: CoDeps) -> bool:
 
 
 def is_agent_created(name: str, deps: CoDeps) -> bool:
-    """Return True iff <name>.md exists under user_skills_dir.
+    """Return True iff <name>/SKILL.md exists under user_skills_dir.
 
     Co-cli has no URL-install path; every user skill is treated as
     agent-created (eligible for usage tracking and curation).
     """
-    skill_path = deps.user_skills_dir / f"{name}.md"
+    skill_path = deps.user_skills_dir / name / "SKILL.md"
     return skill_path.exists()
 
 
@@ -118,8 +119,8 @@ def iter_records(deps: CoDeps) -> Iterator[tuple[str, dict[str, Any]]]:
     skills_dir = deps.user_skills_dir
     if not skills_dir.exists():
         return
-    for path in sorted(skills_dir.glob(f"*{SIDECAR_SUFFIX}")):
-        name = path.name.removesuffix(SIDECAR_SUFFIX)
+    for path in sorted(skills_dir.glob(f"*/SKILL{SIDECAR_SUFFIX}")):
+        name = path.parent.name
         if not name:
             continue
         try:

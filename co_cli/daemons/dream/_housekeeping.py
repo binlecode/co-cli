@@ -229,14 +229,14 @@ def _load_user_skill_candidates(user_skills_dir: Path) -> list[_SkillCandidate]:
     if not user_skills_dir.exists():
         return []
     result: list[_SkillCandidate] = []
-    for path in sorted(user_skills_dir.glob("*.md")):
+    for path in sorted(user_skills_dir.glob("*/SKILL.md")):
         try:
             text = path.read_text(encoding="utf-8")
         except OSError as exc:
             logger.debug("housekeeping.skill: unreadable %s: %s", path, exc)
             continue
         _, body = parse_frontmatter(text)
-        result.append(_SkillCandidate(name=path.stem, body=body.strip(), path=path))
+        result.append(_SkillCandidate(name=path.parent.name, body=body.strip(), path=path))
     return result
 
 
@@ -302,26 +302,30 @@ def _render_skill_merge_prompt(
 
 
 def _archive_user_skill(deps: CoDeps, path: Path) -> bool:
-    """Move a user-skill .md to user_skills_dir/.archive/. Returns True on success."""
+    """Move a user-skill folder to user_skills_dir/.archive/. Returns True on success.
+
+    ``path`` is the skill's <name>/SKILL.md; the whole <name>/ folder is moved so
+    its sidecar travels with it.
+    """
     archive_dir = deps.user_skills_dir / _SKILL_ARCHIVE_SUBDIR
     archive_dir.mkdir(parents=True, exist_ok=True)
-    dest = archive_dir / path.name
+    skill_dir = path.parent
+    name = skill_dir.name
+    dest = archive_dir / name
     if dest.exists():
-        stem = path.stem
-        suffix = path.suffix
         for counter in range(1, 1000):
-            candidate = archive_dir / f"{stem}-{counter}{suffix}"
+            candidate = archive_dir / f"{name}-{counter}"
             if not candidate.exists():
                 dest = candidate
                 break
         else:
-            logger.warning("housekeeping.skill: too many archive collisions for %s", path.name)
+            logger.warning("housekeeping.skill: too many archive collisions for %s", name)
             return False
     try:
-        path.rename(dest)
+        skill_dir.rename(dest)
         return True
     except OSError as exc:
-        logger.warning("housekeeping.skill: archive rename failed %s: %s", path, exc)
+        logger.warning("housekeeping.skill: archive rename failed %s: %s", skill_dir, exc)
         return False
 
 

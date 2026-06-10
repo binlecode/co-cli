@@ -124,7 +124,9 @@ def test_skill_loading_project_skill_registered(tmp_path: Path) -> None:
         "---\n\n"
         "Perform a test action.\n"
     )
-    (skills_dir / "test-bootstrap-skill.md").write_text(skill_content, encoding="utf-8")
+    bootstrap_skill_dir = skills_dir / "test-bootstrap-skill"
+    bootstrap_skill_dir.mkdir()
+    (bootstrap_skill_dir / "SKILL.md").write_text(skill_content, encoding="utf-8")
 
     skill_catalog = load_skills(skills_dir)
 

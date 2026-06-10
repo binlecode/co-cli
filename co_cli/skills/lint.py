@@ -9,7 +9,7 @@ R4 is co-cli-specific: a soft body-size warning at 8000 chars to flag overly
 broad skills that should be split.
 
 A separate lint_bundled_extras() function enforces the no-TODO-marker rule on
-the shipped reference library only (co_cli/skills/*.md).
+the shipped reference library only (co_cli/skills/*/SKILL.md).
 """
 
 from __future__ import annotations

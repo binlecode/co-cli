@@ -104,7 +104,8 @@ async def test_edit_resets_model_requests_since_skill_review(tmp_path: Path) -> 
     """skill_edit resets model_requests_since_skill_review to 0 on success."""
     deps = _make_deps(tmp_path, initial_iters=6)
     user_skills_dir = deps.user_skills_dir
-    skill_path = user_skills_dir / "test-skill.md"
+    skill_path = user_skills_dir / "test-skill" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
     skill_path.write_text(_VALID_SKILL, encoding="utf-8")
     # Reload skill_catalog so edit finds the skill
     deps.skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
@@ -127,7 +128,8 @@ async def test_patch_resets_model_requests_since_skill_review(tmp_path: Path) ->
     """skill_patch resets model_requests_since_skill_review to 0 on success."""
     deps = _make_deps(tmp_path, initial_iters=4)
     user_skills_dir = deps.user_skills_dir
-    skill_path = user_skills_dir / "test-skill.md"
+    skill_path = user_skills_dir / "test-skill" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
     skill_path.write_text(_VALID_SKILL, encoding="utf-8")
     deps.skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
 
@@ -155,7 +157,8 @@ async def test_delete_does_not_reset_model_requests_since_skill_review(tmp_path:
     """skill_delete does not reset model_requests_since_skill_review."""
     deps = _make_deps(tmp_path, initial_iters=5)
     user_skills_dir = deps.user_skills_dir
-    skill_path = user_skills_dir / "test-skill.md"
+    skill_path = user_skills_dir / "test-skill" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True, exist_ok=True)
     skill_path.write_text(_VALID_SKILL, encoding="utf-8")
     deps.skill_catalog = load_skills(_BUNDLED_SKILLS_DIR, user_skills_dir=user_skills_dir)
 

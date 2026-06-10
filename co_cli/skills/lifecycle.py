@@ -9,15 +9,15 @@ from co_cli.deps import CoDeps
 
 
 def discover_skill_files(bundled_dir: Path, user_dir: Path) -> list[Path]:
-    """Return sorted .md paths from both dirs (bundled first, user second).
+    """Return sorted <name>/SKILL.md paths from both dirs (bundled first, user second).
 
     Skips dirs that don't exist.
     """
     result: list[Path] = []
     if bundled_dir.exists():
-        result.extend(sorted(bundled_dir.glob("*.md")))
+        result.extend(sorted(bundled_dir.glob("*/SKILL.md")))
     if user_dir.exists():
-        result.extend(sorted(user_dir.glob("*.md")))
+        result.extend(sorted(user_dir.glob("*/SKILL.md")))
     return result
 
 

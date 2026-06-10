@@ -37,6 +37,12 @@ surgical patch for a localized fix, a full rewrite for a structural
 overhaul. Don't wait to be asked. Unmaintained skills become
 liabilities.
 
+Mutate skills only through `skill_create` / `skill_edit` /
+`skill_patch` / `skill_delete`. Never write or edit a `SKILL.md`
+directly with `shell` or `file_write` — a direct write bypasses the
+security scan, atomic write, catalog reload, and usage tracking, and
+`file_write` cannot reach the skills directory anyway.
+
 ## Create
 
 After completing a multi-step task (3+ coherent steps), consider

@@ -6,6 +6,7 @@ from collections import deque
 from pathlib import Path
 
 import pytest
+from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM, make_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
@@ -321,16 +322,20 @@ async def test_successful_input_resets_interrupt_timer(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_slash_command_routes_to_dispatch(tmp_path: Path) -> None:
-    """/clear slash command is dispatched and returns should_exit=False.
+    """/clear is dispatched to the builtin and replaces the transcript with empty history.
 
-    Regression guard: if slash commands bypass dispatch, built-in commands like
-    /clear, /help, /resume silently fail — the session accumulates stale history.
+    Regression guard: if slash commands bypass dispatch, /clear silently fails and
+    the session keeps accumulating stale history. Priming a non-empty history makes
+    the empty-result assertion fail if dispatch did nothing.
     """
     deps = _make_deps(tmp_path)
     agent = _make_agent(deps)
     frontend = HeadlessFrontend()
     completer = SlashCommandCompleter()
-    state = _fresh_state()
+    state = _IterationState(
+        message_history=[ModelRequest(parts=[UserPromptPart(content="prior turn")])],
+        last_interrupt_time=-3.0,
+    )
 
     result = await _handle_one_input(
         user_input="/clear",
@@ -345,6 +350,7 @@ async def test_slash_command_routes_to_dispatch(tmp_path: Path) -> None:
     )
 
     assert result.should_exit is False
+    assert result.message_history == []
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +387,10 @@ async def test_plain_text_routes_to_foreground_turn(tmp_path: Path) -> None:
 
     assert result.should_exit is False
     assert len(result.message_history) > len(state.message_history)
+    assert isinstance(result.message_history[-1], ModelResponse), (
+        "plain text must drive a turn that ends with an assistant response, "
+        "not grow history by request frames alone"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +419,7 @@ async def test_accept_handler_schedules_turn_task(tmp_path: Path) -> None:
         text = "hello"
 
     handler(_Buf())
-    assert runtime.turn_task is not None
+    assert runtime.turn_active
     await asyncio.sleep(0.01)
     assert dispatched == [("hello", False)]
 

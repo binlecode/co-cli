@@ -46,7 +46,8 @@ def _capture_output(fn) -> str:
 
 
 def test_pin_agent_created_skill_sets_flag(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     ctx = _make_ctx(tmp_path)
     output = _capture_output(lambda: _cmd_skills_pin(ctx, "my-skill", pinned=True))
     assert "pinned" in output.lower()
@@ -56,7 +57,8 @@ def test_pin_agent_created_skill_sets_flag(tmp_path: Path) -> None:
 
 
 def test_unpin_clears_flag(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     ctx = _make_ctx(tmp_path)
     skill_usage.set_pinned(ctx.deps, "my-skill", True)
 
@@ -99,18 +101,21 @@ def test_usage_empty_library(tmp_path: Path) -> None:
 
 
 def test_usage_lists_agent_created_skill(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     ctx = _make_ctx(tmp_path)
     skill_usage.bump_view(ctx.deps, "my-skill")
     skill_usage.bump_view(ctx.deps, "my-skill")
 
     output = _capture_output(lambda: _cmd_skills_usage(ctx, ""))
-    assert "my-skill" in output
-    assert "2" in output
+    # Row-scoped: the my-skill row must carry the view_count, not an incidental "2".
+    skill_row = next(line for line in output.splitlines() if "my-skill" in line)
+    assert "2" in skill_row
 
 
 def test_usage_named_skill_prints_full_record(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     ctx = _make_ctx(tmp_path)
     skill_usage.bump_view(ctx.deps, "my-skill")
     skill_usage.bump_view(ctx.deps, "my-skill")

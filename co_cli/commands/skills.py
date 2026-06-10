@@ -40,17 +40,17 @@ def _cmd_skills_check(ctx: CommandContext) -> None:
     table = make_table("File", "Status", "Reason")
 
     for path in all_paths:
-        name = path.stem
+        name = path.parent.name
         if name in ctx.deps.skill_catalog:
-            table.add_row(path.name, "[success]✓ Loaded[/success]", "")
+            table.add_row(name, "[success]✓ Loaded[/success]", "")
         else:
             try:
                 read_skill_meta(path)
                 table.add_row(
-                    path.name, "[bold red]✗ Skipped[/bold red]", "name conflict with built-in"
+                    name, "[bold red]✗ Skipped[/bold red]", "name conflict with built-in"
                 )
             except Exception as e:
-                table.add_row(path.name, "[bold red]✗ Error[/bold red]", str(e))
+                table.add_row(name, "[bold red]✗ Error[/bold red]", str(e))
 
     console.print(table)
 
@@ -63,11 +63,11 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
     for msg in errors:
         console.print(f"[warning]{msg}[/warning]")
     for name in new_skills:
-        p = user_skills_dir / f"{name}.md"
+        p = user_skills_dir / name / "SKILL.md"
         if p.exists():
             try:
                 for w in scan_skill_content(p.read_text(encoding="utf-8")):
-                    console.print(f"[yellow]Security warning in {p.name}: {w}[/yellow]")
+                    console.print(f"[yellow]Security warning in {name}: {w}[/yellow]")
             except Exception:
                 pass
     old_names = set(ctx.deps.skill_catalog.keys())
@@ -215,8 +215,8 @@ def _cmd_skills_usage(ctx: CommandContext, args: str) -> None:
 
 def _classify_skill(ctx: CommandContext, name: str) -> str:
     """Return one of: 'agent-created', 'bundled', 'unknown'."""
-    user_path = ctx.deps.user_skills_dir / f"{name}.md"
-    bundled_path = ctx.deps.skills_dir / f"{name}.md"
+    user_path = ctx.deps.user_skills_dir / name / "SKILL.md"
+    bundled_path = ctx.deps.skills_dir / name / "SKILL.md"
     if user_path.exists():
         return "agent-created"
     if bundled_path.exists():

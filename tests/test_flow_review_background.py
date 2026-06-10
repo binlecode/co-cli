@@ -64,7 +64,9 @@ def _make_deps(tmp_path: Path, *, review_enabled: bool = True):
 
 
 def _write_skill_to_disk(user_skills_dir: Path, name: str, description: str) -> Path:
-    path = user_skills_dir / f"{name}.md"
+    skill_dir = user_skills_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    path = skill_dir / "SKILL.md"
     path.write_text(
         "---\n"
         f"description: {description}\n"

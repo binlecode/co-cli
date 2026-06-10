@@ -21,7 +21,12 @@ from tests._settings import SETTINGS
 
 from co_cli.agent.core import build_native_toolset
 from co_cli.commands.core import dispatch
-from co_cli.commands.types import CommandContext, DelegateToAgent, LocalOnly
+from co_cli.commands.types import (
+    CommandContext,
+    DelegateToAgent,
+    LocalOnly,
+    ReplaceTranscript,
+)
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.main import _apply_command_outcome
@@ -58,9 +63,11 @@ def _make_ctx(deps: CoDeps) -> CommandContext:
 
 
 def _write_skill(skills_dir: Path, name: str, body: str, extra_frontmatter: str = "") -> None:
-    """Write a minimal skill .md file into skills_dir."""
+    """Write a minimal skill into skills_dir as <name>/SKILL.md."""
     content = f"---\ndescription: Test skill {name}\n{extra_frontmatter}---\n\n{body}\n"
-    (skills_dir / f"{name}.md").write_text(content, encoding="utf-8")
+    skill_dir = skills_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -166,11 +173,13 @@ async def test_builtin_cannot_be_shadowed_by_skill(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
     outcome = await dispatch("/clear", ctx)
-    # Must be LocalOnly or ReplaceTranscript (from the builtin /clear handler),
-    # never DelegateToAgent.
+    # Positive: the builtin /clear ran — it returns ReplaceTranscript(history=[]),
+    # never DelegateToAgent (which would mean the shadowing skill hijacked it).
     assert not isinstance(outcome, DelegateToAgent), (
         "A skill named 'clear' must not shadow the /clear builtin"
     )
+    assert isinstance(outcome, ReplaceTranscript)
+    assert outcome.history == []
 
 
 # ---------------------------------------------------------------------------

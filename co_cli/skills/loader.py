@@ -86,7 +86,7 @@ def _load_skill_file(
     if path.is_symlink():
         logger.warning(f"Symlink skill rejected — skipping {path}")
         return
-    name = path.stem
+    name = path.parent.name
     try:
         text = path.read_text(encoding="utf-8")
         meta, body = parse_frontmatter(text)
@@ -138,11 +138,11 @@ def load_skills(
     result: dict[str, SkillInfo] = {}
 
     if skills_dir.exists():
-        for path in sorted(skills_dir.glob("*.md")):
+        for path in sorted(skills_dir.glob("*/SKILL.md")):
             _load_skill_file(path, result, root=skills_dir, scan=False, errors=errors)
 
     if user_skills_dir is not None and user_skills_dir.exists():
-        for path in sorted(user_skills_dir.glob("*.md")):
+        for path in sorted(user_skills_dir.glob("*/SKILL.md")):
             _load_skill_file(path, result, root=user_skills_dir, errors=errors)
 
     return result

@@ -25,7 +25,7 @@ The broader persistent cognition model lives in [memory.md](memory.md). Startup 
                   │    daemons/dream/{done,failed}/               │
                   │    daemons/dream.pid, dream.lock              │
                   │    sessions/<id>.jsonl                        │
-                  │    memory/*.md     skills/.usage.json         │
+                  │    memory/*.md     skills/<name>/SKILL.usage.json │
                   │    logs/co-dream.jsonl + co-dream-spans.jsonl │
                   └───────────────────────────────────────────────┘
 
@@ -398,7 +398,7 @@ Skill merge and decay run inside the same `run_housekeeping` pass: skill merge f
 **Phase 1b: skill merge.** Recall-informed, cluster-scoped:
 
 ```text
-load user_skills_dir/*.md (frontmatter stripped, body retained)
+load user_skills_dir/*/SKILL.md (frontmatter stripped, body retained)
 discard pinned skills (sidecar.pinned == True)
 cluster by token-Jaccard ≥ skills.consolidation_similarity_threshold (body text)
 truncate each cluster to ≤ MAX_CLUSTER_SIZE (5)
@@ -409,8 +409,8 @@ for each cluster:
   prompt = render(anchor first, then siblings)
   body = llm_call(prompt, instructions=skill_merge.md)
   if len(body) < MERGED_BODY_MIN_CHARS (20): skip
-  rewrite anchor.md with merged body (frontmatter preserved)
-  archive each non-anchor sibling into user_skills_dir/.archive/
+  rewrite anchor's SKILL.md with merged body (frontmatter preserved)
+  archive each non-anchor sibling folder into user_skills_dir/.archive/<name>/
   state.stats.skill_merged += 1
 
 if any clusters merged: refresh_skills(deps)

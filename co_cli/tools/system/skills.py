@@ -5,12 +5,13 @@ skill_create / skill_edit / skill_patch / skill_delete.
 Read surface: hermes-agent/tools/skills_tool.py:1440-1512.
 Write surface: hermes-agent/tools/skill_manager_tool.py:647-720.
 
-Co-cli's flat-file skill model has no linked files; skill_view returns the SKILL.md body only.
+Each skill is a folder <name>/ with a SKILL.md entry; skill_view returns that body only.
 """
 
 import json
 import math
 import re
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 
@@ -45,7 +46,7 @@ async def skill_view(
     content — don't edit blind.
 
     Args:
-        name: Skill name, e.g. "deep-research" (the filename_stem from the skill manifest).
+        name: Skill name, e.g. "deep-research" (the name listed in the skill manifest).
     """
     skill = ctx.deps.skill_catalog.get(name)
     if skill is None:
@@ -70,8 +71,8 @@ _MAX_SKILL_CHARS: int = 50_000
 
 
 def _find_user_skill(deps: CoDeps, name: str) -> Path | None:
-    """Return Path under user_skills_dir if <name>.md exists, else None."""
-    path = deps.user_skills_dir / f"{name}.md"
+    """Return Path to <name>/SKILL.md under user_skills_dir if it exists, else None."""
+    path = deps.user_skills_dir / name / "SKILL.md"
     return path if path.exists() else None
 
 
@@ -92,12 +93,18 @@ def _validate_skill_content(content: str) -> str | None:
 
 
 def _scan_or_rollback(path: Path, content: str, original: str | None) -> str | None:
-    """Scan content for security patterns; if flagged restore original and return error string."""
+    """Scan content for security patterns; if flagged restore original and return error string.
+
+    On create-rollback (original is None) the SKILL.md is removed along with the
+    skill folder it was just written into, leaving no orphan directory.
+    """
     flags = scan_skill_content(content)
     if not flags:
         return None
     if original is None:
         path.unlink(missing_ok=True)
+        if path.parent.exists() and not any(path.parent.iterdir()):
+            path.parent.rmdir()
     else:
         atomic_write_text(path, original)
     pattern_names = ", ".join(sorted({f.split("]")[0].lstrip("[") for f in flags}))
@@ -130,7 +137,8 @@ def _skill_create(ctx: RunContext[CoDeps], name: str, content: str | None) -> To
             f"Skill {name!r} already exists in user skills dir. Use 'edit' to replace it.",
             ctx=ctx,
         )
-    path = ctx.deps.user_skills_dir / f"{name}.md"
+    path = ctx.deps.user_skills_dir / name / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(path, content)
     scan_err = _scan_or_rollback(path, content, original=None)
     if scan_err:
@@ -242,19 +250,19 @@ def _skill_patch(
 def _skill_delete(ctx: RunContext[CoDeps], name: str) -> ToolReturn:
     path = _find_user_skill(ctx.deps, name)
     if path is None:
-        if (ctx.deps.skills_dir / f"{name}.md").exists():
+        if (ctx.deps.skills_dir / name / "SKILL.md").exists():
             return tool_error(
                 f"Skill {name!r} is bundled and cannot be deleted. "
                 "Copy it to ~/.co-cli/skills/ first.",
                 ctx=ctx,
             )
         return tool_error(f"Skill {name!r} not found in user skills dir.", ctx=ctx)
-    path.unlink()
+    shutil.rmtree(path.parent)
     _reload_skills(ctx)
     from co_cli.skills.usage import forget
 
     forget(ctx.deps, name)
-    shadowed_bundled = (ctx.deps.skills_dir / f"{name}.md").exists()
+    shadowed_bundled = (ctx.deps.skills_dir / name / "SKILL.md").exists()
     return tool_output(
         json.dumps(
             {
@@ -345,7 +353,7 @@ async def skill_edit(
     Bundled skills are read-only; copy to ~/.co-cli/skills/ first to modify them.
 
     Args:
-        name: Skill name (the filename_stem of an existing user skill).
+        name: Skill name (the name of an existing user skill).
         content: Full replacement SKILL.md content (frontmatter + body).
     """
     err = _require_valid_name(ctx, name)
@@ -376,7 +384,7 @@ async def skill_patch(
     Bundled skills are read-only; copy to ~/.co-cli/skills/ first to modify them.
 
     Args:
-        name: Skill name (the filename_stem of an existing user skill).
+        name: Skill name (the name of an existing user skill).
         old_string: Text to find. Must match exactly once unless replace_all=True.
         new_string: Replacement text.
         replace_all: Replace every match (default False = require exactly one match).
@@ -402,7 +410,7 @@ async def skill_delete(
     ~/.co-cli/skills/ can be removed.
 
     Args:
-        name: Skill name (the filename_stem of an existing user skill).
+        name: Skill name (the name of an existing user skill).
     """
     err = _require_valid_name(ctx, name)
     if err is not None:

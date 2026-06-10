@@ -28,6 +28,9 @@ async def shell_exec(
     - web_fetch instead of curl for web pages
     - google_drive_search / google_drive_read instead of manual API calls
     - file_write / file_patch instead of shell redirection for workspace file creation or editing
+    - skill_edit / skill_patch instead of shell for creating or editing skill files
+      (~/.co-cli/skills/<name>/SKILL.md) — a direct shell write bypasses the
+      security scan, atomic write, catalog reload, and usage tracking
     - task_start instead of shell for detached long-running work
 
     Commands run in the project working directory. DENY-pattern commands are

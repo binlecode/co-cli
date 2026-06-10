@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.332]
+
+### Skill folder model — every skill is a `<name>/SKILL.md` directory
+
+- **Folder layout**: each skill is now a directory `<name>/SKILL.md` (Anthropic convention) instead of a flat `<name>.md`, for both bundled (`co_cli/skills/`) and user (`~/.co-cli/skills/`) skills. Discovery globs `*/SKILL.md`; the skill name derives from the parent directory. This lets a skill carry a `scripts/`/`references/` payload that ships with the package — unblocking scripted skills like the pending `documents` PDF extractor. Zero backward compat: no flat-file fallback; the 6 bundled skills migrated via `git mv` (history preserved).
+- **All consumers migrated**: loader, lifecycle discovery, user CRUD (`skill_create`/`edit`/`patch`/`delete`), usage sidecars (now `<name>/SKILL.usage.json` inside the folder — folder deletion is self-cleaning), `iter_records`, `/skills` commands, and the dream-daemon skill housekeeping (load + archive the whole folder).
+- **Shell-bypass steering**: the `shell_exec` description and `06_skill_protocol.md` now direct the model to mutate skills only via the `skill_*` tools — never via a direct `shell`/`file_write` of `SKILL.md`, which would bypass the security scan, atomic write, catalog reload, and usage tracking.
+- **Test hardening**: skill + chat-loop test files aligned to the testing policy — removed dead disk fixtures from the manifest tests, strengthened weak/structural assertions to exact values, and added sidecar-travels-with-folder + multi-sidecar `iter_records` coverage. Full suite green (654 passed).
+
 ## [0.8.331]
 
 ### Deferred-tool reveal — single source of truth (`revealed_tools`)

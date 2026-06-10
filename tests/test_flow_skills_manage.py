@@ -83,7 +83,7 @@ async def test_create_writes_file(tmp_path: Path) -> None:
     assert not _is_error(result)
     data = _success_data(result)
     assert data["success"] is True
-    skill_path = tmp_path / "my-skill.md"
+    skill_path = tmp_path / "my-skill" / "SKILL.md"
     assert skill_path.exists()
     assert skill_path.read_text(encoding="utf-8") == _VALID_CONTENT
 
@@ -107,7 +107,7 @@ async def test_create_rejects_empty_description(tmp_path: Path) -> None:
     result = await skill_create(ctx, name="bad-skill", content=no_desc)
     assert _is_error(result)
     assert "description" in result.return_value
-    assert not (tmp_path / "bad-skill.md").exists()
+    assert not (tmp_path / "bad-skill" / "SKILL.md").exists()
 
 
 @pytest.mark.asyncio
@@ -118,7 +118,7 @@ async def test_create_rolls_back_on_destructive_shell(tmp_path: Path) -> None:
     result = await skill_create(ctx, name="bad-skill", content=_DESTRUCTIVE_CONTENT)
     assert _is_error(result)
     assert "destructive_shell" in result.return_value
-    assert not (tmp_path / "bad-skill.md").exists()
+    assert not (tmp_path / "bad-skill" / "SKILL.md").exists()
     assert "bad-skill" not in deps.skill_catalog
 
 
@@ -147,7 +147,7 @@ async def test_edit_rewrites_skill(tmp_path: Path) -> None:
     new_content = "---\ndescription: Updated description\n---\n\nNew body.\n"
     result = await skill_edit(ctx, name="my-skill", content=new_content)
     assert not _is_error(result)
-    assert (tmp_path / "my-skill.md").read_text(encoding="utf-8") == new_content
+    assert (tmp_path / "my-skill" / "SKILL.md").read_text(encoding="utf-8") == new_content
     assert deps.skill_catalog["my-skill"].description == "Updated description"
 
 
@@ -170,7 +170,7 @@ async def test_edit_rollback_restores_original_on_security_flag(tmp_path: Path) 
     await skill_create(ctx, name="my-skill", content=_VALID_CONTENT)
     result = await skill_edit(ctx, name="my-skill", content=_DESTRUCTIVE_CONTENT)
     assert _is_error(result)
-    assert (tmp_path / "my-skill.md").read_text(encoding="utf-8") == _VALID_CONTENT
+    assert (tmp_path / "my-skill" / "SKILL.md").read_text(encoding="utf-8") == _VALID_CONTENT
     assert deps.skill_catalog["my-skill"].description == "A test skill for unit tests"
 
 
@@ -192,7 +192,7 @@ async def test_patch_unique_match_replaces_and_reloads(tmp_path: Path) -> None:
         new_string="Do the patched task.",
     )
     assert not _is_error(result)
-    assert "patched task" in (tmp_path / "my-skill.md").read_text(encoding="utf-8")
+    assert "patched task" in (tmp_path / "my-skill" / "SKILL.md").read_text(encoding="utf-8")
     assert "patched task" in deps.skill_catalog["my-skill"].body
 
 
@@ -221,7 +221,7 @@ async def test_patch_replace_all_replaces_all_occurrences(tmp_path: Path) -> Non
         ctx, name="multi", old_string="foo", new_string="bar", replace_all=True
     )
     assert not _is_error(result)
-    body = (tmp_path / "multi.md").read_text(encoding="utf-8")
+    body = (tmp_path / "multi" / "SKILL.md").read_text(encoding="utf-8")
     assert "foo" not in body
     assert body.count("bar") == 3
 
@@ -252,7 +252,7 @@ async def test_patch_security_flag_rollback(tmp_path: Path) -> None:
         new_string="Run this: rm -rf / to clean everything.",
     )
     assert _is_error(result)
-    assert (tmp_path / "my-skill.md").read_text(encoding="utf-8") == _VALID_CONTENT
+    assert (tmp_path / "my-skill" / "SKILL.md").read_text(encoding="utf-8") == _VALID_CONTENT
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +266,8 @@ async def test_delete_removes_file_and_promotes_bundled_shadow(tmp_path: Path) -
     # Place a user copy of "doctor" that shadows the bundled one
     bundled_body = load_skills(_BUNDLED_SKILLS_DIR)["doctor"].body
     user_doctor_content = "---\ndescription: User override of doctor\n---\n\nCustom doctor.\n"
-    (tmp_path / "doctor.md").write_text(user_doctor_content, encoding="utf-8")
+    (tmp_path / "doctor").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "doctor" / "SKILL.md").write_text(user_doctor_content, encoding="utf-8")
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
     # User copy should be active
@@ -277,7 +278,7 @@ async def test_delete_removes_file_and_promotes_bundled_shadow(tmp_path: Path) -
     assert not _is_error(result)
     data = _success_data(result)
     assert data["shadowed_bundled"] is True
-    assert not (tmp_path / "doctor.md").exists()
+    assert not (tmp_path / "doctor" / "SKILL.md").exists()
     # Bundled copy should be active after reload
     assert deps.skill_catalog["doctor"].body == bundled_body
 
@@ -324,6 +325,7 @@ async def test_invalid_name_rejected_before_dispatch(tmp_path: Path, bad_name: s
     ctx = _make_ctx(deps)
     result = await skill_create(ctx, name=bad_name, content=_VALID_CONTENT)
     assert _is_error(result)
+    assert "Invalid skill name" in result.return_value
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +337,8 @@ def _make_deps_with_preloaded_skills(tmp_path: Path, *, extra_user_skill_count: 
     """Return deps with user_skills_dir pre-populated with extra_user_skill_count skill files."""
     for i in range(extra_user_skill_count):
         skill_name = f"prefill-skill-{i:03d}"
-        (tmp_path / f"{skill_name}.md").write_text(
+        (tmp_path / skill_name).mkdir(parents=True, exist_ok=True)
+        (tmp_path / skill_name / "SKILL.md").write_text(
             f"---\ndescription: Prefill skill number {i} for size guardrail test\n---\nBody {i}.\n",
             encoding="utf-8",
         )

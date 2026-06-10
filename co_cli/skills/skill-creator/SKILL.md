@@ -8,7 +8,7 @@ user-invocable: true
 
 **Invocation:** `/skill-creator <task-type-name>`
 
-Promote a procedure you just executed into a reusable skill. Walks from decision through authoring, lint check, and write. Output lands in `~/.co-cli/skills/<name>.md` and is immediately dispatchable.
+Promote a procedure you just executed into a reusable skill. Walks from decision through authoring, lint check, and write. Output lands in `~/.co-cli/skills/<name>/SKILL.md` and is immediately dispatchable.
 
 ---
 

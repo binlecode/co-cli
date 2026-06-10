@@ -80,15 +80,48 @@ def test_write_then_read_roundtrip(tmp_path: Path) -> None:
     }
     skill_usage.write_record(deps, "foo", record)
 
-    assert (tmp_path / "foo.usage.json").exists()
+    assert (tmp_path / "foo" / "SKILL.usage.json").exists()
     loaded = skill_usage.read_record(deps, "foo")
     assert loaded == record
 
 
 def test_read_record_returns_none_on_corrupt_json(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
-    (tmp_path / "foo.usage.json").write_text("{this is not json", encoding="utf-8")
+    (tmp_path / "foo").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "foo" / "SKILL.usage.json").write_text("{this is not json", encoding="utf-8")
     assert skill_usage.read_record(deps, "foo") is None
+
+
+def test_iter_records_yields_every_sidecar_with_values(tmp_path: Path) -> None:
+    """iter_records globs */SKILL.usage.json and yields each skill's record by name.
+
+    Failure mode: the post-migration glob regressing to flat *.usage.json would
+    yield zero records, silently starving curation/decay of every sidecar.
+    """
+    deps = _make_deps(tmp_path)
+
+    def _rec(use_count: int) -> dict:
+        return {
+            "version": 1,
+            "use_count": use_count,
+            "view_count": 0,
+            "patch_count": 0,
+            "created_at": "2026-01-01T00:00:00Z",
+            "last_used_at": None,
+            "last_viewed_at": None,
+            "last_patched_at": None,
+            "state": "active",
+            "pinned": False,
+            "recall_days": [],
+        }
+
+    skill_usage.write_record(deps, "alpha", _rec(5))
+    skill_usage.write_record(deps, "beta", _rec(2))
+
+    records = dict(skill_usage.iter_records(deps))
+    assert set(records) == {"alpha", "beta"}
+    assert records["alpha"]["use_count"] == 5
+    assert records["beta"]["use_count"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +130,8 @@ def test_read_record_returns_none_on_corrupt_json(tmp_path: Path) -> None:
 
 
 def test_is_agent_created_true_for_user_skill(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     deps = _make_deps(tmp_path)
     assert skill_usage.is_agent_created("my-skill", deps) is True
 
@@ -113,7 +147,8 @@ def test_is_agent_created_false_for_bundled_only(tmp_path: Path) -> None:
 
 
 def test_bump_view_creates_record_and_increments(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     deps = _make_deps(tmp_path)
     skill_usage.bump_view(deps, "my-skill")
 
@@ -133,7 +168,8 @@ def test_bump_view_skips_bundled_skill(tmp_path: Path) -> None:
 
 
 def test_bump_use_increments_use_count_and_timestamp(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     deps = _make_deps(tmp_path)
     skill_usage.bump_use(deps, "my-skill")
     record = skill_usage.read_record(deps, "my-skill")
@@ -145,7 +181,8 @@ def test_bump_use_increments_use_count_and_timestamp(tmp_path: Path) -> None:
 
 
 def test_bump_patch_increments_patch_count_and_timestamp(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     deps = _make_deps(tmp_path)
     skill_usage.bump_patch(deps, "my-skill")
     record = skill_usage.read_record(deps, "my-skill")
@@ -160,7 +197,8 @@ def test_bump_patch_increments_patch_count_and_timestamp(tmp_path: Path) -> None
 
 
 def test_record_create_initializes_record(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     deps = _make_deps(tmp_path)
     skill_usage.record_create(deps, "my-skill")
     record = skill_usage.read_record(deps, "my-skill")
@@ -174,12 +212,13 @@ def test_record_create_initializes_record(tmp_path: Path) -> None:
 
 
 def test_forget_removes_entry(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     deps = _make_deps(tmp_path)
     skill_usage.record_create(deps, "my-skill")
-    assert (tmp_path / "my-skill.usage.json").exists()
+    assert (tmp_path / "my-skill" / "SKILL.usage.json").exists()
     skill_usage.forget(deps, "my-skill")
-    assert not (tmp_path / "my-skill.usage.json").exists()
+    assert not (tmp_path / "my-skill" / "SKILL.usage.json").exists()
     assert skill_usage.read_record(deps, "my-skill") is None
 
 
@@ -200,7 +239,8 @@ def test_set_pinned_creates_stub_when_no_record(tmp_path: Path) -> None:
 
 
 def test_set_pinned_toggles_existing_record(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     deps = _make_deps(tmp_path)
     skill_usage.bump_view(deps, "my-skill")
     skill_usage.set_pinned(deps, "my-skill", True)
@@ -219,12 +259,13 @@ def test_set_pinned_toggles_existing_record(tmp_path: Path) -> None:
 
 
 def test_bump_view_short_circuits_when_disabled(tmp_path: Path) -> None:
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     config = SETTINGS.model_copy(deep=True)
     config.skills.usage_tracking_enabled = False
     deps = _make_deps(tmp_path, config=config)
     skill_usage.bump_view(deps, "my-skill")
-    assert not (tmp_path / "my-skill.usage.json").exists()
+    assert not (tmp_path / "my-skill" / "SKILL.usage.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -234,15 +275,16 @@ def test_bump_view_short_circuits_when_disabled(tmp_path: Path) -> None:
 
 def test_bump_view_swallows_write_failures(tmp_path: Path) -> None:
     """A real OS write failure during bump_view is swallowed; no tmp file leftovers."""
-    (tmp_path / "my-skill.md").write_text(_VALID_CONTENT, encoding="utf-8")
-    sidecar_path = tmp_path / "my-skill.usage.json"
+    (tmp_path / "my-skill").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "my-skill" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    sidecar_path = tmp_path / "my-skill" / "SKILL.usage.json"
     sidecar_path.mkdir()
     deps = _make_deps(tmp_path)
 
     skill_usage.bump_view(deps, "my-skill")
 
     assert sidecar_path.is_dir()
-    leftovers = list(tmp_path.glob("my-skill.usage.json.tmp.*"))
+    leftovers = list(tmp_path.glob("my-skill/SKILL.usage.json.tmp.*"))
     assert leftovers == []
 
 
@@ -308,7 +350,7 @@ async def test_skill_delete_removes_sidecar_entry(tmp_path: Path) -> None:
 
     await skill_delete(ctx, name="my-skill")
     assert skill_usage.read_record(deps, "my-skill") is None
-    assert not (tmp_path / "my-skill.usage.json").exists()
+    assert not (tmp_path / "my-skill" / "SKILL.usage.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -318,13 +360,15 @@ async def test_skill_delete_removes_sidecar_entry(tmp_path: Path) -> None:
 
 def test_bump_one_skill_does_not_touch_another(tmp_path: Path) -> None:
     """bump_use on skill A does not modify skill B's sidecar."""
-    (tmp_path / "alpha.md").write_text(_VALID_CONTENT, encoding="utf-8")
-    (tmp_path / "beta.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "alpha").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "alpha" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
+    (tmp_path / "beta").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "beta" / "SKILL.md").write_text(_VALID_CONTENT, encoding="utf-8")
     deps = _make_deps(tmp_path)
 
     skill_usage.bump_use(deps, "alpha")
     skill_usage.bump_use(deps, "beta")
-    beta_path = tmp_path / "beta.usage.json"
+    beta_path = tmp_path / "beta" / "SKILL.usage.json"
     beta_mtime_before = beta_path.stat().st_mtime_ns
 
     for _ in range(3):

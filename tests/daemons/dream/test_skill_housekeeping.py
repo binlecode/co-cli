@@ -25,9 +25,9 @@ from co_cli.daemons.dream._state import HousekeepingState
 
 
 def _write_skill(user_skills_dir: Path, name: str, body: str, description: str = "test") -> Path:
-    user_skills_dir.mkdir(parents=True, exist_ok=True)
     text = f"---\ndescription: {description}\n---\n\n{body}\n"
-    path = user_skills_dir / f"{name}.md"
+    path = user_skills_dir / name / "SKILL.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
 
@@ -55,7 +55,8 @@ def _write_sidecar(
         "pinned": pinned,
         "recall_days": recall_days or [],
     }
-    path = user_skills_dir / f"{name}.usage.json"
+    path = user_skills_dir / name / "SKILL.usage.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
 
@@ -234,11 +235,14 @@ def test_decay_skills_archives_recall_outside_window(tmp_path: Path) -> None:
     assert archived == 1
     assert state.stats.skill_decayed == 1
     assert not skill_path.exists(), "source skill must be moved, not copied"
-    assert (user_skills_dir / ".archive" / "lapsed.md").exists()
+    assert (user_skills_dir / ".archive" / "lapsed" / "SKILL.md").exists()
+    assert (user_skills_dir / ".archive" / "lapsed" / "SKILL.usage.json").exists(), (
+        "sidecar must travel with the archived folder (whole-folder move, not per-file)"
+    )
 
 
 def test_decay_skills_skips_skills_without_sidecar(tmp_path: Path) -> None:
-    """A .md without a usage.json sidecar is never decayed."""
+    """A skill without a usage.json sidecar is never decayed."""
     user_skills_dir = tmp_path / "skills"
     _write_skill(user_skills_dir, "orphan", "body without sidecar")
 
@@ -249,7 +253,9 @@ def test_decay_skills_skips_skills_without_sidecar(tmp_path: Path) -> None:
     state = HousekeepingState()
     archived = decay_skills(deps, state)
     assert archived == 0
-    assert (user_skills_dir / "orphan.md").exists(), "sidecar-less skill must not be archived"
+    assert (user_skills_dir / "orphan" / "SKILL.md").exists(), (
+        "sidecar-less skill must not be archived"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -258,18 +264,18 @@ def test_decay_skills_skips_skills_without_sidecar(tmp_path: Path) -> None:
 
 
 def test_archive_user_skill_resolves_collisions(tmp_path: Path) -> None:
-    """When .archive/<name>.md exists, the new archive gets a -1 suffix."""
+    """When .archive/<name>/ exists, the new archive folder gets a -1 suffix."""
     user_skills_dir = tmp_path / "skills"
     archive_dir = user_skills_dir / ".archive"
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    (archive_dir / "dup.md").write_text("prior archive", encoding="utf-8")
+    (archive_dir / "dup").mkdir(parents=True, exist_ok=True)
+    (archive_dir / "dup" / "SKILL.md").write_text("prior archive", encoding="utf-8")
 
     path = _write_skill(user_skills_dir, "dup", "fresh body")
     deps = _deps(user_skills_dir)
     ok = _archive_user_skill(deps, path)
     assert ok is True
-    assert (archive_dir / "dup-1.md").exists()
-    assert (archive_dir / "dup.md").read_text(encoding="utf-8") == "prior archive"
+    assert (archive_dir / "dup-1" / "SKILL.md").exists()
+    assert (archive_dir / "dup" / "SKILL.md").read_text(encoding="utf-8") == "prior archive"
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +330,9 @@ def test_manifest_render_does_not_bump_recall_days(tmp_path: Path) -> None:
     assert "<available_skills>" in out
     assert 'name="watched"' in out
 
-    sidecar = json.loads((user_skills_dir / "watched.usage.json").read_text(encoding="utf-8"))
+    sidecar = json.loads(
+        (user_skills_dir / "watched" / "SKILL.usage.json").read_text(encoding="utf-8")
+    )
     assert sidecar["recall_days"] == ["2026-01-01"], (
         "manifest assembly must NOT mutate recall_days"
     )

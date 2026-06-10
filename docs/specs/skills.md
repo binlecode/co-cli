@@ -8,7 +8,7 @@ Skills are procedural capability — name-addressable workflows injected as prom
 
 ```mermaid
 flowchart LR
-    SkillFile["skill .md file"] --> Loader["load_skills"]
+    SkillFile["SKILL.md (in skill folder)"] --> Loader["load_skills"]
     Loader --> Registry["deps.skill_catalog\n+ get_skill_catalog()"]
     Registry --> Dispatch["name args"]
     Dispatch --> AgentBody["expanded skill body"]
@@ -59,18 +59,18 @@ The dream daemon's domain reviewers also write via the skill write tools (`skill
 
 | Field | Purpose |
 |-------|---------|
-| `name` | slash-command name derived from file stem |
+| `name` | slash-command name derived from the parent directory name |
 | `description` | listing text shown in `/skills` and exposed via `get_skill_catalog()` |
 | `body` | prompt body injected into the main agent on dispatch |
 | `argument_hint` | UI hint for `/help` and `/skills` |
 | `user_invocable` | whether the skill appears as a slash command |
 | `disable_model_invocation` | hide from `get_skill_catalog()` results and manifest |
 | `skill_env` | env vars injected for the duration of the dispatched turn |
-| `path` | absolute path to the `.md` file on disk; `None` for programmatic configs |
+| `path` | absolute path to the skill's `SKILL.md` on disk; `None` for programmatic configs |
 
 ### File Format
 
-Markdown files parsed with `parse_frontmatter()` from `co_cli/memory/frontmatter.py`. Skill name is always the filename stem. Built-in slash commands are reserved and cannot be shadowed.
+Every skill is a directory `<name>/` containing a `SKILL.md` entry file; the directory name is the authoritative skill name. The `SKILL.md` is parsed with `parse_frontmatter()` from `co_cli/memory/frontmatter.py`. Sibling files/dirs in the folder (`scripts/`, `references/`) are ignored by discovery. Built-in slash commands are reserved and cannot be shadowed.
 
 | Frontmatter Field | Purpose |
 |-------------------|---------|
@@ -84,9 +84,9 @@ Markdown files parsed with `parse_frontmatter()` from `co_cli/memory/frontmatter
 
 ```
 create_deps()
-  ├─ Pass 1: load bundled skills from co_cli/skills/*.md
+  ├─ Pass 1: load bundled skills from co_cli/skills/*/SKILL.md
   │    no security scan (version-controlled)
-  └─ Pass 2: load user-global skills from ~/.co-cli/skills/*.md
+  └─ Pass 2: load user-global skills from ~/.co-cli/skills/*/SKILL.md
        security scan applied
        name collision → user-global overrides bundled
 ```
@@ -223,7 +223,7 @@ One additional gate for the shipped reference library only (run from `tests/test
 
 | Rule | Check | Scope |
 |------|-------|-------|
-| **B1** | No `TODO`, `FIXME`, or `XXX` markers | `co_cli/skills/*.md` only |
+| **B1** | No `TODO`, `FIXME`, or `XXX` markers | `co_cli/skills/*/SKILL.md` only |
 
 Lint is collaborative — it catches well-meaning skills that won't perform well. The security scan (`scan_skill_content`) is adversarial — it catches actively malicious content. Integrity rules (frontmatter integrity, description present and ≤1024, total content ≤100k) block the write via `_validate_skill_content`; lint never blocks; security scan blocks on findings at write time.
 
@@ -255,9 +255,9 @@ The skill reviewer reloads skills from disk before its pass so it sees prior wri
 
 Curation preference order: update a skill loaded in the current session → update an existing umbrella skill → create a new class-level skill only if nothing applicable exists.
 
-**Dream-daemon skill housekeeping.** The dream daemon also runs scheduled-tick `merge_skills` and `decay_skills` phases against `user_skills_dir` — full mechanics in [dream.md §2.5](dream.md). Skill merge clusters similar user-skill bodies (token-Jaccard ≥ `skills.consolidation_similarity_threshold`), picks the highest-recall canonical, and LLM-merges the cluster into the anchor; siblings move to `user_skills_dir/.archive/`. Skill decay archives user skills whose sidecar `created_at` is older than `skills.decay_after_days` AND whose most recent `recall_days` entry is older than `skills.recall_protection_days` (or whose `recall_days` is empty). Pinned skills (`/skills pin <name>`) and skills without a sidecar are exempt. Restoration from `.archive/` is a manual `mv` for now — there is no slash-command surface.
+**Dream-daemon skill housekeeping.** The dream daemon also runs scheduled-tick `merge_skills` and `decay_skills` phases against `user_skills_dir` — full mechanics in [dream.md §2.5](dream.md). Skill merge clusters similar user-skill bodies (token-Jaccard ≥ `skills.consolidation_similarity_threshold`), picks the highest-recall canonical, and LLM-merges the cluster into the anchor; sibling skill folders move to `user_skills_dir/.archive/<name>/`. Skill decay archives user skills whose sidecar `created_at` is older than `skills.decay_after_days` AND whose most recent `recall_days` entry is older than `skills.recall_protection_days` (or whose `recall_days` is empty). Pinned skills (`/skills pin <name>`) and skills without a sidecar are exempt. Restoration from `.archive/` is a manual `mv` for now — there is no slash-command surface.
 
-**Usage sidecar.** `~/.co-cli/skills/<name>.usage.json` (one file per agent-created skill) tracks per-skill counters (`use_count`, `view_count`, `patch_count`), timestamps (`created_at`, `last_used_at`, `last_viewed_at`, `last_patched_at`), `pinned`, and `recall_days` (list of ISO-date strings recording which days the skill was recalled — deduped, updated by `skill_view` and `/<skill>` slash dispatch). Sidecar I/O is best-effort: failures are logged and swallowed so tracking never blocks the underlying tool. Populated only for skills in `user_skills_dir` — bundled skills are excluded.
+**Usage sidecar.** `~/.co-cli/skills/<name>/SKILL.usage.json` (one file per agent-created skill, inside the skill folder so folder deletion is self-cleaning) tracks per-skill counters (`use_count`, `view_count`, `patch_count`), timestamps (`created_at`, `last_used_at`, `last_viewed_at`, `last_patched_at`), `pinned`, and `recall_days` (list of ISO-date strings recording which days the skill was recalled — deduped, updated by `skill_view` and `/<skill>` slash dispatch). Sidecar I/O is best-effort: failures are logged and swallowed so tracking never blocks the underlying tool. Populated only for skills in `user_skills_dir` — bundled skills are excluded.
 
 ## 3. Config
 
@@ -278,8 +278,8 @@ Curation preference order: update a skill loaded in the current session → upda
 |------|--------|-------------|
 | `deps.skills_dir` | package directory `co_cli/skills/` | bundled skills (lowest priority) |
 | `deps.user_skills_dir` | `~/.co-cli/skills/` | user-global skills (overrides bundled on name collision) |
-| `~/.co-cli/skills/<name>.usage.json` | `co_cli/skills/usage.py` | per-skill usage sidecar (counters, timestamps, `pinned`, `recall_days`) |
-| `~/.co-cli/skills/.archive/` | `co_cli/daemons/dream/_housekeeping.py` | archived skills moved here by dream-daemon skill merge/decay |
+| `~/.co-cli/skills/<name>/SKILL.usage.json` | `co_cli/skills/usage.py` | per-skill usage sidecar (counters, timestamps, `pinned`, `recall_days`); lives inside the skill folder |
+| `~/.co-cli/skills/.archive/<name>/` | `co_cli/daemons/dream/_housekeeping.py` | archived skill folders moved here by dream-daemon skill merge/decay |
 
 ## 4. Public Interface
 
@@ -291,22 +291,22 @@ invalid name (not matching `[a-z0-9_-]+`, ≤64 chars) is rejected before dispat
 
 | Tool | Subject | Behaviour |
 |------|---------|-----------|
-| `skill_create(name, content)` | `tool:skill_create:<name>` | Write new `<name>.md` to `user_skills_dir`; reject if exists; validate frontmatter (`description` required, ≤1024 chars); security scan; rollback on flag; reload. |
+| `skill_create(name, content)` | `tool:skill_create:<name>` | Create `<name>/SKILL.md` under `user_skills_dir` (making the folder); reject if exists; validate frontmatter (`description` required, ≤1024 chars); security scan; rollback removes the folder on flag; reload. |
 | `skill_edit(name, content)` | `tool:skill_edit:<name>` | Full rewrite of an existing user-installed skill; validate + scan + rollback on flag; reload. |
 | `skill_patch(name, old_string, new_string, replace_all=False)` | `tool:skill_patch:<name>` | Find-and-replace within a skill body; `replace_all=False` enforces exactly one match; scan + rollback; reload. |
-| `skill_delete(name)` | `tool:skill_delete:<name>` | Remove a user-installed skill; reload; returns `shadowed_bundled=true` when a bundled skill of the same name becomes active. |
+| `skill_delete(name)` | `tool:skill_delete:<name>` | Remove a user-installed skill's whole `<name>/` folder (sidecar included); reload; returns `shadowed_bundled=true` when a bundled skill of the same name becomes active. |
 
 `skill_edit`, `skill_patch`, and `skill_delete` reject bundled-only skills ("copy to `~/.co-cli/skills/` first"). After every successful write, `refresh_skills(deps)` re-loads and re-indexes so the change is immediately dispatchable.
 
 #### `skill_view(name)`
 
-Returns a skill's full body, addressed by the `filename_stem` from the skill manifest. `spill_threshold_chars=inf` — body always lands inline regardless of size.
+Returns a skill's full body, addressed by the skill name (the skill's directory name) from the manifest. `spill_threshold_chars=inf` — body always lands inline regardless of size.
 
 ### Loader and registry
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `load_skills(skills_dir, settings, user_skills_dir) -> dict[str, SkillInfo]` | `co_cli/skills/loader.py` | Two-pass loader; security scan on user-global only |
+| `load_skills(skills_dir, *, user_skills_dir=None, errors=None) -> dict[str, SkillInfo]` | `co_cli/skills/loader.py` | Two-pass loader; security scan on user-global only |
 | `refresh_skills(deps) -> None` | `co_cli/skills/lifecycle.py` | Re-loads both tiers; replaces `deps.skill_catalog` |
 | `get_skill_catalog(skill_catalog) -> list[dict]` | `co_cli/skills/index.py` | Model-facing list; excludes `disable_model_invocation=True` and blank-description skills |
 
