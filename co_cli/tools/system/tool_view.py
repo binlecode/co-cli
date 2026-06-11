@@ -82,6 +82,19 @@ async def tool_view(
 
     canonical = by_normalized.get(query)
     if canonical is not None:
+        # Honest gate: a DEFERRED tool may carry a per-turn check_fn (e.g. image_view needs a
+        # vision-capable model; google_* needs a credential). When that gate is currently
+        # false the per-turn visibility filter would keep the tool hidden even after a reveal,
+        # so unlocking it here would hand the model a tool that never materializes. Surface the
+        # unavailability instead of revealing it.
+        info = ctx.deps.tool_catalog.get(canonical)
+        if info is not None and info.check_fn is not None and not info.check_fn(ctx.deps):
+            return tool_output(
+                f"`{canonical}` exists but is not available in this session — its runtime "
+                f"prerequisites are not met (a required model or credential is absent). "
+                f"Not loaded; do not retry until the prerequisite is configured.",
+                ctx=ctx,
+            )
         ctx.deps.runtime.revealed_tools.add(canonical)
         return tool_output(
             f"Loaded `{canonical}`. It is now callable — call it directly with its arguments.",

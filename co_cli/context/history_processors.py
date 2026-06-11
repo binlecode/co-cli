@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -536,6 +537,73 @@ def strip_all_tool_returns(messages: list[ModelMessage]) -> list[ModelMessage]:
         return _build_cleared_part(part, call_id_to_args)
 
     return _rewrite_tool_returns(messages, len(messages), replacement_for=replacement_for)
+
+
+_ELIDED_IMAGE_PLACEHOLDER = "[image elided]"
+"""Replacement for multimodal pixels in non-tail UserPromptParts on replay.
+
+image_view's native path attaches pixels via ToolReturn.content, which pydantic-ai
+materializes as a UserPromptPart whose content is a Sequence[UserContent] carrying
+BinaryContent. Older turns' pixels are replaced by this text placeholder so base64
+does not accumulate across turns.
+"""
+
+
+def _elide_multimodal_content(content: list[Any]) -> tuple[list[Any], bool]:
+    """Replace BinaryContent items in a UserPromptPart content sequence with a placeholder.
+
+    Returns ``(new_content, changed)``. Non-pixel items (text, URL references) pass
+    through unchanged; only inline pixel payloads (BinaryContent) are elided — those are
+    the base64 bloat image_view's native path injects.
+    """
+    new_content: list[Any] = []
+    changed = False
+    for item in content:
+        if isinstance(item, BinaryContent):
+            new_content.append(_ELIDED_IMAGE_PLACEHOLDER)
+            changed = True
+        else:
+            new_content.append(item)
+    return new_content, changed
+
+
+def elide_old_multimodal_prompts(
+    ctx: RunContext[CoDeps],
+    messages: list[ModelMessage],
+) -> list[ModelMessage]:
+    """Strip inline pixels from non-tail UserPromptParts so base64 does not accumulate.
+
+    image_view's native path feeds real pixels to the model via ToolReturn.content,
+    which pydantic-ai materializes as a separate UserPromptPart (not a ToolReturnPart —
+    the existing processors only cover those). This processor preserves the most recent
+    turn's pixels (so the model can still answer about the freshest image) and replaces
+    BinaryContent in older UserPromptParts with a text placeholder.
+
+    Protects the last turn via the same ``_find_last_turn_start`` boundary the tool-return
+    processors use. Non-multimodal UserPromptParts (string content) and the protected tail
+    pass through unchanged. Pure: rebuilds only the messages where a part changed.
+    """
+    boundary = _find_last_turn_start(messages)
+    if not boundary:
+        return messages
+
+    result: list[ModelMessage] = []
+    for idx, msg in enumerate(messages):
+        if idx >= boundary or not isinstance(msg, ModelRequest):
+            result.append(msg)
+            continue
+        new_parts: list = []
+        modified = False
+        for part in msg.parts:
+            if isinstance(part, UserPromptPart) and not isinstance(part.content, str):
+                new_content, changed = _elide_multimodal_content(list(part.content))
+                if changed:
+                    new_parts.append(replace(part, content=new_content))
+                    modified = True
+                    continue
+            new_parts.append(part)
+        result.append(replace(msg, parts=new_parts) if modified else msg)
+    return result
 
 
 # ---------------------------------------------------------------------------

@@ -23,10 +23,11 @@ run_turn() (orchestrate.py:run_turn)
           │
           ┌── ModelRequestNode (pre-flight) ──────────────────────────────────┐
           │   history_processors run IN ORDER:                                │
-          │     1. dedup_tool_results          (collapse identical returns)   │
-          │     2. evict_old_tool_results      (keep 5 most recent per tool)  │
-          │     3. spill_largest_tool_results           (L2 force-spill cap)  │
-          │     4. proactive_window_processor  (L3 LLM compaction)            │
+          │     1. elide_old_multimodal_prompts (drop non-tail image pixels)  │
+          │     2. dedup_tool_results          (collapse identical returns)   │
+          │     3. evict_old_tool_results      (keep 5 most recent per tool)  │
+          │     4. spill_largest_tool_results           (L2 force-spill cap)  │
+          │     5. proactive_window_processor  (L3 LLM compaction)            │
           │   model.request() → HTTP                                          │
           └───────────────────────────────────────────────────────────────────┘
           │
@@ -74,7 +75,7 @@ All three LLM-capable paths share one primitive — `compact_messages(ctx, messa
 
 ### 1.3 Diagram: Overall compaction pipeline
 
-Mermaid view of the same pipeline shown in §1.1. End-to-end flow: `UserPromptPart` → `ModelRequestNode` pre-flight hook (the **MRN** subgraph — four `history_processors`) → model HTTP → `CallToolsNode` (the **CTN** subgraph — per-result `spill_if_oversized` only); overflow recovery branches off HTTP 400/413. See §2.3 for per-stage message transformation; §2.4 for `spill_largest_tool_results`; §2.5 for `proactive_window_processor` internals.
+Mermaid view of the same pipeline shown in §1.1. End-to-end flow: `UserPromptPart` → `ModelRequestNode` pre-flight hook (the **MRN** subgraph — five `history_processors`) → model HTTP → `CallToolsNode` (the **CTN** subgraph — per-result `spill_if_oversized` only); overflow recovery branches off HTTP 400/413. See §2.3 for per-stage message transformation; §2.4 for `spill_largest_tool_results`; §2.5 for `proactive_window_processor` internals.
 
 ```mermaid
 flowchart TD
@@ -84,7 +85,7 @@ flowchart TD
 
     subgraph MRN["ModelRequestNode — history_processors chain → HTTP"]
         direction LR
-        C0["dedup_tool_results"] --> C1["evict_old_tool_results"] --> CE["spill_largest_tool_results"] --> C2["proactive_window_processor"] --> HTTP["model.request()\nHTTP → model"]
+        CM["elide_old_multimodal_prompts"] --> C0["dedup_tool_results"] --> C1["evict_old_tool_results"] --> CE["spill_largest_tool_results"] --> C2["proactive_window_processor"] --> HTTP["model.request()\nHTTP → model"]
     end
 
     subgraph CTN["CallToolsNode — execute_tools (per-result spill_if_oversized only)"]

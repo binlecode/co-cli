@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.342]
+
+### Feature: vision input — `image_view` tool
+
+- New DEFERRED, capability-gated `image_view(path, prompt)` tool (`co_cli/tools/vision/view.py`) — reads a local image (png/jpeg/webp/gif) and attaches the real pixels via `ToolReturn.content`, which pydantic-ai materializes as a separate `UserPromptPart` so the agent model sees them next turn. Read-boundary-confined, ~20 MB cap, media-type allowlist (PDFs routed to the `documents` skill).
+- Vision is the **agent model's own capability or nothing** — no describe-fallback, no pinned `vision_model`. Resolved once at bootstrap onto `deps.agent_vision_capable` (True for Gemini and for an Ollama model whose `/api/show` reports `vision`). `probe_ollama_model` now returns `OllamaModelProbe` (num_ctx + vision) from the same `/api/show` call, degrading to `vision=False` on error.
+- Honest gate: when the agent model can't see, `image_view` self-hides (`check_fn=_vision_available`) and `tool_view` returns a remediation message instead of revealing a tool that can never materialize — also closing a pre-existing phantom-load gap for the `check_fn`-gated Google tools.
+- New history processor `elide_old_multimodal_prompts` (`co_cli/context/history_processors.py`) elides multimodal pixels from non-tail `UserPromptPart`s on replay (preserving the most-recent turn), so base64 does not accumulate across turns.
+- Tests: `tests/test_flow_vision.py` (real-model native-pixel read + deterministic gate/error/elision cases, no mocks). Specs synced: `tools.md`, `config.md`, `compaction.md`, `bootstrap.md`.
+
 ## [0.8.340]
 
 ### Feature: `documents` skill — local PDF text extraction

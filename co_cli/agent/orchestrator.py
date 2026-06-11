@@ -18,6 +18,7 @@ from co_cli.agent.spec import OrchestratorSpec
 from co_cli.context.compaction import proactive_window_processor
 from co_cli.context.history_processors import (
     dedup_tool_results,
+    elide_old_multimodal_prompts,
     evict_old_tool_results,
     spill_largest_tool_results,
 )
@@ -63,6 +64,7 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
         skill_manifest_prompt,
     ),
     history_processors=(
+        elide_old_multimodal_prompts,
         dedup_tool_results,
         evict_old_tool_results,
         spill_largest_tool_results,

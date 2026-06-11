@@ -258,28 +258,34 @@ def _check_ollama_num_ctx_floor(num_ctx: int, model: str, max_ctx: int) -> None:
         )
 
 
-def _probe_model_ctx(config: Settings) -> int:
-    """Resolve model_max_ctx from config + Ollama probe."""
+def _probe_model_ctx(config: Settings) -> tuple[int, bool]:
+    """Resolve model_max_ctx and agent vision-capability from config + Ollama probe.
+
+    Returns ``(model_max_ctx, agent_vision_capable)``. Gemini is natively multimodal
+    (vision True, no probe). Ollama reads num_ctx and the vision capability from one
+    /api/show probe; probe failure degrades vision to False (honest gate) and falls
+    back to the configured max_ctx for the context size.
+    """
     if not config.llm.uses_ollama():
         logger.debug(
             "non-ollama provider %s; using configured max_ctx=%d",
             config.llm.provider,
             config.llm.max_ctx,
         )
-        return config.llm.max_ctx
+        return config.llm.max_ctx, True
 
     from co_cli.bootstrap.check import probe_ollama_model, validate_ollama_num_ctx
 
-    num_ctx = probe_ollama_model(config.llm.host, config.llm.model)
-    if num_ctx is not None:
-        _check_ollama_num_ctx_floor(num_ctx, config.llm.model, config.llm.max_ctx)
+    probe = probe_ollama_model(config.llm.host, config.llm.model)
+    if probe.num_ctx is not None:
+        _check_ollama_num_ctx_floor(probe.num_ctx, config.llm.model, config.llm.max_ctx)
     else:
         logger.warning(
             "ollama ctx probe failed; using configured max_ctx=%d as fallback",
             config.llm.max_ctx,
         )
     validate_ollama_num_ctx(config)
-    return config.llm.max_ctx
+    return config.llm.max_ctx, probe.vision
 
 
 @trace("tool_budget.resolved")
@@ -331,7 +337,7 @@ async def create_deps(
     if error:
         raise ValueError(error)
 
-    model_max_ctx = _probe_model_ctx(config)
+    model_max_ctx, agent_vision_capable = _probe_model_ctx(config)
 
     from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
@@ -419,6 +425,7 @@ async def create_deps(
         config=config,
         model=llm_model,
         judge_model=judge_llm_model,
+        agent_vision_capable=agent_vision_capable,
         index_store=index_store,
         memory_store=memory_store,
         session_store=session_store,

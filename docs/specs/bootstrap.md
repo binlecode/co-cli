@@ -231,7 +231,7 @@ These settings most directly affect bootstrap behavior.
 | --- | --- | --- |
 | `create_deps(frontend, stack) -> CoDeps` | `co_cli/bootstrap/core.py` | Async — assembles the runtime context from settings (validates config, probes model, builds tool registry, connects MCP, loads skills, builds memory store) |
 | `restore_session(deps, frontend) -> Path` | `co_cli/bootstrap/core.py` | Picks the most recent `*.jsonl` under `sessions_dir` and writes it to `deps.session.session_path`; mints a new path when none exists |
-| `probe_ollama_model(host, model) -> ProbeResult` | `co_cli/bootstrap/check.py` | Posts to `/api/show`; returns `num_ctx` and capabilities for floor validation |
+| `probe_ollama_model(host, model) -> OllamaModelProbe` | `co_cli/bootstrap/check.py` | Posts to `/api/show`; returns `num_ctx` (floor validation) and the `vision` capability flag (the `image_view` gate) from one payload; degrades to `(None, False)` on error |
 | `check_security() -> list[SecurityFinding]` | `co_cli/bootstrap/security.py` | Runs the once-per-session security posture checks consumed by `render_security_findings()` |
 | `render_security_findings(findings) -> None` | `co_cli/bootstrap/security.py` | Prints any findings to the console at REPL handoff |
 | `display_welcome_banner(deps, *, memory_count, session_count) -> None` | `co_cli/bootstrap/banner.py` | Renders the boundary banner; `Memory:` row shows backend + degradation + counts |

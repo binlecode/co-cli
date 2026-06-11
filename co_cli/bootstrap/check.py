@@ -65,10 +65,25 @@ class CheckResult:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-def probe_ollama_model(host: str, model: str) -> int | None:
-    """Probe Ollama /api/show for the loaded model's context size.
+@dataclass
+class OllamaModelProbe:
+    """Result of one Ollama /api/show probe — context size + capability flags.
 
-    Returns num_ctx, or None on any error or if unparseable.
+    num_ctx: the loaded Modelfile's num_ctx, or None if unparseable/unreachable.
+    vision: whether the model reports the 'vision' capability. False on any error
+        (honest gate — a blind model must never be treated as vision-capable).
+    """
+
+    num_ctx: int | None
+    vision: bool
+
+
+def probe_ollama_model(host: str, model: str) -> OllamaModelProbe:
+    """Probe Ollama /api/show for the loaded model's context size and capabilities.
+
+    Reads num_ctx and the 'vision' capability from one /api/show payload (no extra
+    request). Degrades to ``OllamaModelProbe(num_ctx=None, vision=False)`` on any
+    error or unparseable response.
     """
     try:
         import httpx
@@ -81,7 +96,7 @@ def probe_ollama_model(host: str, model: str) -> int | None:
         resp.raise_for_status()
         data = resp.json()
     except Exception:
-        return None
+        return OllamaModelProbe(num_ctx=None, vision=False)
 
     num_ctx: int | None = None
     raw_params = data.get("parameters", "")
@@ -95,7 +110,10 @@ def probe_ollama_model(host: str, model: str) -> int | None:
                     pass
                 break
 
-    return num_ctx
+    capabilities = data.get("capabilities")
+    vision = isinstance(capabilities, list) and "vision" in capabilities
+
+    return OllamaModelProbe(num_ctx=num_ctx, vision=vision)
 
 
 def validate_ollama_num_ctx(config: "Settings") -> None:

@@ -294,6 +294,12 @@ class CoDeps:
     # with [judge_model_same_as_agent] reason flag. Set in bootstrap from
     # settings.llm.judge_model via build_judge_model().
     judge_model: LlmModel | None = field(default=None, repr=False)
+    # True when the agent model itself can see pixels — Gemini, or an Ollama model whose
+    # /api/show reports the vision capability (False on probe failure). Resolved once at
+    # bootstrap. This is the sole image_view gate: when True the tool attaches pixels via
+    # ToolReturn.content for the agent model to read next turn; when False image_view
+    # self-hides via its check_fn (honest gate — there is no separate vision model).
+    agent_vision_capable: bool = False
     # Bootstrap-set registries.
     # Each *_catalog is the full enumerated listing of all registered tools/skills
     # regardless of per-turn visibility — a DEFERRED tool stays in tool_catalog.
@@ -415,6 +421,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         session_store=base.session_store,
         model=base.model,
         judge_model=base.judge_model,
+        agent_vision_capable=base.agent_vision_capable,
         tool_catalog=base.tool_catalog,
         skill_catalog=base.skill_catalog,
         session=inherited_session,

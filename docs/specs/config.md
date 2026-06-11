@@ -325,7 +325,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `_LLM_SETTINGS` | `co_cli/config/llm.py` | Provider→model→mode canonical inference knobs (module-private, not user-overridable) |
 | `LlmModel` | `co_cli/llm/factory.py` | Frozen dataclass holding pydantic-ai model + both `ModelSettings` |
 | `build_model(llm) -> LlmModel` | `co_cli/llm/factory.py` | Constructs the pydantic-ai model from `LlmSettings` |
-| `llm_call(deps, system, user, ...) -> str` | `co_cli/llm/call.py` | Async — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
+| `llm_call(deps, prompt, ...) -> str` | `co_cli/llm/call.py` | Async — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
 
 
 ## 5. Files

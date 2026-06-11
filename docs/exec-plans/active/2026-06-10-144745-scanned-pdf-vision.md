@@ -2,11 +2,19 @@
 
 Task type: code + skill content
 
-> **Gated on two unshipped plans.** Depends on **(a)** the vision plan
-> `2026-05-28-150239-vision-input.md` (`image_view` tool) and **(b)** the documents plan
-> `2026-06-09-093734-skill-documents.md` (`extract_pdf.py` + its scanned-detection seam,
-> Constraint 7). This plan is **not buildable** until both land; it is drafted now because both
-> interfaces are concrete enough to design against.
+> **Both dependencies now shipped — plan is buildable (G1 re-review 2026-06-11).** Depends on
+> **(a)** the vision plan `2026-05-28-150239-vision-input.md` (`image_view` tool — reviewed PASS,
+> shipping) and **(b)** the documents plan `2026-06-09-093734-skill-documents.md` (shipped v0.8.340;
+> `extract_pdf.py` + its scanned-detection seam, Constraint 7 — verified in code below). Both
+> interfaces are now concrete source, not planned.
+>
+> **⚠ Vision shipped with a simplified design — reconcile before building.** vision-input dropped the
+> describe-fallback and the `vision_model` config: vision is now the **agent model's own capability or
+> nothing** (`deps.agent_vision_capable`; `image_view` self-hides via `check_fn=_vision_available`,
+> `co_cli/tools/vision/view.py:43-56`). Every "text-description fallback" / "no `vision_model`"
+> reference in this plan has been corrected to "text-only agent model"; the honest-degradation gate
+> (Constraint 2) is unchanged in effect — it simply rides `image_view`'s single capability bool, with
+> no second escape hatch.
 
 ## Context
 
@@ -19,13 +27,15 @@ co's document stack is three tiers, cheapest-first:
   render→vision (openclaw's pattern), not a bundled OCR engine (hermes ships marker opt-in; co
   declines). Peer-verified this session.
 
-Tier 1 already surfaces the handoff: `extract_pdf.py` emits a distinct "no extractable text —
-likely scanned" signal (documents plan Constraint 7) instead of returning blank stdout. Tier 2
-keys off that signal. Vision input already has a home: `image_view(path, prompt)` (vision plan)
-reads a local image and returns real pixels to a vision-capable model via `ToolReturn.content`
-(native path), else a text-description fallback; vision Constraint 5 names this tier as the
-downstream consumer (tier 2 renders pages to PNGs and feeds them **through** `image_view`;
-`image_view` stays image-only).
+Tier 1 already surfaces the handoff: `extract_pdf.py` signals a scanned PDF as **exit 0 + the
+sentinel stdout line `[no-text-layer: likely scanned]`** (documents plan Constraint 7's pinned
+contract) instead of returning blank stdout — deliberately exit 0 so it is distinguishable from
+the non-zero error exits this plan reuses for corrupt/encrypted files. Tier 2 keys off that
+sentinel. Vision input already has a home: `image_view(path, prompt)` (vision plan)
+reads a local image and returns real pixels to the vision-capable agent model via
+`ToolReturn.content` (the sole path — no describe-fallback in the shipped tool); vision
+Constraint 5 names this tier as the downstream consumer (tier 2 renders pages to PNGs and feeds
+them **through** `image_view`; `image_view` stays image-only).
 
 This plan is the thin glue between those two seams: **render + route**, no new tool, no new
 skill, no new model-visible surface. Tier 2 lives **in the `documents` skill** — it is the same
@@ -34,18 +44,19 @@ making it a third skill would fragment one PDF-reading capability and duplicate 
 locate/answer scaffolding. (The `office` sibling is a different *backend* for different
 *formats*; tier 2 is a different *path* for the *same* format the documents skill already owns.)
 
-### Verified current state (source-read 2026-06-10, v0.8.335)
+### Verified current state (source-read 2026-06-10; re-verified against shipped code 2026-06-11)
 
 | Claim | Verified | Cite |
 |---|---|---|
 | Configured default Ollama model `qwen3.6:35b-a3b-agentic` reports `vision` capability | ✓ | `ollama show` / `/api/show` → `['completion','vision','tools','thinking']` (this session) |
-| `image_view(path, prompt)` is local-image-only; returns pixels via `ToolReturn.content`; PDFs rejected → documents | ✓ (planned) | `2026-05-28-150239-vision-input.md` Outcome + Constraint 5 |
-| `image_view` is DEFERRED + capability-gated (`check_fn=_vision_available`); honest gate on blind models | ✓ (planned) | vision plan A2, Constraint 1 |
-| `extract_pdf.py` emits a distinct scanned signal (exit code / sentinel) on empty text layer | ✓ (planned) | `2026-06-09-093734-skill-documents.md` Constraint 7, TASK-2 |
-| `pymupdf` is already a dependency (via the documents plan) and is imported directly there | ✓ (planned) | documents plan dependency layer |
+| `image_view(path, prompt)` is local-image-only; returns pixels via `ToolReturn.content`; PDFs rejected → documents skill | ✓ (shipped) | `co_cli/tools/vision/view.py:86-112` (media-type allowlist; raw `ToolReturn(content=[prompt, BinaryContent])`; PDF → "use the documents skill") |
+| `image_view` is DEFERRED + capability-gated (`check_fn=_vision_available`); honest gate on blind models; **no describe-fallback / no `vision_model`** (vision = `deps.agent_vision_capable` or nothing) | ✓ (shipped) | `view.py:43-56`; gate-on-reveal `tools/system/tool_view.py:91-97`; flag `deps.py:302` |
+| `extract_pdf.py` signals a scanned PDF as **exit 0 + the sentinel stdout line `[no-text-layer: likely scanned]`** (distinct from the non-zero error codes this plan reuses) on empty text layer | ✓ (shipped) | `co_cli/skills/documents/scripts/extract_pdf.py:20` (`SCANNED_SENTINEL`) |
+| `pymupdf` is already a dependency (via the documents plan) and is imported directly there | ✓ (shipped) | `pyproject.toml:28` |
 | pymupdf renders pages to raster via `page.get_pixmap(dpi=…).save(png)` | ✓ | pymupdf API (Page.get_pixmap / Pixmap.save) |
 | Rendering writes image files — `image_view` reads a local path, so pages must be materialized | ✓ | vision plan Constraint 4/5 (local-path read) |
-| The script is invoked as the `co-extract-pdf` console entry point (`[project.scripts]`), **not** `uv run python -m` — `shell_exec`'s allowlist spawn env (`PATH` only, no `VIRTUAL_ENV`/`PYTHONPATH`) + user-`cwd` cannot resolve `co_cli` via `uv run`; `--render` is a flag on that same command | ✓ (convention, documents plan) | `2026-06-09-093734-skill-documents.md` Context + Spec-sync #2 |
+| **Raster `--render` mode is NOT yet built** — `extract_pdf.py`'s existing `_render` is text→markdown (`## Page N`), not page-raster; TASK-1 is greenfield, no conflict | ✓ (shipped) | `extract_pdf.py:123-133` (`_render(chunks, pages)` text builder); no `get_pixmap` present |
+| The script is invoked as the `co-extract-pdf` console entry point (`[project.scripts]`), **not** `uv run python -m` — `shell_exec`'s allowlist spawn env (`PATH` only, no `VIRTUAL_ENV`/`PYTHONPATH`) + user-`cwd` cannot resolve `co_cli` via `uv run`; `--render` is a flag on that same command | ✓ (shipped) | `pyproject.toml:33` (`co-extract-pdf = "...extract_pdf:main"`) |
 
 ## Problem & Outcome
 
@@ -95,11 +106,14 @@ the cause and suggests `web_fetch` (if a URL) or converting the file — and nev
 - **Spec entry** — `docs/specs/` updated by `sync-doc` post-delivery.
 
 ## Behavioral Constraints
-1. **Dependency-gated.** Buildable only after the vision plan (`image_view`) and the documents
-   plan (`extract_pdf.py` + scanned seam) ship. Tasks assume both are in code.
-2. **Honest capability gate (inherited).** If `image_view` is unavailable (text-only model, no
-   vision fallback), the scanned branch does **not** attempt a read — it reports the cause and a
-   workaround. Never render-and-pretend. This rides `image_view`'s own gate, not a second one.
+1. **Dependency-gated — now satisfied.** Both the vision plan (`image_view`) and the documents
+   plan (`extract_pdf.py` + scanned seam) have shipped; both interfaces are live source. Tasks
+   build directly against them.
+2. **Honest capability gate (inherited).** If `image_view` is unavailable (text-only agent model —
+   there is no `vision_model` escape hatch in the shipped tool), the scanned branch does **not**
+   attempt a read — it reports the cause and a workaround. Never render-and-pretend. This rides
+   `image_view`'s own single capability gate (`_vision_available` → `deps.agent_vision_capable`),
+   not a second one.
 3. **Image-only `image_view`.** All PDF parsing/rendering stays in tier 2; `image_view` receives
    only PNG paths.
 4. **Bounded cost — explicit, never silent (load-bearing).** Page count and DPI are capped
@@ -192,9 +206,9 @@ body to chain them on the scanned branch, plus the render mode they chain throug
 ## Testing
 Real pymupdf render against a committed image-only PDF fixture (a page rasterized to an image,
 no text layer — distinct from the tier-1 born-digital fixture). Vision E2E reuses the vision
-plan's pattern: real model, clean **skip** on hosts whose model is text-only with no
-`vision_model`; `CO_HOME` temp override; `noreason_model_settings()`; warmup outside
-`asyncio.timeout`. Negative/degradation cases are deterministic (no model). Run scoped, fail-fast,
+plan's pattern: real model, clean **skip** on hosts whose agent model is text-only (gated on
+`deps.agent_vision_capable` — no `vision_model` concept); `CO_HOME` temp override;
+`noreason_model_settings()`; warmup outside `asyncio.timeout`. Negative/degradation cases are deterministic (no model). Run scoped, fail-fast,
 tee'd: `uv run pytest -x tests/test_flow_scanned_pdf.py 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-scanned-pdf.log`.
 
 ## Open Questions
@@ -222,5 +236,9 @@ scanned branch is a per-page text-accumulating read, cross-page *visual* reasoni
 
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
-> **Gated:** ship `vision-input` and `skill-documents` first. Once those land and this is
-> approved, run: `/orchestrate-dev scanned-pdf-vision`.
+> **Gates cleared (2026-06-11):** `skill-documents` shipped (v0.8.340); `vision-input` reviewed
+> PASS and shipping. Plan reconciled against shipped code — describe-fallback / `vision_model`
+> references corrected to the single `agent_vision_capable` gate; raster `--render` confirmed
+> greenfield. Problem and scope unchanged and still correct. Once PO approves, run:
+> `/orchestrate-dev scanned-pdf-vision`. (OQ1 — DPI + page-cap defaults — must still be resolved
+> against a real token measurement before TASK-1 render code.)
