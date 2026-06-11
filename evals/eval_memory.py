@@ -122,7 +122,6 @@ async def case_w3_g_forget_propagates_to_recall(
             verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason=f"seed failed: {type(exc).__name__}: {exc}",
-            trace_files=[str(trace_file.relative_to(run.outputs_dir))],
         )
 
     passed = True
@@ -256,7 +255,6 @@ async def case_w3_g_forget_propagates_to_recall(
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
         reason=reason,
-        trace_files=[str(trace_file.relative_to(run.outputs_dir))],
     )
 
 

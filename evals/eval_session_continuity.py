@@ -227,7 +227,6 @@ async def case_w2_d_resume_helpers_rehydrate(
         except Exception as jexc:
             reason = (reason or "ok") + f" | judge_error: {type(jexc).__name__}"
 
-    trace_files = [str(case_dir.relative_to(run.outputs_dir))]
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
@@ -235,7 +234,6 @@ async def case_w2_d_resume_helpers_rehydrate(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=trace_files,
         reason=reason,
     )
     run.append(result)
@@ -417,7 +415,6 @@ async def case_w2_e_compact_replaces_with_summary(
         except Exception as jexc:
             reason += f" | judge_error: {type(jexc).__name__}"
 
-    trace_files = [str(case_dir.relative_to(run.outputs_dir))]
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
@@ -425,7 +422,6 @@ async def case_w2_e_compact_replaces_with_summary(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=trace_files,
         reason=reason,
     )
     run.append(result)

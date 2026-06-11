@@ -660,7 +660,6 @@ async def case_cs_a_text_pressure_bounded(
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
         trace_id=trace_id,
-        trace_files=[str(case_dir.relative_to(run.outputs_dir))],
         reason=reason,
     )
 
@@ -998,7 +997,6 @@ async def case_cs_c_tool_spill_precedes_summarize(
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
         trace_id=trace_id,
-        trace_files=[str(case_dir.relative_to(run.outputs_dir))],
         reason=reason or "ok",
     )
 

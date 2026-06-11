@@ -210,7 +210,6 @@ async def _case_w8_a_proposes_before_destructive(
         duration_s=time.monotonic() - case_t0,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=_perf_for(slices, spans_log, passed=passed),
     )
@@ -279,7 +278,6 @@ async def _case_w8_b_respects_denial(
         duration_s=time.monotonic() - case_t0,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=_perf_for(slices, spans_log, passed=passed),
     )
@@ -352,7 +350,6 @@ async def _case_w8_c_adjusts_plan_after_denial(
         duration_s=time.monotonic() - case_t0,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=_perf_for(slices, spans_log, passed=passed),
     )

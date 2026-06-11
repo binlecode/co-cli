@@ -247,7 +247,6 @@ async def _case_w10_a_post_rotation_adaptation(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -330,7 +329,6 @@ async def _case_w10_b_contradiction_handling(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -394,7 +392,6 @@ async def _case_w10_c_decay_under_disuse(
         name=case_id,
         verdict=case_verdict,
         duration_s=duration,
-        trace_files=[],
         reason=" ".join(reason_parts).strip(),
         perf=None,
     )

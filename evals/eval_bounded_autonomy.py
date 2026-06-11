@@ -231,7 +231,6 @@ async def _case_w9_a_correction_recovery(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -320,7 +319,6 @@ async def _case_w9_b_refusal_context_drift(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -410,7 +408,6 @@ async def _case_w9_c_ambiguity_escalation(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )

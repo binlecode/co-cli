@@ -273,7 +273,6 @@ async def _case_w1_a_multi_turn_coherence(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
     )
 
@@ -325,7 +324,6 @@ async def _case_w1_d_dream_propagates_to_recall(
                 duration_s=duration,
                 model_call_seconds=model_call_seconds,
                 token_usage=token_usage,
-                trace_files=[],
                 reason=" ".join(reason_parts).strip(),
             )
 
@@ -378,7 +376,6 @@ async def _case_w1_d_dream_propagates_to_recall(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
     )
 
@@ -503,7 +500,6 @@ async def _case_w1_e_tool_spill_summary(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
     )
 

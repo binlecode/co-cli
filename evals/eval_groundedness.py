@@ -241,7 +241,6 @@ async def _case_w7_a_tool_up_when_unsure(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -321,7 +320,6 @@ async def _case_w7_b_decline_when_unknown(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -417,7 +415,6 @@ async def _case_w7_c_resist_leading_prompt(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )

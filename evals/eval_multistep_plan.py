@@ -299,7 +299,6 @@ async def _case_w11_a_breakdown_before_execute(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -391,7 +390,6 @@ async def _case_w11_b_intermediate_checkpoint(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -494,7 +492,6 @@ async def _case_w11_c_synthesis_from_mixed_sources(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )

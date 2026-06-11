@@ -114,7 +114,6 @@ async def case_w4_a_dispatch_user_skill(
             verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason=(f"dispatch returned {type(outcome).__name__}, expected DelegateToAgent"),
-            trace_files=[str(trace_file.relative_to(run.outputs_dir))],
         )
 
     if outcome.skill_name != "eval_smoke":
@@ -210,7 +209,6 @@ async def case_w4_a_dispatch_user_skill(
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
         trace_id=trace_id,
-        trace_files=[str(trace_file.relative_to(run.outputs_dir))],
         reason=reason,
     )
 

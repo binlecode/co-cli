@@ -346,7 +346,6 @@ async def _case_w12_a_classify_effort(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -460,7 +459,6 @@ async def _case_w12_b_blocker_not_doomloop(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -577,7 +575,6 @@ async def _case_w12_c_shell_reflection_recovery(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )
@@ -702,7 +699,6 @@ async def _case_w12_d_completeness_gate(
         duration_s=duration,
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
-        trace_files=[str(run.case_trace_path(case_id).name)],
         reason=" ".join(reason_parts).strip(),
         perf=perf,
     )

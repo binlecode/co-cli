@@ -61,7 +61,6 @@ class CaseResult:
       trace_id              — co trace id (from observability spans log) for the case;
                               empty when no turn captured one. Use with ``co tail`` /
                               ``co trace <trace_id>`` to inspect the structured-log timeline.
-      trace_files           — list of paths relative to _outputs/.
       reason                — short tag for FAIL/SKIP/SOFT; empty for plain PASS.
       skipped               — True when this is a SKIPPED:* record (mcp / product-gap).
       skip_category         — "mcp" | "product-gap" | "" when skipped is False.
@@ -81,7 +80,6 @@ class CaseResult:
     model_call_seconds: float = 0.0
     token_usage: dict[str, int] = field(default_factory=dict)
     trace_id: str = ""
-    trace_files: list[str] = field(default_factory=list)
     reason: str = ""
     skipped: bool = False
     skip_category: str = ""
@@ -114,11 +112,6 @@ class EvalRun:
     iso: str = ""
     started_at: float = 0.0
     stem: str = ""
-
-    @property
-    def outputs_dir(self) -> Path:
-        """Flat directory holding every run's prefix-keyed artifacts."""
-        return _OUTPUTS_DIR
 
     @property
     def run_jsonl_path(self) -> Path:

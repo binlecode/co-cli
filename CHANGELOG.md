@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.338]
+
+### Refactor: drop eval `trace_files` cross-file pointer
+
+- Removed `CaseResult.trace_files` (no programmatic reader since the markdown REPORT was deleted in v0.8.336) and the now-orphaned `EvalRun.outputs_dir` property; stripped all 33 `trace_files=` construction lines across the 11 eval scripts.
+- Retires the `.parent.name`-style cross-file-pointer surface (the bug class fixed in v0.8.336) — a case's turns are located by the sibling filename `<scenario>-<ts>-case_<id>.jsonl`, no stored pointer.
+- Eval logging logic is otherwise unchanged: three independent append-incremental writers (`run.jsonl` / `case_<id>.jsonl` / `spans.jsonl`); `record_turn` still writes per-turn in its `finally`. `case_trace_path` retained.
+
 ## [0.8.336]
 
 ### Refactor: drop eval markdown REPORTs; flat `_outputs/` layout; drift reads JSONL
