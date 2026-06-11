@@ -40,7 +40,6 @@ from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._perf import collect_perf, setup_perf_spans
-from evals._report import prepend_report
 from evals._rubrics import load_rubric
 from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S, TURN_BUDGET_S
@@ -55,8 +54,6 @@ from pydantic_ai.messages import (
 from co_cli.context.orchestrate import run_turn
 from co_cli.context.prompt_text import _is_shell_error_return
 from co_cli.tools.tool_call_limit import TOOL_CAP_HARD_STOP_CONSECUTIVE
-
-_REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-agentic-loop.md"
 
 _FIXTURE_NAME = "agentic_loop_baseline"
 
@@ -712,7 +709,7 @@ async def _case_w12_d_completeness_gate(
 
 
 async def main() -> int:
-    """Drive W12.A-W12.D end-to-end, write trace + REPORT, return exit code."""
+    """Drive W12.A-W12.D end-to-end, write trace, return exit code."""
     os.environ["CO_DOOM_LOOP_THRESHOLD"] = "2"
     os.environ["CO_MAX_REFLECTIONS"] = "1"
 
@@ -731,7 +728,7 @@ async def main() -> int:
         )
 
         apply_eval_window(deps)
-        spans_log = setup_perf_spans(run.dir)
+        spans_log = setup_perf_spans(run.spans_path)
         cases: list[CaseResult] = []
 
         for runner in (
@@ -753,14 +750,6 @@ async def main() -> int:
             verdict = "PASS" if case.passed else "FAIL"
             print(f"[agentic_loop] {case.name}: {verdict} — {case.reason or 'ok'}")
             cases.append(case)
-
-        prepend_report(
-            _REPORT_PATH,
-            "agentic_loop",
-            run.iso,
-            cases,
-            run_dir=run.dir,
-        )
 
     return 0 if all(c.passed for c in cases) else 1
 

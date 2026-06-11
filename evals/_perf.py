@@ -93,15 +93,15 @@ class PerfRecord:
     goal_fulfillment: float = 1.0
 
 
-def setup_perf_spans(run_dir: Path) -> Path:
-    """Enable span file logging to an isolated ``<run_dir>/spans.jsonl`` and return it.
+def setup_perf_spans(spans_log: Path) -> Path:
+    """Enable span file logging to the run's ``spans_log`` path and return it.
 
-    Call once before driving turns. ``create_deps`` does not enable span file
-    logging, so without this the spans file does not exist and
-    :func:`collect_perf` reads nothing. Isolating per run keeps the read scoped
-    to this eval's traces (filtering by trace id is still applied on top).
+    Call once before driving turns (pass ``run.spans_path``). ``create_deps``
+    does not enable span file logging, so without this the spans file does not
+    exist and :func:`collect_perf` reads nothing. Isolating per run keeps the
+    read scoped to this eval's traces (filtering by trace id is still applied
+    on top).
     """
-    spans_log = run_dir / "spans.jsonl"
     tracing.setup_log(spans_log)
     return spans_log
 

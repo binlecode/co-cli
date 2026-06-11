@@ -121,7 +121,7 @@ See `.agent_docs/spec-conventions.md` for full spec structure and artifact lifec
 
 Quick reference:
 - Exec-plans: `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md` — archive to `completed/` on ship, never delete.
-- `REPORT-*.md`: permanent, lives in `docs/`, only produced by eval/benchmark/script runs.
+- `REPORT-*.md` in `docs/`: permanent, only produced by benchmark/script runs (non-eval). Eval run records are not markdown — they live as per-run JSONL in `evals/_outputs/<scenario>-<ts>-run.jsonl` (+ `-case_<id>.jsonl`, `-spans.jsonl`).
 - `docs/reference/`: research and background material (`RESEARCH-*`), not linked from specs.
 
 ## Reference Repos

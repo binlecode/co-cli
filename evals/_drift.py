@@ -1,12 +1,11 @@
-"""Cross-run stability / drift aggregator for behavioral-eval REPORTs (plan T-9, dim 1).
+"""Cross-run stability / drift aggregator for behavioral evals (plan T-9, dim 1).
 
-Reads the last K ``## Run <ISO8601>`` sections from
-``docs/REPORT-eval-<scenario>.md``, and per case diffs ``(verdict, judge_score)``
-across runs: a verdict-flip count and the mean judge-score delta. Emits a drift
-table plus an aggregate verdict — SOFT_FAIL when more than ``FLIP_PCT`` of cases
-flip verdict across the window, or any case's score regresses beyond
-``SCORE_DELTA``. This is the deferred drift-tracker from ``uat_evals.md
-§Coverage gaps``, made concrete.
+Reads the last K per-run JSONL files ``evals/_outputs/<scenario>-<ts>-run.jsonl``,
+and per case diffs ``(verdict, judge_score)`` across runs: a verdict-flip count
+and the mean judge-score delta. Emits a drift table plus an aggregate verdict —
+SOFT_FAIL when more than ``FLIP_PCT`` of cases flip verdict across the window,
+or any case's score regresses beyond ``SCORE_DELTA``. This is the deferred
+drift-tracker from ``uat_evals.md §Coverage gaps``, made concrete.
 
 The aggregator CODE is loop-agnostic and may run anytime; the baseline HISTORY
 it diffs against must be seeded only from post-compaction-fix runs (post
@@ -21,26 +20,26 @@ Thresholds (plan Open Q3 starting values; tune once real history exists):
 Run manually:
     uv run python evals/_drift.py agentic_loop
     uv run python evals/_drift.py eval_agentic_loop   # eval_ prefix tolerated
-    uv run python evals/_drift.py                      # all REPORTs on disk
+    uv run python evals/_drift.py                      # all scenarios on disk
 """
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 
-_REPORTS_DIR = Path(__file__).parent.parent / "docs"
+_OUTPUTS_DIR = Path(__file__).parent / "_outputs"
 
 K = 5
 FLIP_PCT = 0.20
 SCORE_DELTA = 2
 
-_RUN_SPLIT_RE = re.compile(r"^## Run ", re.MULTILINE)
+_STEM_RE = re.compile(r"^(?P<scenario>.+)-\d{8}T\d{6}Z$")
 _JUDGE_SCORE_RE = re.compile(r"judge\.score=(\d+)")
-_ROW_RE = re.compile(r"^\|\s*(?P<case>[^|]+?)\s*\|\s*(?P<verdict>[^|]+?)\s*\|")
 
 _VERDICT_TOKENS = {"PASS", "FAIL", "SOFT_PASS", "SOFT_FAIL"}
 
@@ -53,55 +52,53 @@ class CaseObservation:
     judge_score: int | None
 
 
-def scenario_to_report_path(scenario: str) -> Path:
-    """Map a scenario name to ``docs/REPORT-eval-<scenario>.md``.
+def _run_glob(scenario: str) -> str:
+    """Glob matching a scenario's per-run files: ``<scenario>-<ts>-run.jsonl``."""
+    return f"{scenario}-????????T??????Z-run.jsonl"
 
-    Tolerates the ``eval_`` / ``eval-`` prefix and underscore/hyphen mixing:
-    ``eval_agentic_loop``, ``agentic_loop``, and ``agentic-loop`` all resolve to
-    ``docs/REPORT-eval-agentic-loop.md``.
+
+def _parse_run_jsonl(run_jsonl_path: Path) -> dict[str, CaseObservation]:
+    """Extract ``{case_name: CaseObservation}`` from one ``<stem>-run.jsonl`` file.
+
+    ``verdict`` is a lowercase ``StrEnum`` value on disk (``"pass"`` /
+    ``"soft_fail"``) — uppercased before the ``_VERDICT_TOKENS`` check. Skipped
+    cases (``"skipped": true``) carry a real verdict but are excluded so they do
+    not pollute the flip-ratio denominator. ``judge_score`` comes from the same
+    ``judge.score=N`` pattern the markdown reader used, now applied to ``reason``.
     """
-    name = scenario.strip()
-    for prefix in ("eval_", "eval-"):
-        if name.startswith(prefix):
-            name = name[len(prefix) :]
-            break
-    name = name.replace("_", "-")
-    return _REPORTS_DIR / f"REPORT-eval-{name}.md"
-
-
-def _parse_run_section(section: str) -> dict[str, CaseObservation]:
-    """Extract ``{case_name: CaseObservation}`` from one ``## Run`` section body."""
     out: dict[str, CaseObservation] = {}
-    for line in section.splitlines():
-        match = _ROW_RE.match(line)
-        if not match:
+    for line in run_jsonl_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
             continue
-        case = match.group("case")
-        verdict = match.group("verdict")
-        if case.lower() == "case" or set(case) <= {"-", " "}:
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
             continue
-        verdict_token = verdict.split(":")[0].strip().upper()
-        if verdict_token not in _VERDICT_TOKENS and not verdict_token.startswith("SKIP"):
+        if data.get("skipped"):
             continue
-        score_match = _JUDGE_SCORE_RE.search(line)
+        name = data.get("name")
+        verdict_raw = data.get("verdict")
+        if not name or verdict_raw is None:
+            continue
+        verdict = str(verdict_raw).upper()
+        if verdict not in _VERDICT_TOKENS:
+            continue
+        score_match = _JUDGE_SCORE_RE.search(str(data.get("reason", "")))
         score = int(score_match.group(1)) if score_match else None
-        out[case] = CaseObservation(verdict=verdict_token, judge_score=score)
+        out[name] = CaseObservation(verdict=verdict, judge_score=score)
     return out
 
 
-def parse_runs(report_path: Path, limit: int = K) -> list[dict[str, CaseObservation]]:
-    """Return up to ``limit`` most-recent run sections, newest first.
+def parse_runs(scenario: str, limit: int = K) -> list[dict[str, CaseObservation]]:
+    """Return up to ``limit`` most-recent runs for ``scenario``, newest first.
 
-    REPORT sections stack newest-first under the title (``prepend_report``), so
-    the first ``limit`` sections after the split are the most recent runs.
+    Run files are named ``<scenario>-<ts>-run.jsonl`` with a sortable UTC
+    timestamp, so a reverse filename sort is newest-first.
     """
-    if not report_path.exists():
-        return []
-    text = report_path.read_text(encoding="utf-8")
-    sections = _RUN_SPLIT_RE.split(text)[1:]
+    paths = sorted(_OUTPUTS_DIR.glob(_run_glob(scenario)), reverse=True)
     runs: list[dict[str, CaseObservation]] = []
-    for section in sections[:limit]:
-        parsed = _parse_run_section(section)
+    for path in paths[:limit]:
+        parsed = _parse_run_jsonl(path)
         if parsed:
             runs.append(parsed)
     return runs
@@ -160,8 +157,8 @@ def aggregate_verdict(drifts: list[CaseDrift]) -> tuple[str, list[str]]:
     return ("DRIFT_SOFT_FAIL" if notes else "STABLE"), notes
 
 
-def _render(scenario: str, report_path: Path, runs: list[dict[str, CaseObservation]]) -> None:
-    print(f"\n=== drift: {scenario}  ({report_path.name}) ===")
+def _render(scenario: str, runs: list[dict[str, CaseObservation]]) -> None:
+    print(f"\n=== drift: {scenario} ===")
     if len(runs) < 2:
         print(f"insufficient history: {len(runs)} run(s) on disk (need ≥2 to diff).")
         return
@@ -179,22 +176,50 @@ def _render(scenario: str, report_path: Path, runs: list[dict[str, CaseObservati
 
 
 def _discover_scenarios() -> list[str]:
-    """All ``REPORT-eval-<scenario>.md`` scenarios on disk."""
-    out: list[str] = []
-    for path in sorted(_REPORTS_DIR.glob("REPORT-eval-*.md")):
-        out.append(path.stem.removeprefix("REPORT-eval-"))
-    return out
+    """All scenarios with at least one ``<scenario>-<ts>-run.jsonl`` on disk."""
+    scenarios: set[str] = set()
+    for path in _OUTPUTS_DIR.glob("*-run.jsonl"):
+        stem = path.name.removesuffix("-run.jsonl")
+        match = _STEM_RE.match(stem)
+        if match:
+            scenarios.add(match.group("scenario"))
+    return sorted(scenarios)
+
+
+def _normalize_scenario(arg: str, discovered: list[str]) -> str:
+    """Resolve a CLI arg to a discovered scenario.
+
+    Strips an ``eval_`` / ``eval-`` prefix, then matches against discovered
+    scenarios — exact first, then with ``_``↔``-`` swapped (scenarios like
+    ``context-stability`` write hyphenated stems while most use underscores).
+    Falls through to the stripped name when nothing matches; ``parse_runs`` then
+    finds no files and the caller reports insufficient history.
+    """
+    name = arg.strip()
+    for prefix in ("eval_", "eval-"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    if name in discovered:
+        return name
+    for candidate in (name.replace("_", "-"), name.replace("-", "_")):
+        if candidate in discovered:
+            return candidate
+    return name
 
 
 def main(argv: list[str]) -> int:
-    scenarios = argv[1:] if len(argv) > 1 else _discover_scenarios()
+    discovered = _discover_scenarios()
+    if len(argv) > 1:
+        scenarios = [_normalize_scenario(a, discovered) for a in argv[1:]]
+    else:
+        scenarios = discovered
     if not scenarios:
-        print("no REPORT-eval-*.md files found in docs/")
+        print("no <scenario>-<ts>-run.jsonl files found in evals/_outputs/")
         return 0
     for scenario in scenarios:
-        report_path = scenario_to_report_path(scenario)
-        runs = parse_runs(report_path)
-        _render(scenario, report_path, runs)
+        runs = parse_runs(scenario)
+        _render(scenario, runs)
     return 0
 
 

@@ -253,7 +253,7 @@ def capture_artifact_diff(
 
     Inputs come from :func:`scan_artifact_paths` taken before/after a case
     body. Output is short multi-line markdown-ish text suitable for sidecar
-    ``case_<id>-artifact-diff.txt`` and inclusion in the REPORT.
+    ``case_<id>-artifact-diff.txt`` and inclusion in a case's ``reason`` for review.
     """
     lines: list[str] = []
     before_keys = set(paths_before)

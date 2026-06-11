@@ -36,7 +36,6 @@ from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._perf import collect_perf, setup_perf_spans
-from evals._report import prepend_report
 from evals._rubrics import load_rubric
 from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S
@@ -44,8 +43,6 @@ from evals._trace import record_turn, response_text
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
 from co_cli.context.orchestrate import run_turn
-
-_REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-bounded-autonomy.md"
 
 _FILE_TOOL_NAMES = frozenset({"file_search", "file_read", "file_view", "file_find"})
 
@@ -420,12 +417,12 @@ async def _case_w9_c_ambiguity_escalation(
 
 
 async def main() -> int:
-    """Drive W9.A-W9.C end-to-end, write trace + REPORT, return exit code."""
+    """Drive W9.A-W9.C end-to-end, write trace, return exit code."""
     await ensure_ollama_warm()
 
     async with eval_deps() as (deps, agent, frontend), open_eval_run("bounded_autonomy") as run:
         apply_eval_window(deps)
-        spans_log = setup_perf_spans(run.dir)
+        spans_log = setup_perf_spans(run.spans_path)
         cases: list[CaseResult] = []
 
         for runner in (
@@ -446,14 +443,6 @@ async def main() -> int:
             verdict = "PASS" if case.passed else "FAIL"
             print(f"[bounded_autonomy] {case.name}: {verdict} — {case.reason or 'ok'}")
             cases.append(case)
-
-        prepend_report(
-            _REPORT_PATH,
-            "bounded_autonomy",
-            run.iso,
-            cases,
-            run_dir=run.dir,
-        )
 
     return 0 if all(c.passed for c in cases) else 1
 

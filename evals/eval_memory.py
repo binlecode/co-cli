@@ -27,16 +27,12 @@ from evals._deps import EvalFrontend, make_eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, EvalRun, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
-from evals._report import prepend_report
 from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S
 from evals._trace import record_turn
 
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps
-
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_REPORT_PATH = _PROJECT_ROOT / "docs" / "REPORT-eval-memory.md"
 
 _W3G_STEM = "eval_w3g_fact"
 _W3G_TITLE = "eval_W3G_fact"
@@ -126,7 +122,7 @@ async def case_w3_g_forget_propagates_to_recall(
             verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason=f"seed failed: {type(exc).__name__}: {exc}",
-            trace_files=[str(trace_file.relative_to(run.dir.parent))],
+            trace_files=[str(trace_file.relative_to(run.outputs_dir))],
         )
 
     passed = True
@@ -260,7 +256,7 @@ async def case_w3_g_forget_propagates_to_recall(
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
         reason=reason,
-        trace_files=[str(trace_file.relative_to(run.dir.parent))],
+        trace_files=[str(trace_file.relative_to(run.outputs_dir))],
     )
 
 
@@ -270,7 +266,7 @@ async def case_w3_g_forget_propagates_to_recall(
 
 
 async def main() -> int:
-    """Run the W3.G judged case and emit the REPORT.
+    """Run the W3.G judged case.
 
     SOFT_FAIL is a review signal, not a gate failure; exit code is non-zero
     only on a hard FAIL.
@@ -298,13 +294,6 @@ async def main() -> int:
                 else:
                     label = cr.verdict.value.upper()
                 _print(f"[memory] {cr.name}: {label} — {cr.reason or 'ok'}")
-            prepend_report(
-                _REPORT_PATH,
-                "memory",
-                run.iso,
-                cases,
-                run_dir=run.dir,
-            )
     finally:
         await stack.aclose()
 

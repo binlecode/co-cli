@@ -33,7 +33,6 @@ from evals._deps import eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
-from evals._report import prepend_report
 from evals._settings import apply_eval_window
 from evals._timeouts import (
     CALL_TIMEOUT_S,
@@ -55,8 +54,6 @@ from co_cli.daemons.dream._state import HousekeepingState
 from co_cli.memory.frontmatter import render_frontmatter
 from co_cli.memory.item import MemoryKindEnum
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, SPILL_THRESHOLD_CHARS
-
-_REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-daily-chat.md"
 
 
 @dataclass(frozen=True)
@@ -512,7 +509,7 @@ async def _case_w1_e_tool_spill_summary(
 
 
 async def main() -> int:
-    """Drive W1.A-W1.E end-to-end, write trace + REPORT, return exit code."""
+    """Drive W1.A-W1.E end-to-end, write trace, return exit code."""
     await ensure_ollama_warm()
 
     async with eval_deps() as (deps, agent, frontend), open_eval_run("daily_chat") as run:
@@ -537,14 +534,6 @@ async def main() -> int:
             verdict = "PASS" if case.passed else "FAIL"
             print(f"[daily_chat] {case.name}: {verdict} — {case.reason or 'ok'}")
             cases.append(case)
-
-        prepend_report(
-            _REPORT_PATH,
-            "daily_chat",
-            run.iso,
-            cases,
-            run_dir=run.dir,
-        )
 
     return 0 if all(c.passed for c in cases) else 1
 

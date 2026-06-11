@@ -69,7 +69,7 @@ Plans: docs/exec-plans/active/2026-06-02-210659-context-stability-sizing-control
 
 Helpers (from sibling modules): ``make_eval_deps``, ``ensure_ollama_warm``,
 ``MULTI_TURN_COMPACT_BUDGET_S``, ``CaseResult``/``Verdict``/``open_eval_run``,
-``record_turn``, ``prepend_report``, ``_force_blocking_stdio``.
+``record_turn``, ``_force_blocking_stdio``.
 """
 
 from __future__ import annotations
@@ -89,7 +89,6 @@ from typing import Any
 from evals._deps import make_eval_deps
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
-from evals._report import prepend_report
 from evals._settings import apply_eval_window
 from evals._timeouts import MULTI_TURN_COMPACT_BUDGET_S
 from evals._trace import record_turn
@@ -102,8 +101,6 @@ from co_cli.memory.frontmatter import render_frontmatter
 from co_cli.memory.item import MemoryKindEnum
 from co_cli.observability import tracing
 from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
-
-_REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-context-stability.md"
 
 _PROACTIVE_SPAN_NAME = "compaction.proactive_check"
 
@@ -330,8 +327,8 @@ def _carried_prior_summary_slot(passes: list[dict[str, Any]]) -> str | None:
     return extract_summary_body(content if isinstance(content, str) else "")
 
 
-def _setup_isolated_spans_log(run_dir: Path) -> Path:
-    """Point the spans logger at a run-local file and return its path.
+def _setup_isolated_spans_log(spans_log: Path) -> Path:
+    """Point the spans logger at the run's ``spans_log`` path and return it.
 
     ``create_deps`` does not configure the spans handler (only the CLI's
     ``main.py`` does), so an eval must wire it up itself to capture the
@@ -339,7 +336,6 @@ def _setup_isolated_spans_log(run_dir: Path) -> Path:
     the ``isolated_spans_log`` fixture pattern in
     ``tests/test_flow_compaction_proactive.py``.
     """
-    spans_log = run_dir / "spans.jsonl"
     tracing.setup_log(spans_log)
     return spans_log
 
@@ -664,7 +660,7 @@ async def case_cs_a_text_pressure_bounded(
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
         trace_id=trace_id,
-        trace_files=[f"{case_dir.parent.name}/{case_dir.name}"],
+        trace_files=[str(case_dir.relative_to(run.outputs_dir))],
         reason=reason,
     )
 
@@ -1002,7 +998,7 @@ async def case_cs_c_tool_spill_precedes_summarize(
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
         trace_id=trace_id,
-        trace_files=[f"{case_dir.parent.name}/{case_dir.name}"],
+        trace_files=[str(case_dir.relative_to(run.outputs_dir))],
         reason=reason or "ok",
     )
 
@@ -1073,7 +1069,7 @@ async def main() -> int:
     cases: list[CaseResult] = []
     try:
         async with open_eval_run("context-stability") as run:
-            spans_log = _setup_isolated_spans_log(run.dir)
+            spans_log = _setup_isolated_spans_log(run.spans_path)
             logging.getLogger(__name__).info("spans log: %s", spans_log)
 
             # CS.A — drives the turns, asserts bounded loop + coherence-after-compaction.
@@ -1104,17 +1100,6 @@ async def main() -> int:
 
             for case in cases:
                 run.append(case)
-
-            iso = run.iso
-            run_dir = run.dir
-
-        prepend_report(
-            _REPORT_PATH,
-            "context-stability",
-            iso,
-            cases,
-            run_dir=run_dir,
-        )
     finally:
         await stack.aclose()
 

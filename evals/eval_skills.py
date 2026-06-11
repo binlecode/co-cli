@@ -20,13 +20,11 @@ import asyncio
 import os
 import secrets
 import time
-from pathlib import Path
 
 from evals._deps import EvalFrontend, make_eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
-from evals._report import prepend_report
 from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S, TOOL_TURN_BUDGET_S
 from evals._trace import record_turn, response_text
@@ -36,9 +34,6 @@ from co_cli.commands.types import CommandContext, DelegateToAgent, SlashOutcome
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps
 from co_cli.skills.lifecycle import refresh_skills
-
-_REPORT_PATH = Path("docs/REPORT-eval-skills.md")
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -119,7 +114,7 @@ async def case_w4_a_dispatch_user_skill(
             verdict=Verdict.FAIL,
             duration_s=time.monotonic() - t0,
             reason=(f"dispatch returned {type(outcome).__name__}, expected DelegateToAgent"),
-            trace_files=[str(trace_file.relative_to(run.dir.parent))],
+            trace_files=[str(trace_file.relative_to(run.outputs_dir))],
         )
 
     if outcome.skill_name != "eval_smoke":
@@ -215,7 +210,7 @@ async def case_w4_a_dispatch_user_skill(
         model_call_seconds=model_call_seconds,
         token_usage=token_usage,
         trace_id=trace_id,
-        trace_files=[str(trace_file.relative_to(run.dir.parent))],
+        trace_files=[str(trace_file.relative_to(run.outputs_dir))],
         reason=reason,
     )
 
@@ -226,7 +221,7 @@ async def case_w4_a_dispatch_user_skill(
 
 
 async def main() -> int:
-    """Run the W4.A judged case against real CoDeps and emit the REPORT.
+    """Run the W4.A judged case against real CoDeps.
 
     Ollama warm-up runs outside any ``asyncio.timeout`` per behavioral
     constraint #3.
@@ -251,14 +246,6 @@ async def main() -> int:
             print(
                 f"[skills] {cr_a.name}: {'PASS' if cr_a.passed else 'FAIL'} — "
                 f"{cr_a.reason or 'ok'}"
-            )
-
-            prepend_report(
-                _REPORT_PATH,
-                "skills",
-                run.iso,
-                cases,
-                run_dir=run.dir,
             )
     finally:
         await stack.aclose()

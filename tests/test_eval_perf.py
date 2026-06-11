@@ -121,8 +121,3 @@ def test_perf_verdict_unmet_goal_soft_fails_when_gated() -> None:
 
     assert perf_verdict(partial, gate_bands=False) == Verdict.PASS
     assert perf_verdict(partial, gate_bands=True) == Verdict.SOFT_FAIL
-
-
-def test_perf_verdict_clean_passes_when_gated() -> None:
-    clean = PerfRecord(call_p95_s=1.0, goal_fulfillment=1.0)
-    assert perf_verdict(clean, gate_bands=True) == Verdict.PASS

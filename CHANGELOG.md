@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.336]
+
+### Refactor: drop eval markdown REPORTs; flat `_outputs/` layout; drift reads JSONL
+
+- **Single source of truth for eval run records**: deleted `evals/_report.py` and all 13 `docs/REPORT-eval-*.md` markdown reports. Per-run JSONL under `evals/_outputs/` is now the only record; removed the `prior_run_dir`/`load_prior_cases` dead helpers from `_observability.py`.
+- **Flat `_outputs/` layout**: per-run folder → flat prefixed files `<scenario>-<ts>-{run,case_<id>,spans}.jsonl`. `EvalRun` drops `dir`, gains `stem` + `run_jsonl_path`/`case_trace_path`/`spans_path`/`outputs_dir`; `setup_perf_spans` takes the spans path directly. Old folder-layout dirs are abandoned (zero-backward-compat; no migration code).
+- **`_drift.py` reads structured JSONL**: rewritten to glob `<scenario>-<ts>-run.jsonl`, skip skipped cases, uppercase the lowercase `Verdict` StrEnum, and extract `judge.score` from `reason` — replacing fragile markdown regex parsing. Now covers all `_outputs/` scenarios, not only those that had a REPORT file.
+- **Doc sync**: `docs/specs/uat_evals.md` (diagram, lifecycle, config + Files tables, coverage-gaps drift row) and source docstrings updated to the flat-JSONL model; `CLAUDE.md` permanence policy clarified.
+- **Tests**: trimmed `tests/test_eval_perf.py` to behavioral-only (removed one low-value happy-path verdict test).
+- Bundled: in-progress exec-plan edits for the pending vision-input / skill-documents / scanned-pdf-vision features.
+
 ## [0.8.335]
 
 ### Fix: eval agent file-writes escaped to the repo root

@@ -21,7 +21,7 @@ W2.E compact_replaces_with_summary (boundary) — drive N synthetic turns to pus
 
 Helpers (from sibling modules): ``make_eval_deps``, ``ensure_ollama_warm``,
 ``CALL_TIMEOUT_S``/``TURN_BUDGET_S``/``MULTI_TURN_COMPACT_BUDGET_S``,
-``CaseResult``/``open_eval_run``, ``record_turn``, ``prepend_report``.
+``CaseResult``/``open_eval_run``, ``record_turn``.
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from evals._deps import make_eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
-from evals._report import prepend_report
 from evals._settings import apply_eval_window
 from evals._timeouts import (
     CALL_TIMEOUT_S,
@@ -58,8 +57,6 @@ from co_cli.context._compaction_markers import (
 )
 from co_cli.context.orchestrate import run_turn
 from co_cli.session.persistence import append_messages, load_transcript
-
-_REPORT_PATH = Path(__file__).parent.parent / "docs" / "REPORT-eval-session-continuity.md"
 
 
 def _build_ctx(deps: Any, agent: Any, frontend: Any, history: list[Any]) -> CommandContext:
@@ -230,7 +227,7 @@ async def case_w2_d_resume_helpers_rehydrate(
         except Exception as jexc:
             reason = (reason or "ok") + f" | judge_error: {type(jexc).__name__}"
 
-    trace_files = [f"{case_dir.parent.name}/{case_dir.name}"]
+    trace_files = [str(case_dir.relative_to(run.outputs_dir))]
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
@@ -420,7 +417,7 @@ async def case_w2_e_compact_replaces_with_summary(
         except Exception as jexc:
             reason += f" | judge_error: {type(jexc).__name__}"
 
-    trace_files = [f"{case_dir.parent.name}/{case_dir.name}"]
+    trace_files = [str(case_dir.relative_to(run.outputs_dir))]
     duration = time.monotonic() - t0
     result = CaseResult(
         name=case_id,
@@ -491,17 +488,6 @@ async def main() -> int:
                 f"[session-continuity] {case_e.name}: "
                 f"{'PASS' if case_e.passed else 'FAIL'} — {case_e.reason or 'ok'}"
             )
-
-            iso = run.iso
-            run_dir = run.dir
-
-        prepend_report(
-            _REPORT_PATH,
-            "session-continuity",
-            iso,
-            cases,
-            run_dir=run_dir,
-        )
     finally:
         await stack.aclose()
 

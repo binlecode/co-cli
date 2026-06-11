@@ -1,12 +1,13 @@
 """Per-run JSONL observability + case-result accumulator for evals.
 
-``EvalRun(name)`` is an async context manager that owns one
-``evals/_outputs/<eval>-<ts>/`` directory. Each ``CaseResult`` is appended to
-``run.jsonl`` as it lands; ``TurnTrace`` lines (one per ``run_turn`` driven by
-the eval) are appended to ``case_<case_id>.jsonl`` via ``_trace.record_turn``.
+``open_eval_run(name)`` yields an ``EvalRun`` whose artifacts are flat,
+prefix-keyed files under ``evals/_outputs/``: ``<name>-<ts>-run.jsonl`` (one
+``CaseResult`` line per case, appended as it lands), ``<name>-<ts>-case_<id>.jsonl``
+(``TurnTrace`` lines, one per ``run_turn``, via ``_trace.record_turn``), and
+``<name>-<ts>-spans.jsonl`` (the per-run span dump).
 
-Reviewers reading a REPORT row can click straight to the trace file and
-replay step-by-step why a case passed or failed.
+Reviewers can open a case trace file directly — or ``co trace <trace_id>`` —
+to replay step-by-step why a case passed or failed.
 """
 
 from __future__ import annotations
@@ -35,9 +36,9 @@ class Verdict(StrEnum):
     rare-token preservation isn't).
 
     SOFT_FAIL — case fails a behavioral criterion within known LLM variance bounds
-    (judge rubric flagged a borderline call). Surfaces in REPORT for review; doesn't
-    fail the eval exit code. Three SOFT_FAILs in a row on the same case warrants
-    manual promotion to FAIL.
+    (judge rubric flagged a borderline call). Recorded in run.jsonl for review;
+    doesn't fail the eval exit code. Three SOFT_FAILs in a row on the same case
+    warrants manual promotion to FAIL.
     """
 
     PASS = "pass"
@@ -48,7 +49,7 @@ class Verdict(StrEnum):
 
 @dataclass
 class CaseResult:
-    """One sub-case outcome — appended to run.jsonl + rendered in REPORT.
+    """One sub-case outcome — appended to ``<stem>-run.jsonl``.
 
     Field semantics:
       name                  — case id, e.g. "W1.A", used to look up case_<id>.jsonl.
@@ -60,14 +61,14 @@ class CaseResult:
       trace_id              — co trace id (from observability spans log) for the case;
                               empty when no turn captured one. Use with ``co tail`` /
                               ``co trace <trace_id>`` to inspect the structured-log timeline.
-      trace_files           — list of relative paths under _outputs/<run>/.
+      trace_files           — list of paths relative to _outputs/.
       reason                — short tag for FAIL/SKIP/SOFT; empty for plain PASS.
       skipped               — True when this is a SKIPPED:* record (mcp / product-gap).
       skip_category         — "mcp" | "product-gap" | "" when skipped is False.
       perf                  — span-derived performance overlay (``evals/_perf.py``),
-                              or None when the case did not collect perf. Folded into
-                              the REPORT Perf column + review signals; never overrides
-                              the behavioral ``verdict``.
+                              or None when the case did not collect perf. Recorded
+                              in run.jsonl as a review signal; never overrides the
+                              behavioral ``verdict``.
 
     The ``passed`` property is True iff verdict ∈ {PASS, SOFT_PASS} — kept for
     exit-code logic and read-site backward-compat. Construction sites must use
@@ -93,34 +94,44 @@ class CaseResult:
 
     @property
     def soft(self) -> bool:
-        """True iff verdict is SOFT_PASS or SOFT_FAIL — for REPORT review-signal section."""
+        """True iff verdict is SOFT_PASS or SOFT_FAIL — review signal recorded in run.jsonl."""
         return self.verdict in (Verdict.SOFT_PASS, Verdict.SOFT_FAIL)
 
 
 @dataclass
 class EvalRun:
-    """Per-run output directory + JSONL writer.
+    """Per-run JSONL writer keyed by a flat ``<name>-<ts>`` stem.
 
     Lifecycle:
-      async with EvalRun("daily_chat") as run:
-          run.append(case_result)        # writes line to run.jsonl
-          run.case_dir(case_id) / "..."  # path helper for trace lines
+      async with open_eval_run("daily_chat") as run:
+          run.append(case_result)        # appends a line to <stem>-run.jsonl
+          run.case_trace_path(case_id)   # path for <stem>-case_<id>.jsonl
 
-    On exit: closes the run.jsonl file; the directory itself stays for review.
+    On exit: the output files stay under ``_outputs/`` for review.
     """
 
     name: str
     iso: str = ""
     started_at: float = 0.0
-    dir: Path = field(default_factory=Path)
+    stem: str = ""
+
+    @property
+    def outputs_dir(self) -> Path:
+        """Flat directory holding every run's prefix-keyed artifacts."""
+        return _OUTPUTS_DIR
 
     @property
     def run_jsonl_path(self) -> Path:
-        return self.dir / "run.jsonl"
+        return _OUTPUTS_DIR / f"{self.stem}-run.jsonl"
 
     def case_trace_path(self, case_id: str) -> Path:
-        """Relative-safe path for ``case_<id>.jsonl`` — created on first append."""
-        return self.dir / f"case_{case_id}.jsonl"
+        """Path for this run's ``<stem>-case_<id>.jsonl`` — created on first append."""
+        return _OUTPUTS_DIR / f"{self.stem}-case_{case_id}.jsonl"
+
+    @property
+    def spans_path(self) -> Path:
+        """Path for this run's ``<stem>-spans.jsonl`` span dump."""
+        return _OUTPUTS_DIR / f"{self.stem}-spans.jsonl"
 
     def append(self, case: CaseResult) -> None:
         """Append one ``CaseResult`` line to ``run.jsonl``."""
@@ -131,80 +142,17 @@ class EvalRun:
 
 @asynccontextmanager
 async def open_eval_run(name: str) -> AsyncIterator[EvalRun]:
-    """Create ``evals/_outputs/<name>-<ts>/`` and yield an ``EvalRun``."""
+    """Yield an ``EvalRun`` writing flat ``_outputs/<name>-<ts>-*`` artifacts."""
     _OUTPUTS_DIR.mkdir(exist_ok=True)
-    iso_now = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    run_dir = _OUTPUTS_DIR / f"{name}-{iso_now}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    compact_ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     run = EvalRun(
         name=name,
         iso=datetime.now(UTC).isoformat(timespec="seconds"),
         started_at=time.monotonic(),
-        dir=run_dir,
+        stem=f"{name}-{compact_ts}",
     )
     run.run_jsonl_path.touch(exist_ok=True)
     try:
         yield run
     finally:
         pass
-
-
-def prior_run_dir(name: str, current: Path) -> Path | None:
-    """Return the most-recent prior run directory for ``<name>``, or None."""
-    if not _OUTPUTS_DIR.exists():
-        return None
-    candidates = sorted(
-        (
-            p
-            for p in _OUTPUTS_DIR.iterdir()
-            if p.is_dir() and p.name.startswith(f"{name}-") and p != current
-        ),
-        key=lambda p: p.name,
-        reverse=True,
-    )
-    return candidates[0] if candidates else None
-
-
-def load_prior_cases(run_dir: Path) -> dict[str, CaseResult]:
-    """Read ``run.jsonl`` from a prior run; return {case_name: CaseResult}.
-
-    Reads the post-migration schema (``verdict`` string). Lines missing the
-    ``verdict`` field are skipped — old pre-migration JSONLs are not loadable
-    by design (zero-backward-compat). Delete ``evals/_outputs/`` to start fresh.
-    """
-    path = run_dir / "run.jsonl"
-    if not path.exists():
-        return {}
-    out: dict[str, CaseResult] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        verdict_raw = data.get("verdict")
-        if verdict_raw is None:
-            continue
-        try:
-            verdict = Verdict(verdict_raw)
-        except ValueError:
-            continue
-        case = CaseResult(
-            name=data.get("name", ""),
-            verdict=verdict,
-            duration_s=float(data.get("duration_s", 0.0)),
-            model_call_seconds=float(data.get("model_call_seconds", 0.0)),
-            token_usage=dict(data.get("token_usage") or {}),
-            trace_id=data.get("trace_id", ""),
-            trace_files=list(data.get("trace_files") or []),
-            reason=data.get("reason", ""),
-            skipped=bool(data.get("skipped", False)),
-            skip_category=data.get("skip_category", ""),
-        )
-        out[case.name] = case
-        # perf is intentionally not reconstructed here: the regression diff
-        # (_report._build_regression_diff) keys off verdict + model_call_seconds
-        # only, and the drift aggregator (T-9) reads the REPORT markdown, not
-        # this JSONL. Leaving it None avoids importing PerfRecord at runtime.
-    return out

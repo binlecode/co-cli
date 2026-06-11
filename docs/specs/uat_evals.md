@@ -14,7 +14,8 @@ flowchart TD
     Components --> Evals["evals/eval_*.py\n(W1–W6 functional smoke · phase-2 behavioral)"]
     Evals --> Judge["evals/_judge.py\n(LLM rubric for prose-quality cases)"]
     Evals --> Structural["Structural assertions\n(FTS hits · file presence · state mutations)"]
-    Evals --> Reports["docs/REPORT-eval-<scenario>.md\n(per-run, permanent)"]
+    Evals --> Outputs["evals/_outputs/<scenario>-<ts>-*.jsonl\n(per-run records: run · case · spans)"]
+    Outputs --> Drift["evals/_drift.py\n(cross-run verdict + judge-score drift)"]
     Judge --> Rubrics["evals/_rubrics/*.v<N>.md\n(versioned rubric pack)"]
 ```
 
@@ -78,10 +79,10 @@ One row per architectural component the agent ships. Each component must have at
 ### Eval lifecycle
 
 ```
-register      → load fixture(s)      → run case(s)            → judge        → report
-W-number ID     evals/_fixtures/       real CoDeps,             structural    REPORT-eval-<scenario>.md
-+ tenet link    (knowledge + session   real Ollama,             OR _judge     (permanent, per-run header)
-                JSONLs, pre-seeded)    multi-turn message_history             trace links to .pytest-logs/
+register      → load fixture(s)      → run case(s)            → judge        → persist
+W-number ID     evals/_fixtures/       real CoDeps,             structural    evals/_outputs/<scenario>-<ts>-*.jsonl
++ tenet link    (knowledge + session   real Ollama,             OR _judge     (run.jsonl · case_<id>.jsonl · spans.jsonl)
+                JSONLs, pre-seeded)    multi-turn message_history
 ```
 
 ### Case naming
@@ -112,10 +113,10 @@ Rubrics are **versioned** (`evals/_rubrics/<name>.v<N>.md`). A rubric revision b
 |---|---|---|
 | `PASS` | All assertions held, judge passed | 0 |
 | `FAIL` | Assertion failed, or judge `passed=false` with score < 6 | Nonzero (ship blocker) |
-| `SOFT_PASS` | Judge passed but score ≤ 7 / structural assertion marginal | 0; surfaced in report for review |
-| `SOFT_FAIL` | Judge `passed=false` with score ≥ 6, or transient/infra failure | 0; surfaced in report for review |
+| `SOFT_PASS` | Judge passed but score ≤ 7 / structural assertion marginal | 0; surfaced in `run.jsonl` for review |
+| `SOFT_FAIL` | Judge `passed=false` with score ≥ 6, or transient/infra failure | 0; surfaced in `run.jsonl` for review |
 
-`SOFT_*` are first-class review signals — they don't gate the exit code but appear in the per-run report header.
+`SOFT_*` are first-class review signals — they don't gate the exit code but are recorded in the per-run `run.jsonl` for review.
 
 ### First-principle decomposition rule
 
@@ -140,9 +141,8 @@ A new eval is **mission-justified** only if it ties to a tenet row in the missio
 | `llm.model` | `CO_LLM_MODEL` | `qwen3.6:35b-a3b-agentic` | Agent under test |
 | `llm.judge_model` | `CO_LLM_JUDGE_MODEL` | unset (falls back to `llm.model`) | Distinct judge model for behavioral evals |
 | `eval.timeout_secs` | — | per-case in `evals/_timeouts.py` | Warm-model budget; never folds cold-start (per `feedback_call_timeout_no_cold_start`) |
-| `eval.report_dir` | — | `docs/` | Permanent `REPORT-eval-<scenario>.md` location |
 | `eval.fixtures_dir` | — | `evals/_fixtures/` | Pre-seeded knowledge + session JSONLs |
-| `eval.outputs_dir` | — | `evals/_outputs/<scenario>-<UTC>/` | Per-run artifacts (transcripts, traces) |
+| `eval.outputs_dir` | — | `evals/_outputs/` | Per-run records as flat files `<scenario>-<ts>-{run,case_<id>,spans}.jsonl` |
 
 ### Pre-flight requirements
 
@@ -196,12 +196,11 @@ The existing `_rubrics/persona_under_stress.v1.md` is superseded by `bounded_aut
 | `evals/_rubrics/*.v<N>.md` | Versioned rubric pack (one file per behavioral dimension) |
 | `evals/_fixtures.py` | Fixture loader for pre-seeded knowledge + session corpora |
 | `evals/_fixtures/` | Pre-seeded knowledge `.md` + session `.jsonl` corpora |
-| `evals/_observability.py` | Per-case trace + span emission to `.pytest-logs/` |
-| `evals/_report.py` | `REPORT-eval-<scenario>.md` writer (permanent, per-run header table) |
+| `evals/_observability.py` | Per-run JSONL writer + case-result accumulator (`<stem>-run.jsonl` / `-case_<id>.jsonl`) under `evals/_outputs/` |
+| `evals/_drift.py` | Cross-run drift aggregator — reads `<scenario>-<ts>-run.jsonl` files, diffs verdict + judge-score across the last K runs |
 | `evals/_trace.py` | Trace ID generation + correlation across cases |
 | `evals/_timeouts.py` | Per-case timeout constants (warm-model budgets only) |
-| `evals/_outputs/<scenario>-<UTC>/` | Per-run transcripts, span dumps, trace exports |
-| `docs/REPORT-eval-<scenario>.md` | Permanent per-scenario report; appended per run |
+| `evals/_outputs/<scenario>-<ts>-*.jsonl` | Flat per-run records: `run.jsonl` (case results) · `case_<id>.jsonl` (turn traces) · `spans.jsonl` (span dump) |
 
 ## 6. Test Gates
 
@@ -258,6 +257,5 @@ Remaining gaps after the phase-1 refinement above:
 | Privacy-preserving boundary (agent refuses to egress local data to a cloud tool without explicit approval) | strategic — privacy-preserving | New `eval_privacy_boundary.py` once adversarial fixture exists |
 | Web-fetch grounding (cited URLs actually resolved + content was used) | trusted — grounded output | New case in `eval_groundedness`: `web_citation_loaded` |
 | Partial-approval branching (permit → execute; deny → branch correctly; modify → re-propose) | trusted — explicit operator control | Extend W6.C or new W8 case `partial_approval_branch` |
-| Drift detection (no historical scoring trend; slow judge-score regression invisible) | meta — suite reliability over time | New `evals/_drift.py` aggregator that diffs per-case verdict + score against prior REPORT runs; SOFT_FAIL on > N% degradation |
 | Fixture freshness (no automated check that pre-seeded fixtures still reflect current memory/prompt schema) | meta — suite validity | Schema-version stamp on each fixture; CI assertion that fixture version matches current `MemoryStore` / prompt-assembly schema version |
 | Cross-model portability (single-model baseline; Ollama model swap silently flips pass/fail) | meta — suite portability | Matrix run: same eval suite against ≥ 2 distinct agent models, with judge model pinned to a third; diff verdicts |

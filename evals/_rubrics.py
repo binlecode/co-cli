@@ -6,8 +6,8 @@ criteria, tone notes for the judge, and one PASS + one FAIL calibration
 transcript so the judge has anchor points.
 
 A rubric change is a behavioral-contract change — bump the version suffix
-(``v1`` → ``v2``) so historical REPORT runs remain interpretable against the
-rubric they were scored under.
+(``v1`` → ``v2``) so historical run.jsonl records remain interpretable against
+the rubric they were scored under.
 
 Usage:
     text, version = load_rubric("groundedness")
