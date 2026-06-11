@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "co-cli"
-version = "0.8.338"
+version = "0.8.340"
 description = "Co — your trusted local personal intelligence company"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -24,10 +24,13 @@ dependencies = [
     "sqlite-vec>=0.1.6",
     "ollama>=0.6.1",
     "python-dotenv>=1.2.1",
+    "pymupdf4llm==1.27.2.3",
+    "pymupdf",
 ]
 
 [project.scripts]
 co = "co_cli.main:app"
+co-extract-pdf = "co_cli.skills.documents.scripts.extract_pdf:main"
 
 [dependency-groups]
 dev = [

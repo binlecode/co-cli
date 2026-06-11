@@ -14,6 +14,7 @@ _BUNDLED_NAMES = {
     "triage",
     "refactor",
     "skill-creator",
+    "documents",
 }
 
 

@@ -70,7 +70,7 @@ The dream daemon's domain reviewers also write via the skill write tools (`skill
 
 ### File Format
 
-Every skill is a directory `<name>/` containing a `SKILL.md` entry file; the directory name is the authoritative skill name. The `SKILL.md` is parsed with `parse_frontmatter()` from `co_cli/memory/frontmatter.py`. Sibling files/dirs in the folder (`scripts/`, `references/`) are ignored by discovery. Built-in slash commands are reserved and cannot be shadowed.
+Every skill is a directory `<name>/` containing a `SKILL.md` entry file; the directory name is the authoritative skill name. The `SKILL.md` is parsed with `parse_frontmatter()` from `co_cli/memory/frontmatter.py`. Sibling files/dirs in the folder (`scripts/`, `references/`) are ignored by discovery (the loader globs only `*/SKILL.md`); a `scripts/` asset is not loaded but may be driven at runtime via `shell_exec` — see Bundled Executable Assets below. Built-in slash commands are reserved and cannot be shadowed.
 
 | Frontmatter Field | Purpose |
 |-------------------|---------|
@@ -79,6 +79,14 @@ Every skill is a directory `<name>/` containing a `SKILL.md` entry file; the dir
 | `user-invocable` | include in slash-command completer and `/help` |
 | `disable-model-invocation` | hide from `get_skill_catalog()` and manifest |
 | `skill-env` | turn-scoped env injection, filtered through `_SKILL_ENV_BLOCKED` |
+
+### Bundled Executable Assets
+
+A skill folder may ship an **executable asset** alongside its `SKILL.md` — a script the skill body drives at runtime through `shell_exec`, never imported into the agent process (subprocess isolation). The `documents` skill is the first: `co_cli/skills/documents/scripts/extract_pdf.py` extracts a local PDF to markdown via the `co-extract-pdf` command. Conventions for any skill-bundled script:
+
+- **Exposed as a `[project.scripts]` console entry point**, not `uv run python -m`. The skill body invokes the bare command (e.g. `co-extract-pdf <path>`). This is a runtime constraint, not a preference: `shell_exec` spawns with a sanitized allowlist env (`co_cli/tools/shell_env.py` — `PATH` propagates, `VIRTUAL_ENV`/`PYTHONPATH` do not) and `cwd` set to the user's `workspace_dir`, so only a `PATH`-resolved console command resolves `co_cli` reliably on a dev checkout and an installed wheel alike. The skill folder and its `scripts/` dir carry docstring-only `__init__.py` so the entry-point module path import-resolves.
+- **Lives under `co_cli/` and obeys the full `co_cli/` ruff ruleset** — notably T20: output goes through `sys.stdout.write`/`sys.stderr.write`, never `print` (the per-file-ignores that exempt `evals/`/`scripts/`/`tests/` do not cover `co_cli/skills/*/scripts/`).
+- **Approval semantics** — the first run prompts (the command is not in `DEFAULT_SHELL_SAFE_COMMANDS`). A `shell.safe_commands` opt-in auto-approves only the bare command; `shell_policy.py`'s path-traversal guard rejects any arg containing `/`, `~`, or `..`, so only a workspace-root bare path auto-approves. The practical ergonomic win is session-subject auto-approval: once approved this session, the same subject is not re-prompted.
 
 ### Load Order
 

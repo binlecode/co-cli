@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.340]
+
+### Feature: `documents` skill — local PDF text extraction
+
+- New bundled, model-invocable `documents` skill (`co_cli/skills/documents/SKILL.md`) — drives a Locate → Extract → Answer flow over `file_search`/`web_fetch`/`file_read`/`shell_exec`; PDF-only, defers Office formats to the future `office` skill and URLs to `web_fetch`.
+- First **skill-bundled executable asset**: `co_cli/skills/documents/scripts/extract_pdf.py`, exposed as the `co-extract-pdf` console entry point (`[project.scripts]`) and reached only via `shell_exec` (subprocess isolation, never imported into the agent). Emits markdown with `## Page N` citation markers; distinct non-zero error paths for missing/non-PDF/corrupt/password-protected; emits the exit-0 sentinel `[no-text-layer: likely scanned]` for image-only PDFs (the tier-2 vision seam — no OCR/vision here).
+- Dependency: `pymupdf4llm==1.27.2.3` (version-synced; pulls `pymupdf`/`pymupdf-layout`/`onnxruntime` in lockstep) + unconstrained `pymupdf`. No PyTorch/marker-pdf.
+- Scanned detection reads pymupdf's raw text layer (placeholder-proof); pymupdf-layout's C-level fd-1 chatter is silenced so stdout stays clean.
+- Spec: `docs/specs/skills.md` gains a "Bundled Executable Assets" section (console-entry-point convention, `co_cli/` ruff/T20 rules, approval semantics).
+- Tests: `tests/test_flow_skill_documents.py` (10 behavioral subprocess tests against real committed PDF fixtures, real pymupdf4llm, no mocks) + `documents` registered in the bundled-library gate.
+
 ## [0.8.338]
 
 ### Refactor: drop eval `trace_files` cross-file pointer
