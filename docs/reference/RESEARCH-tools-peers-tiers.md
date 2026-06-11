@@ -1,20 +1,22 @@
 # RESEARCH: Tool Tiering Across Peers — hermes · openclaw · opencode · codex
 
-Cross-peer synthesis of the `RESEARCH-tools-*.md` files plus
-`RESEARCH-tools-gaps-co-vs-hermes.md` and a direct survey of the openclaw repo.
-Establishes a three-tier classification of tool capabilities based on
-convergence frequency across peers, with full per-peer inventories, lifecycle
-architecture comparison, co-cli coverage mapping, and prioritized gap analysis.
+Cross-peer synthesis of the `RESEARCH-tools-*.md` files and a direct survey of
+the openclaw repo. Establishes a three-tier classification of tool capabilities
+based on convergence frequency across peers, with full per-peer inventories,
+lifecycle architecture comparison, co-cli coverage mapping, and prioritized gap
+analysis. **Part 5 absorbs the former `RESEARCH-tools-gaps-co-vs-hermes.md`** —
+the co-cli↔hermes deep parity + architecture audit (code-verified, file:line
+cited, last refreshed to v0.8.342).
 
 **Peers reviewed:** hermes-agent, openclaw, opencode, codex.  
-**Reference system:** co-cli (~35 native tools as of v0.8.x).
+**Reference system:** co-cli (36 native tools as of v0.8.342).
 
 **Sources:**
 - `RESEARCH-tools-hermes-agent.md` — hermes tool registry
 - `RESEARCH-tools-opencode.md` — opencode built-in registry
 - `RESEARCH-tools-codex.md` — codex Rust tool spec
-- `RESEARCH-tools-gaps-co-vs-hermes.md` — per-tool parity + architecture gaps
 - `~/workspace_genai/openclaw/src/agents/openclaw-tools.ts` — openclaw factory registry (surveyed directly; no standalone research file)
+- co-cli `TOOL_REGISTRY` runtime dump + source (Part 5 audit, code-verified to v0.8.342)
 
 **Tiering method:** Each capability is scored by how many of the four peers
 implement it as a native first-class tool. **Tier 1 = 3–4 peers** (universal /
@@ -382,7 +384,7 @@ co-cli column shows current coverage status.
 
 | Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Foreground shell execution | terminal | nodes | bash | exec_command | 4 | `shell` ✓ |
+| Foreground shell execution | terminal | nodes | bash | exec_command | 4 | `shell_exec` ✓ |
 | Background process start | terminal(background=True) | — | — | (via code/wait) | 2 | `task_start` ✓ |
 | Background process status / output | process(poll/log) | — | — | — | 1 | `task_status` ✓ |
 | Background process kill | process(kill) | — | — | — | 1 | `task_cancel` ✓ |
@@ -390,7 +392,7 @@ co-cli column shows current coverage status.
 | Stdin write to running process | process(write/submit/close) | — | — | write_stdin | 2 | ✗ gap |
 | PTY mode (interactive CLI) | terminal(pty=True) | — | — | — | 1 | ✗ gap |
 | Output watch patterns (notify) | terminal(watch_patterns) | — | — | — | 1 | ✗ gap |
-| Code / sandboxed execution | execute_code | — | — | js_repl | 2 | `code_execute` (host-only) |
+| Code / sandboxed execution | execute_code | — | — | js_repl | 2 | ✗ removed (`6390d73c`) — routes through `shell_exec` |
 
 ### 2.3 Web
 
@@ -413,10 +415,10 @@ co-cli column shows current coverage status.
 
 | Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Persistent memory store (CRUD) | memory | — | — | — | 1 | `memory_create/modify` ✓ |
-| Paginated memory inventory | — | — | — | — | 0 | ✗ deliberate gap — see docs/specs/memory.md |
-| Full memory artifact read by slug | — | — | — | — | 0 | ✗ deliberate gap — see docs/specs/memory.md |
-| Session / history search | session_search | sessions_history | — | — | 2 | `memory_search` (T1) ✓ |
+| Persistent memory store (CRUD) | memory | — | — | — | 1 | `memory_create/append/replace/delete` ✓ |
+| Paginated memory inventory | — | — | — | — | 0 | ✗ deliberate gap — search-driven recall, see docs/specs/memory.md |
+| Full memory artifact read by slug | — | — | — | — | 0 | `memory_view(name)` ✓ (unique) |
+| Session / history search | session_search | sessions_history | — | — | 2 | `session_search` ✓ (ripgrep) |
 | T2 artifact search (FTS5 BM25) | — | — | — | — | 0 | `memory_search` (T2) ✓ (unique) |
 | Role-filtered session search | session_search(role_filter) | — | — | — | 1 | ✗ gap |
 
@@ -424,15 +426,15 @@ co-cli column shows current coverage status.
 
 | Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Model-callable skill list | skills_list | — | skill (inject) | — | 2 | ✗ gap |
-| Model-callable skill read | skill_view | — | skill (inject) | — | 2 | ✗ gap |
-| Model-callable skill write / manage | skill_manage | — | — | — | 1 | ✗ gap |
+| Model-callable skill list | skills_list | — | skill (inject) | — | 2 | N/A — skills surfaced via `<available_skills>` manifest, not a list tool |
+| Model-callable skill read | skill_view | — | skill (inject) | — | 2 | `skill_view` ✓ (ALWAYS) |
+| Model-callable skill write / manage | skill_manage | — | — | — | 1 | `skill_create/edit/patch/delete` ✓ (DEFERRED) |
 
 ### 2.7 Subagents and Delegation
 
 | Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Named-goal subagent / delegate | delegate_task | sessions_spawn | task | spawn_agent | 4 | N/A — co-cli does not expose delegation as a model-visible primitive; every capability is a tool call; `web_research`, `knowledge_analyze`, `reason` encapsulate subagent dispatch internally |
+| Named-goal subagent / delegate | delegate_task | sessions_spawn | task | spawn_agent | 4 | N/A — co-cli removed all mid-turn delegation (the `web_research`/`knowledge_analyze`/`reason` triad, v0.8.280–v0.8.x); the only sub-agent path is the daemon dream-reviewer, never model-callable |
 | Named toolset profile for delegate | delegate_task(toolsets=[…]) | — | — | — | 1 | ✗ gap |
 | Parallel batch subagent dispatch | delegate_task(tasks=[…]) | — | — | spawn_agents_on_csv | 2 | ✗ gap |
 | Tracked task create/update/stop | — | sessions_spawn/status/yield | — | assign_task/wait_agent/close_agent | 2 | (partial via task_*) |
@@ -467,13 +469,13 @@ co-cli column shows current coverage status.
 
 | Capability | hermes | openclaw | opencode | codex | Score | co-cli |
 |---|---|---|---|---|---|---|
-| Image analysis / vision | vision_analyze | image | — | view_image | 3 | ✗ gap |
+| Image analysis / vision | vision_analyze | image | — | view_image | 3 | `image_view` ✓ (capability-gated to agent model) |
 | Image generation | image_generate | image_generate | — | ImageGeneration | 3 | ✗ gap |
 | Text-to-speech | text_to_speech | tts | — | — | 2 | ✗ gap |
 | Browser screenshot + vision | browser_vision | — | — | — | 1 | ✗ gap |
 | Video generation | — | video_generate | — | — | 1 | ✗ gap |
 | Audio / music generation | — | music_generate | — | — | 1 | ✗ gap |
-| PDF document understanding | — | pdf | — | — | 1 | ✗ gap |
+| PDF document understanding | — | pdf | — | — | 1 | `documents` skill ✓ (text); scanned → `image_view` |
 
 ### 2.12 Code Intelligence
 
@@ -498,15 +500,15 @@ co-cli column shows current coverage status.
 | Cross-platform messaging | send_message | message | — | — | 2 | ✗ gap |
 | Structured heartbeat / status reporting | — | heartbeat | — | — | 1 | ✗ gap |
 | Smart home (Home Assistant) | ha_* (4 tools) | — | — | — | 1 | ✗ gap |
-| Obsidian notes | — | — | — | — | 0 | `obsidian_*` ✓ (unique) |
-| Google Workspace (Drive/Gmail/Calendar) | — | — | — | — | 0 | `drive_*`, `gmail_*`, `calendar_*` ✓ (unique) |
+| Obsidian notes | — | — | — | — | 0 | ✗ removed (`6390d73c`) — folder reads route through `file_search`/`file_read` |
+| Google Workspace (Drive/Gmail/Calendar) | — | — | — | — | 0 | `google_drive_*`, `google_gmail_*`, `google_calendar_*` ✓ (unique) |
 | RL training control | rl_* (10 tools) | — | — | — | 1 | ✗ gap |
 
 ### 2.15 Agentic Meta-Tools (unique to one peer)
 
 | Capability | Peer | co-cli |
 |---|---|---|
-| Mixture of agents (4 LLMs + aggregator) | hermes | `reason` subagent covers some of this |
+| Mixture of agents (4 LLMs + aggregator) | hermes | ✗ no analogue — the in-turn delegation triad was removed |
 | Tool suggest by task | codex (tool_suggest) | ✗ gap |
 | Tool search (model discovers tools) | codex (tool_search / ToolSearch spec) | ✗ gap |
 | Async turn yield / subagent result collection | openclaw (sessions_yield) | ✗ gap |
@@ -530,21 +532,21 @@ these.
 
 | # | Capability | Peers (score) | co-cli status |
 |---|---|---|---|
-| T1-1 | Shell / terminal execution | hermes, openclaw, opencode, codex (4) | `shell` ✓ |
+| T1-1 | Shell / terminal execution | hermes, openclaw, opencode, codex (4) | `shell_exec` ✓ |
 | T1-2 | File read (paginated, line-ranged) | hermes, opencode, (codex via API) (2–3) | `file_read` ✓ |
 | T1-3 | File write (full overwrite) | hermes, opencode, (codex via API) (2–3) | `file_write` ✓ |
 | T1-4 | File edit (string-replace) | hermes, opencode, codex (3) | `file_patch` ✓ |
 | T1-5 | Web search | hermes, openclaw, opencode, codex (4) | `web_search` ✓ |
 | T1-6 | Web fetch / extract | hermes, openclaw, opencode, (codex via API) (3–4) | `web_fetch` ✓ (one-URL; see §4.2) |
 | T1-7 | Ask user / clarify (interactive question) | hermes, opencode, codex (3) | `clarify` ✓ (one-shot fragility; see §4.1) |
-| T1-8 | Named-goal subagent delegation | hermes, openclaw, opencode, codex (4) | N/A — co-cli's architecture does not surface delegation to the model; every capability is a tool; subagent dispatch is an internal implementation detail of tools like `web_research`, `knowledge_analyze`, `reason` |
-| T1-9 | Image analysis / vision | hermes, openclaw, codex (3) | ✗ gap |
-| T1-10 | Image generation | hermes, openclaw, codex (3) | ✗ gap |
+| T1-8 | Named-goal subagent delegation | hermes, openclaw, opencode, codex (4) | N/A — co-cli does not surface delegation to the model; mid-turn delegation (the `web_research`/`knowledge_analyze`/`reason` triad) was removed, leaving only the daemon dream-reviewer sub-agent path |
+| T1-9 | Image analysis / vision | hermes, openclaw, codex (3) | `image_view` ✓ (v0.8.342, capability-gated) |
+| T1-10 | Image generation | hermes, openclaw, codex (3) | ✗ gap (Out of Scope — no delivery channel) |
 
-**co-cli Tier 1 coverage: 7 / 9 applicable.**  
+**co-cli Tier 1 coverage: 8 / 9 applicable; the 1 remaining (image generation) is a deliberate scope-out.**  
 T1-8 is N/A by design: co-cli does not expose delegation as a model-visible primitive — the model only sees tools, and subagent dispatch is encapsulated inside them.  
-**New from the openclaw peer:** vision (T1-9) and image generation (T1-10) cross into Tier 1 — three of four peers now ship them as native tools, and co-cli has neither. File/glob search, content/grep search, and structured to-do sit in Tier 2 (only 2 peers each).  
-Residual quality gaps: `clarify` one-shot fragility (§4.1), `web_fetch` single-URL only (§4.2), no vision (T1-9), no image generation (T1-10).
+**Vision (T1-9) closed** by `image_view` (v0.8.342): pixels attach via `ToolReturn.content` for a vision-capable agent model, self-hiding on text-only models — there is no separate vision model or describe-fallback. The only standing Tier-1 item co-cli lacks is image generation (T1-10), which is scoped out (no co-cli delivery channel). File/glob search, content/grep search, and structured to-do sit in Tier 2 (only 2 peers each).  
+Residual quality items: `clarify` one-shot fragility (§5.3), `web_fetch` single-URL (rejected as parity-cosmetic — §5.1).
 
 ---
 
@@ -560,12 +562,12 @@ mature systems independently decided these are worth building as native tools.
 | T2-3 | Structured to-do / task list | hermes, opencode (2) | `todo_write` / `todo_read` ✓ |
 | T2-4 | Background process start | hermes, codex via code/wait (2) | `task_start` ✓ |
 | T2-5 | Stdin write to running process | hermes `process(write/submit/close)`, codex `write_stdin` (2) | ✗ gap |
-| T2-6 | Code / sandboxed execution | hermes `execute_code`, codex `js_repl` (2) | `code_execute` (host-only) |
+| T2-6 | Code / sandboxed execution | hermes `execute_code`, codex `js_repl` (2) | ✗ removed (`6390d73c`) — `shell_exec` only, host-shell stance |
 | T2-7 | Code-specific search | opencode `CodeSearchTool`, codex `tool_search` (2) | ✗ gap |
-| T2-8 | Model-callable skill list | hermes `skills_list`, opencode `skill` inject (2) | ✗ gap — model cannot discover skills without a user slash command |
-| T2-9 | Model-callable skill read / load | hermes `skill_view`, opencode `skill` inject (2) | ✗ gap |
+| T2-8 | Model-callable skill list | hermes `skills_list`, opencode `skill` inject (2) | N/A — `<available_skills>` manifest in prompt, not a list tool |
+| T2-9 | Model-callable skill read / load | hermes `skill_view`, opencode `skill` inject (2) | `skill_view` ✓ |
 | T2-10 | Parallel batch subagent dispatch | hermes `tasks=[…]`, codex `spawn_agents_on_csv` (2) | ✗ gap |
-| T2-11 | Session / history search | hermes `session_search`, openclaw `sessions_history` (2) | `memory_search` ✓ |
+| T2-11 | Session / history search | hermes `session_search`, openclaw `sessions_history` (2) | `session_search` ✓ (ripgrep) + `session_view` |
 | T2-12 | Tracked task create / update / stop | openclaw `sessions_spawn/status/yield`, codex `assign_task/wait_agent` (2) | partial — `task_*` covers status/cancel/list |
 | T2-13 | Agent-to-agent messaging | openclaw `sessions_send`, codex `send_message/send_input` (2) | ✗ gap |
 | T2-14 | Agent lifecycle (list / status / resume / close) | openclaw `sessions_list/session_status`, codex `resume/close/list_agent` (2) | ✗ gap |
@@ -576,8 +578,8 @@ mature systems independently decided these are worth building as native tools.
 | T2-19 | Cross-platform messaging | hermes `send_message`, openclaw `message` (2) | ✗ gap |
 | T2-20 | Dynamic MCP tool refresh | hermes (deregister/re-register), openclaw (per-session runtime) (2) | ✗ gap |
 
-**co-cli Tier 2 coverage: 4 / 20 fully covered (T2-1, T2-2, T2-3, T2-11); T2-4 and T2-6 partial.**  
-The openclaw peer pulls a large cluster into Tier 2 — session/history search (T2-11), agent lifecycle and messaging (T2-12/13/14), plan mode (T2-15), scheduling (T2-16/17), TTS (T2-18), and cross-platform messaging (T2-19) all reach 2 peers. Significant gaps: skill model-callability (T2-8/9), stdin write (T2-5), code-specific search (T2-7), parallel delegation (T2-10), and the openclaw-driven cluster T2-12 through T2-19.
+**co-cli Tier 2 coverage: 6 / 20 fully covered (T2-1, T2-2, T2-3, T2-9, T2-11; plus `skill_view`/skill-write shipped closing the T2-8/9 cluster); T2-4 partial; T2-6 dropped by design.**  
+Skill model-callability (T2-8/9) is now closed — `skill_view` (ALWAYS) + `skill_create/edit/patch/delete` (DEFERRED). The openclaw peer pulls a large cluster into Tier 2 — session/history search (T2-11, covered), agent lifecycle and messaging (T2-12/13/14), plan mode (T2-15), scheduling (T2-16/17), TTS (T2-18), and cross-platform messaging (T2-19). Remaining genuine gaps that are neither rejected-by-design nor out-of-scope: stdin write (T2-5), code-specific search (T2-7), plan mode (T2-15), MCP dynamic refresh (T2-20). The T2-12/13/14 messaging/lifecycle cluster is N/A — co-cli has no model-visible delegation surface.
 
 ---
 
@@ -595,12 +597,15 @@ or requiring significant external infrastructure.
 #### T3-B: Memory CRUD and role-filtered recall (hermes)
 
 `memory` (persistent CRUD) and `session_search(role_filter)`. co-cli covers
-persistent CRUD (`memory_create` / `memory_modify`); role-filtered recall is a gap.
+persistent CRUD (`memory_create` / `memory_append` / `memory_replace` / `memory_delete`);
+role-filtered recall is WITHDRAWN as an intentional divergence (see §5.3).
 (Plain session/history search is Tier 2 — T2-11.)
 
 #### T3-C: Skills authoring (hermes)
 
-`skill_manage` (create/edit/patch/delete). co-cli gap — no model-callable skill write.
+`skill_manage` (create/edit/patch/delete). **Closed** — co-cli split this into four
+addressable DEFERRED tools `skill_create` / `skill_edit` / `skill_patch` /
+`skill_delete` (`tools/system/skills.py`), plus `skill_view` (ALWAYS) for read.
 
 #### T3-D: Delegation extras
 
@@ -641,22 +646,26 @@ co-cli gap: all 10 tools. Port requires a browser backend commitment.
 #### T3-J: Code / REPL sandbox backends (hermes)
 
 `execute_code` runs in a multi-environment sandbox (daytona, docker, local,
-modal, singularity, SSH). co-cli has `code_execute` but runs on host with
-shell-policy gate only — no sandboxed multi-environment backend. (The base
-code-execution *capability* is Tier 2 / T2-6; the multi-backend sandbox is the
-differentiated extension.)
+modal, singularity, SSH). co-cli **removed** its `code_execute` (`6390d73c`) — code
+invocation now routes through `shell_exec` only (host shell + shell-policy gate). The
+multi-backend sandbox is a deliberate scope-out, not a gap. (The base code-execution
+*capability* is Tier 2 / T2-6.)
 
 #### T3-K: Extended media generation (openclaw)
 
 `video_generate`, `music_generate`, `pdf` (document understanding). openclaw-unique
-across the four peers. co-cli gap. (Image generation and TTS reach Tier 1 / Tier 2
-respectively — see T1-10, T2-18.)
+across the four peers. co-cli covers PDF **document understanding** via the `documents`
+skill (local text extraction through `shell_exec` + `scripts/extract_pdf.py`) and the
+`office` skill, with scanned PDFs rendered to images and fed back through `image_view`;
+`video_generate` / `music_generate` remain gaps. (Image generation and TTS reach Tier 1 /
+Tier 2 respectively — see T1-10, T2-18.)
 
 #### T3-L: Multi-model reasoning (hermes)
 
 `mixture_of_agents`: 4 frontier LLMs + aggregator, max reasoning effort, 5 API
-calls per invoke. co-cli covers similar use cases via `reason` subagent; not a
-tool-level gap.
+calls per invoke. co-cli has no analogue now that the in-turn delegation triad
+(`reason` included) is removed; re-adding would require a delegation surface co-cli
+deliberately dropped. Out of scope.
 
 #### T3-M: Smart home (hermes)
 
@@ -686,13 +695,13 @@ query-based tool lookup.
 
 | Capability | co-cli tool(s) |
 |---|---|
-| T2 artifact CRUD (create / modify) | `memory_create`, `memory_modify` |
+| Memory artifact CRUD | `memory_create`, `memory_append`, `memory_replace`, `memory_delete` |
+| Full memory artifact read by slug | `memory_view(name)` |
 | FTS5 BM25 knowledge search | `memory_search` (T2 tier) |
 | Runtime capability introspection | `capabilities_check` (codex `tool_search`/`tool_suggest` is the nearest analog) |
-| Obsidian vault integration | `obsidian_list`, `obsidian_search`, `obsidian_read` |
-| Google Drive | `drive_search`, `drive_read` |
-| Google Gmail | `gmail_list`, `gmail_search`, `gmail_draft` |
-| Google Calendar | `calendar_list`, `calendar_search` |
+| Google Drive | `google_drive_search`, `google_drive_read` |
+| Google Gmail | `google_gmail_list`, `google_gmail_search`, `google_gmail_draft` |
+| Google Calendar | `google_calendar_list`, `google_calendar_search` |
 
 ---
 
@@ -702,74 +711,177 @@ How each system handles the meta-layer: registration, execution hooks, approval,
 
 | Aspect | hermes | openclaw | opencode | codex | co-cli |
 |---|---|---|---|---|---|
-| **Registration** | AST auto-discovery of `registry.register()` | Factory composition in `createOpenClawTools()`; no manifest; conditional inclusion by config/auth/mode/policy | `ToolRegistry.all()` + dynamic repo-local + plugin | `ToolRegistryBuilder.push_spec()` manual | Manual `NATIVE_TOOLS` tuple + `@agent_tool` decorator — decorator-only path is silently omitted |
-| **Runtime availability gate** | `check_fn` per tool (runtime) | `availability.ts` expressions (`always`/`auth`/`config`/`env`/`plugin-enabled`/`context`, `allOf`/`anyOf`) | Plugin `tool.definition` hook | `is_mutating()` / `turn.tool_call_gate` | Build-time `requires_config` only — credential expiry not caught mid-session |
-| **Pre/post-tool hooks** | — (gateway pattern) | `before_tool_call` (plugin veto, approval, loop detection); post = diagnostic emit | `tool.execute.before` / `tool.execute.after` | `run_pre_tool_use_hooks` / `run_post_tool_use_hooks` | `CoToolLifecycle.before_tool_execute` / `after_tool_execute` ✓ |
+| **Registration** | AST auto-discovery of `registry.register()` | Factory composition in `createOpenClawTools()`; no manifest; conditional inclusion by config/auth/mode/policy | `ToolRegistry.all()` + dynamic repo-local + plugin | `ToolRegistryBuilder.push_spec()` manual | Self-registering `TOOL_REGISTRY` (list) + `TOOL_REGISTRY_BY_NAME` (dict) via `@agent_tool(register=True)` at import; no manual tuple |
+| **Runtime availability gate** | `check_fn` per tool (runtime) | `availability.ts` expressions (`always`/`auth`/`config`/`env`/`plugin-enabled`/`context`, `allOf`/`anyOf`) | Plugin `tool.definition` hook | `is_mutating()` / `turn.tool_call_gate` | Per-turn `check_fn` via `_make_prepare` (Google tools use `check_fn=_google_available`) + build-time `requires_config`; no TTL cache (§5.2) |
+| **Pre/post-tool hooks** | — (gateway pattern) | `before_tool_call` (plugin veto, approval, loop detection); post = diagnostic emit | `tool.execute.before` / `tool.execute.after` | `run_pre_tool_use_hooks` / `run_post_tool_use_hooks` | `CoToolLifecycle` **deleted** (capability-API drop, v0.8.312); call-seam logic moved to `_CallSeamToolset.call_tool` (MCP-result spill) |
 | **Approval model** | Blocking gateway; `_permanent_approved` persisted | Plugin approval `ALLOW_ONCE`/`ALLOW_ALWAYS`/`DENY` (120s+10s); config `allow`/`deny`/`alsoAllow`; `ownerOnly` | `Permission.ask()` / `.reply()`; `"always"` persists | `request_permissions`; `SandboxPermissions` | Deferred approval loop; semantic `ApprovalSubject` (shell/path/domain/tool); session-scoped only |
 | **Concurrency partitioning** | — (toolset profiles) | Per-call `AbortSignal`; no tool-level cap; one approval at a time | Plugin hooks | `turn.tool_call_gate` for mutating | `ResourceLockStore` per-path; no class-level concurrency gate |
-| **Result size** | `max_result_size_chars` uniform (all tools incl. MCP) | Per-tool caps (web_fetch 750KB/10MB, search 10, image 20, history 20); no uniform gate | `Truncate.output()` wrapper | `truncated_output()` token-based | Per-tool `max_result_size` via `@agent_tool`; MCP results ungated — runaway MCP can flood context |
-| **MCP integration** | `mcp_tool.py` with deregister/re-register on refresh | Per-session MCP runtime, materialized + name-sanitized per session, disposed after run | — | `mcp_tool_to_responses_api_tool()`; `list_tools()` with timeout (implied) | `discover_mcp_tools()` once at startup; no timeout wrapper; no `list_tools` timeout; no dynamic refresh |
-| **Toolset profiles / grouping** | `toolsets.py` named profiles (`web`, `file`, …) | No explicit profiles; implicit groupings (embedded, sandboxed, media-capable, plugin-augmented, owner-only) | Plugin tool.definition hook | `model_visible_specs` filtering | No named profiles; delegation agents have explicit hard-coded tool lists |
+| **Result size** | `max_result_size_chars` uniform (all tools incl. MCP) | Per-tool caps (web_fetch 750KB/10MB, search 10, image 20, history 20); no uniform gate | `Truncate.output()` wrapper | `truncated_output()` token-based | Per-tool `spill_threshold_chars` (default 4_000) via `@agent_tool`; MCP string results now spill-gated in `_CallSeamToolset.call_tool` (§5.2) |
+| **MCP integration** | `mcp_tool.py` with deregister/re-register on refresh | Per-session MCP runtime, materialized + name-sanitized per session, disposed after run | — | `mcp_tool_to_responses_api_tool()`; `list_tools()` with timeout (implied) | `discover_mcp_tools()` once at startup, **concurrent** `asyncio.gather` (delay = max not sum); `_SanitizingMCPServer` normalizes `inputSchema`; no dynamic refresh (§5.2) |
+| **Toolset profiles / grouping** | `toolsets.py` named profiles (`web`, `file`, …) | No explicit profiles; implicit groupings (embedded, sandboxed, media-capable, plugin-augmented, owner-only) | Plugin tool.definition hook | `model_visible_specs` filtering | No named profiles; only two daemon `TaskAgentSpec`s hand-enumerate `tool_names` (no model-facing delegation) |
 | **Tool context** | — | `HookContext` (agentId, config, sessionKey, sessionId, runId, channelId, loopDetection, sandbox) | `Tool.Context` (sessionID, messageID, agent, abort, callID, messages, metadata(), ask()) | `ToolInvocation` (session, turn, tracker, call_id, tool_name, namespace, payload) | `RunContext[CoDeps]` passed to tool body |
-| **Typed output** | — | `AgentToolResult{content[], details}`; helpers `textResult`/`jsonResult`; no schema narrowing | `Truncate.output()` wrapper | `ToolOutput` trait; `FunctionToolOutput`; `ExecCommandToolOutput` | `ToolReturn(return_value, metadata)` — string only; no structured content block |
+| **Typed output** | — | `AgentToolResult{content[], details}`; helpers `textResult`/`jsonResult`; no schema narrowing | `Truncate.output()` wrapper | `ToolOutput` trait; `FunctionToolOutput`; `ExecCommandToolOutput` | `ToolReturn(return_value, metadata)`; `image_view` attaches pixels via `ToolReturn.content` (BinaryContent) for vision-capable agent models |
 
 ---
 
-## Part 5: co-cli Gap Priority
+## Part 5: co-cli Gap Priority & Architecture Audit
 
-Derived from convergence scores, parity matrix (§1 of `RESEARCH-tools-gaps-co-vs-hermes.md`), and architecture analysis (§§3-4 of same).
+This part absorbs the former `RESEARCH-tools-gaps-co-vs-hermes.md` — the deep,
+code-verified co-cli↔hermes parity + architecture audit (last refreshed to v0.8.342).
+It covers the current surface and visibility floor (§5.1), architecture-level gaps with
+resolution status (§5.2), anti-patterns with status (§5.3), and the consolidated gap
+priority table (§5.4). Convergence scores reference the §2 matrix; architecture items are
+code-verified against current source.
 
-### Priority High
+### 5.1 Current surface, visibility floor, and co-specific guardrails
 
-| Gap | Convergence signal | Risk | Effort |
-|---|---|---|---|
-| `vision` / image analysis (T1-9) | hermes + openclaw + codex — score 3, **Tier 1** | No vision capability while 3/4 peers ship it natively | Medium — pydantic-ai model wrapper already available |
-| MCP `list_tools()` no timeout at startup (§3.8 gaps doc) | Architecture flaw | Startup hang if MCP server stalls | Low — `asyncio.timeout()` + `asyncio.gather()` |
-| `tool_output_raw()` bypasses size gate and telemetry (§4.2 gaps doc) | Architecture flaw | Silent context overflow | Medium — audit callsites, restrict to ctx-less helpers |
-| MCP tool results not size-gated (§3.7 gaps doc) | Architecture flaw | Context overflow via runaway MCP | Medium — extend `CoToolLifecycle.after_tool_execute` to MCP spans |
-| `web_fetch` single-URL only | hermes `web_extract(urls=[…])` — score 1, high value | Sequential latency on multi-URL research | Low — `asyncio.gather` over existing fetch |
-| `ModelRetry` vs `tool_error()` unenforced (§4.3 gaps doc) | Architecture flaw | Retry-budget exhaustion on non-recoverable errors | Medium — ruff rule or base-class signal |
+**Inventory (36 tools, sorted):** `capabilities_check`, `clarify`, `file_patch`,
+`file_read`, `file_search`, `file_write`, `google_calendar_list`, `google_calendar_search`,
+`google_drive_read`, `google_drive_search`, `google_gmail_draft`, `google_gmail_list`,
+`google_gmail_search`, `image_view`, `memory_append`, `memory_create`, `memory_delete`,
+`memory_replace`, `memory_search`, `memory_view`, `session_search`, `session_view`,
+`shell_exec`, `skill_create`, `skill_delete`, `skill_edit`, `skill_patch`, `skill_view`,
+`task_cancel`, `task_list`, `task_start`, `task_status`, `todo_read`, `todo_write`,
+`tool_view`, `web_fetch`, `web_search`.
 
-### Priority Medium
+co-cli ships a small static **ALWAYS** floor (always-paid schema cost, relevant for the
+Ollama cache prefix) and gates the rest behind a model-driven `tool_view(name=…)` reveal.
+This is the biggest architectural divergence from hermes, which keeps everything registered
+and gates by runtime `check_fn` + per-platform named toolset profiles.
 
-| Gap | Convergence signal | Risk | Effort |
-|---|---|---|---|
-| Model-callable `skills_list` + `skill_view` (T2-8, T2-9) | hermes + opencode — score 2 | Skill discovery requires user slash commands; model cannot self-load skills | Medium — read-only tools over existing `co_cli/skills/` registry |
-| Runtime `check_fn` for tool availability (§3.1 gaps doc) | hermes + openclaw availability gating | Stale credentials look like transient failures | Medium — optional `check_fn` field on `@agent_tool` + visibility filter hook |
-| `task_start` / `shell`: stdin write to running process (T2-5) | hermes + codex — score 2 | Cannot send input to interactive background processes | Medium — extend `task_*` or add `process(action=write/submit/close)` |
-| Background task output file-backed | hermes (file-tee) + codex `ExecCommandToolOutput` — score 2 | In-memory `deque(500)` drops output; crash loses all | Medium — optional file sink on task spawn |
-| Code-specific search (T2-7) | opencode + codex — score 2 | No code-aware search surface beyond grep | Medium — wrap existing search or external provider |
-| Parallel batch delegation (T2-10) | hermes + codex — score 2 | Sequential research; no batch fan-out | Medium — `delegate_task(tasks=[…])` pattern |
-| `NATIVE_TOOLS` manual tuple (§3.3 gaps doc) | hermes AST auto-discovery; openclaw factory composition | Tool silently omitted if decorator without tuple entry | Low — module scan for `@agent_tool`-decorated functions at import |
-| `shell` PTY mode (T3-A) | hermes — score 1, high value | Cannot run interactive CLIs (Codex, Python REPL, etc.) | Medium — add `pty` flag to `shell` |
-| Named toolset profiles for delegation (§3.5 gaps doc, T3-D) | hermes — score 1, strong | New tools invisible to delegation agents; manual list drift | Medium — `toolsets.py`-style registry |
+| Bucket | Count | Tools |
+|---|---|---|
+| **ALWAYS** | 19 | `memory_search`, `memory_view`, `memory_create`, `memory_append`, `memory_replace`, `memory_delete`, `file_read`, `file_search`, `file_write`, `file_patch`, `web_search`, `web_fetch`, `shell_exec`, `skill_view`, `tool_view`, `capabilities_check`, `clarify`, `todo_write`, `todo_read` |
+| **DEFERRED** | 17 | `skill_create`, `skill_edit`, `skill_patch`, `skill_delete`, `session_search`, `session_view`, `task_start`, `task_status`, `task_cancel`, `task_list`, `image_view`, `google_gmail_list`, `google_gmail_search`, `google_gmail_draft`, `google_drive_search`, `google_drive_read`, `google_calendar_list`, `google_calendar_search` |
 
-### Priority Low
+Visibility mechanics (capability-API drop, v0.8.312): co-cli does **not** pass
+`defer_loading` to pydantic-ai. Each tool carries `visibility ∈ {ALWAYS, DEFERRED}`;
+`_tool_visibility_filter()` (`agent/toolset.py`) hides DEFERRED tools each turn unless the
+canonical name is in `ctx.deps.runtime.revealed_tools`, and narrows to approved + ALWAYS on
+approval-resume turns. `tool_view(name=…)` reveals by normalized-exact match (difflib
+suggestions on near-miss, cutoff 0.6; "do not retry" on no match). The deleted
+`CoToolLifecycle`'s MCP-result spill moved to `_CallSeamToolset.call_tool`; JSON tool-arg
+repair moved to `llm/surrogate_recovery_model.py`; path containment moved to explicit
+`fs_guards.py` boundary checks inside the file tools.
 
-| Gap | Convergence signal | Risk | Effort |
-|---|---|---|---|
-| `terminal.watch_patterns` for background tasks (T3-A) | hermes — score 1 | Long-running tasks cannot notify on specific output | Medium — extend `task_start` with regex notifier |
-| MCP dynamic tool refresh (T2-20, §3.2 gaps doc) | hermes + openclaw — score 2 | Stale tool index in long sessions | Medium — subscribe to `notifications/tools/list_changed` |
-| MCP resource tools: list + read (T3-F) | codex — score 1 | Cannot access MCP server resources (only tools) | Medium — two new tools over existing MCP client |
-| `clarify` one-shot fragility (§4.1 gaps doc) | Architecture flaw | Model confusion if called twice in one step | Hard — approval-loop dedup |
-| `file_read_mtimes` unbounded (§4.4 gaps doc) | Architecture flaw | Memory growth in very long sessions | Low — cap dict or evict at turn reset |
-| Session search `role_filter` (T3-B) | hermes — score 1 | Cannot filter assistant vs. user messages in recall | Low — extend search query |
-| Enter / update plan mode (T2-15) | openclaw + codex — score 2 | No model-gated plan mode | Large — requires new REPL mode + tool pair |
-| LSP integration (T3-H) | opencode — score 1 | No IDE-class code intelligence | Large — requires LSP client infrastructure |
+**co-specific guardrails worth keeping (vs hermes), code-verified:**
 
-### Out of Scope (peer tools not worth porting)
+- `file_write` / `file_patch` enforce read-before-write + workspace containment via
+  `FileReadTracker` + `fs_guards.enforce_write_boundary`; `file_patch` auto-lints `.py` and
+  uses a four-strategy fuzzy match (exact, line-trimmed, indent-stripped, escape-expanded).
+  Hermes lacks both guards (it has a `cross_profile` escape hatch co-cli does not).
+- `file_read` truncates per-line at 2000 chars (a practical shape guard hermes lacks) and
+  opts out of spill (`spill_threshold_chars=inf`) since the per-line caps already bound shape.
+- `web_fetch` is single-URL by design with trafilatura main-article extraction (fail-open to
+  `html2text`). **Multi-URL is rejected as parity-cosmetic** — `web_fetch` is
+  `is_concurrent_safe=True`, so pydantic-ai already dispatches parallel `web_fetch(url=…)`
+  calls concurrently with per-call error isolation.
+- `session_search` is ripgrep-based (no index over transcripts, v0.8.298); memory items still
+  use FTS5/BM25. `session_view` covers the verbatim-slice / anchored-scroll need.
+
+### 5.2 Architecture-level gaps (code-verified to v0.8.342)
+
+Status legend: ✅ done · 🟢 in flight (active exec-plan) · 🟠 open · ⚪ deferred / by design.
+
+- **✅ Spill enforcement on MCP results.** Logic moved out of the deleted `lifecycle.py` into
+  `_CallSeamToolset.call_tool` (`agent/toolset.py`): plain-string MCP results are coerced
+  through `spill_with_span()` (guard: `isinstance(result, str) and info.source == MCP`),
+  per-tool `spill_threshold_chars` override, fallback `SPILL_THRESHOLD_CHARS=4_000`.
+- **✅ Tool registration self-populating.** `@agent_tool(register=True)` self-registers into
+  `TOOL_REGISTRY` + `TOOL_REGISTRY_BY_NAME` at import; no manual tuple. The name-keyed dict
+  is what `build_task_agent()` resolves daemon `TaskAgentSpec.tool_names` against.
+- **✅ Concurrent MCP `list_tools()` discovery.** `discover_mcp_tools()` (`agent/mcp.py`)
+  fans out all `list_tools()` calls via `asyncio.gather` over `_discover_one`; startup delay
+  is `max(timeouts)`, not `N × timeout`.
+- **✅ MCP `inputSchema` sanitization.** `_SanitizingMCPServer` runs `sanitize_mcp_schema()`
+  over every `inputSchema` on each `list_tools()`: collapses `["string","null"]` type arrays
+  and nullable `anyOf`/`oneOf`, fixes bare object nodes, recurses. Narrower than hermes's
+  `schema_sanitizer.py` (whose top-level-combinator strip + 400-triggered passes are
+  xAI/Codex-specific, not needed for co's Ollama/Anthropic targets).
+- **✅ Background task output file-backed.** Each task streams stdout+stderr to
+  `LOGS_DIR/bg-{task_id}.log` (`tools/background.py`); reads tail via `tail_log` (64 KB
+  seek-from-end). No in-memory ring buffer. Not ported: orphan reaper for logs from sessions
+  that died before cleanup.
+- **🟠 No `check_fn` result cache.** `_make_prepare(fn)` calls `info.check_fn(deps)` every
+  prepare (once per turn), no cache. The seven Google tools register
+  `check_fn=_google_available` (cheap in-memory `_creds_resolved`). Hermes caches `check_fn`
+  for 30 s — worth copying only if an external-probe (network) `check_fn` is ever added.
+- **⚪ No named toolset profiles for delegation.** With the mid-turn delegation triad removed,
+  the only `TaskAgentSpec`s are the two daemon specs in `daemons/dream/_reviewer.py`
+  (`MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`), each hand-enumerating `tool_names`. Persists,
+  but confined to two background specs — no model-facing surface.
+- **⚪ No MCP dynamic tool refresh** (T2-20). `discover_mcp_tools()` runs once at bootstrap;
+  no `notifications/tools/list_changed` subscription. No install-set server emits it; failure
+  is bounded (stale-but-additive); `/mcp restart` is the fix.
+- **⚪ No persistent approval rules** (§3.7 of the old audit). `session_approval_rules` is
+  in-memory per session; hermes persists `_permanent_approved`. Deliberate security tradeoff.
+
+### 5.3 Anti-patterns (status)
+
+- **✅ `tool_output_raw()` removed** — grep across `co_cli/` is zero matches. Helper-layer
+  errors route through `tool_error` (which spills via `ctx`). Current `tool_io.py` surface:
+  `tool_output`, `tool_error`, `spill_if_oversized`, `spill_with_span`,
+  `SPILL_THRESHOLD_CHARS=4_000`, `TOOL_RESULT_PREVIEW_CHARS=1_500`.
+- **✅ `file_read_mtimes` bounded** — replaced by `CoDeps.file_tracker: FileReadTracker`,
+  shared by reference across daemon-only `fork_deps()`, bounded by its own structure.
+- **✅ Path-normalization hidden rewrite removed** — `lifecycle.py` deleted; no
+  `PATH_NORMALIZATION_TOOLS` frozenset. Resolution + containment is explicit inside the file
+  tools via `fs_guards.enforce_read_boundary`/`enforce_write_boundary`; tests see production
+  path-handling code.
+- **🟠 `ModelRetry` vs `tool_error()` classification is convention-only.** Transient →
+  `raise ModelRetry`; terminal → `return tool_error(...)`. `handle_google_api_error()` is the
+  reference pattern; no static check, so misclassification still burns retry budget on
+  non-recoverable errors.
+- **🟠 `clarify` one-shot fragility.** Model confusion if called twice in one step;
+  approval-loop dedup is the (hard) fix.
+- **⚪ `role_filter` on `session_search` WITHDRAWN** — intentional divergence, not a defect.
+  co's multi-line ripgrep hits make role a sub-span property, not a row property; clean
+  filtering would need per-message indexing for marginal value. Do not re-propose from a
+  signature diff alone.
+
+### 5.4 Consolidated gap priority
+
+Status legend: ✅ done · 🟢 in flight · 🟠 open · ⚪ deferred / out of scope.
+
+| Priority | Status | Item | Convergence / source | Risk | Effort |
+|---|---|---|---|---|---|
+| **High** | ✅ | Vision / image analysis (T1-9) | hermes + openclaw + codex — score 3, Tier 1 | (was) no vision while 3/4 peers ship it | `image_view` shipped v0.8.342 (`tools/vision/view.py`) |
+| **High** | ✅ | MCP results not spill-gated (§5.2) | architecture | context overflow via runaway MCP | `_CallSeamToolset.call_tool` |
+| **High** | ✅ | `tool_output_raw()` bypasses gate (§5.3) | architecture | silent context overflow | `tool_output_raw` deleted |
+| **High** | ✅ | MCP schema sanitization (§5.2) | architecture | MCP tools dropped on Ollama / Anthropic rejection | `_SanitizingMCPServer` + `mcp_schema.py` |
+| **High** | ✅ | Concurrent MCP `list_tools()` (§5.2) | architecture | startup delay = N × timeout | `_discover_one` + `asyncio.gather` |
+| **Medium** | ✅ | Model-callable `skill_view` + skill-write (T2-8/9, T3-C) | hermes + opencode — score 2 | skill discovery/authoring needed slash commands | `skill_view` (ALWAYS) + `skill_create/edit/patch/delete` (DEFERRED) |
+| **Medium** | ✅ | Local document handling (T3-K) | hermes `vision_tools` / openclaw `pdf` | could not read local PDFs | `documents` + `office` skills (`scripts/extract_pdf.py`) |
+| **Medium** | ✅ | Self-registering tool registry (§5.2) | hermes AST / openclaw factory | tool silently omitted | `TOOL_REGISTRY` + `TOOL_REGISTRY_BY_NAME` |
+| **Medium** | 🟢 | `shell_exec` PTY + interactive `task_write`/`task_close` (T2-5, T3-A) | hermes + codex — score 2 | CLIs that gate on isatty; no stdin to running tasks | `2026-05-28-200025-toolgap-interactive-terminal.md` (active, not shipped) |
+| **Medium** | ⚪ | `web_fetch` multi-URL (T3-G) | hermes — score 1 | sequential latency | rejected as parity-cosmetic — `is_concurrent_safe` already parallelizes |
+| **Medium** | 🟠 | `ModelRetry` / `tool_error` unenforced (§5.3) | architecture | retry-budget waste | ruff rule or base-class signal |
+| **Medium** | 🟠 | Code-specific search (T2-7) | opencode + codex — score 2 | no code-aware search beyond grep | wrap existing search or external provider |
+| **Low** | 🟠 | `check_fn` result cache (§5.2) | hermes 30 s TTL | wasted work *if* external-probe `check_fn`s are added | copy hermes's TTL when needed |
+| **Low** | 🟠 | Named toolset profiles for daemon specs (§5.2) | hermes | tool-list drift in two daemon specs | tag-and-filter; no model-facing surface |
+| **Low** | 🟠 | `clarify` one-shot fragility (§5.3) | architecture | model confusion if called twice | hard — approval-loop dedup |
+| **Low** | ⚪ | `role_filter` on `session_search` | hermes — score 1 | — | WITHDRAWN — intentional divergence, not a defect |
+| **Low** | ⚪ | MCP dynamic refresh (T2-20) | hermes + openclaw — score 2 | stale tool index in long sessions | no install-set server emits `list_changed`; `/mcp restart` fixes |
+| **Low** | ⚪ | MCP resource tools: list + read (T3-F) | codex — score 1 | cannot access MCP resources (only tools) | two new tools over existing MCP client |
+| **Low** | ⚪ | No permanent approval persistence (§5.2) | hermes | UX friction | deliberate security tradeoff |
+| **Large** | 🟠 | Enter / update plan mode (T2-15) | openclaw + codex — score 2 | no model-gated plan mode | new REPL mode + tool pair |
+| **Large** | 🟠 | LSP integration (T3-H) | opencode — score 1 | no IDE-class code intelligence | LSP client infrastructure |
+
+### 5.5 Out of Scope (peer tools not worth porting)
 
 | Capability | Reason |
 |---|---|
 | Image generation (T1-10, score 3) | Near-universal among peers but co-cli scopes media generation out; direct Google/OpenAI API use is simpler — revisit if a delivery use case emerges |
+| Code / sandboxed execution (T2-6, T3-J) | co-cli **removed** `code_execute` (`6390d73c`); re-adding means a sandbox backend — host-shell-only stance |
+| Mid-turn delegation (`delegate_task`, T1-8) | co-cli deliberately removed mid-turn delegation; re-adding contradicts the single-loop design |
 | Cross-platform messaging (T2-19, score 2) | Large auth/config surface; no current co-cli delivery workflow |
 | Text-to-speech (T2-18, score 2) | No co-cli delivery channel for audio |
-| Cron / scheduling (T2-16, T2-17, score 2) | co-cli is user-interactive; OS cron is better suited |
-| Extended media generation — video, music, PDF (T3-K) | openclaw-only; no co-cli delivery channel |
+| Cron / scheduling (T2-16, T2-17, score 2) | co-cli is user-interactive; OS cron / Claude Code CronCreate is better suited |
+| Extended media generation — video, music (T3-K) | openclaw-only; no co-cli delivery channel |
 | Browser automation (T3-I, 10 tools) | Large browser stack dependency; `web_fetch` covers most read-only needs |
-| Home Assistant (T3-M, 4 tools) | Domain-specific; not in co-cli's use case scope |
+| Home Assistant (T3-M, 4 tools) | Domain-specific; co-cli's domain equivalent is Google Workspace |
 | Reinforcement learning training (T3-N, 10 tools) | Highly domain-specific (Tinker-Atropos only) |
-| `mixture_of_agents` (T3-L) | `reason` subagent covers the use case without the 4-LLM cost |
+| `mixture_of_agents` (T3-L) | No co-cli analogue now the in-turn delegation triad is removed |
 | Structured heartbeat reporting (T3-O) | openclaw-specific to its long-running scheduled-agent model |
 
 ---
@@ -875,12 +987,12 @@ Quick lookup for finding the equivalent tool across systems.
 
 | Capability | co-cli | hermes | openclaw | opencode | codex |
 |---|---|---|---|---|---|
-| Shell exec | `shell` | `terminal` | `nodes` | `bash` | `exec_command` |
+| Shell exec | `shell_exec` | `terminal` | `nodes` | `bash` | `exec_command` |
 | File read | `file_read` | `read_file` | (via nodes) | `read` | (via API) |
 | File write | `file_write` | `write_file` | (via nodes) | `write` | (via API) |
 | File edit | `file_patch` | `patch(replace)` | — | `edit` | `apply_patch` |
 | Multi-hunk patch | — (removed — V4A is OpenAI-Codex format) | `patch(patch)` | — | `ApplyPatchTool` | `apply_patch` |
-| File find | `file_find` | `search_files(files)` | — | `glob` | — |
+| File find | `file_search` (`content=None`) | `search_files(files)` | — | `glob` | — |
 | Content search | `file_search` | `search_files(content)` | — | `grep` | — |
 | Web search | `web_search` | `web_search` | `web_search` | `search` | `WebSearch` |
 | Web fetch | `web_fetch` | `web_extract` | `web_fetch` | `fetch` | (via API) |
@@ -889,13 +1001,16 @@ Quick lookup for finding the equivalent tool across systems.
 | Delegate / subagent | — (no model-callable primitive) | `delegate_task` | `sessions_spawn` | `task` | `spawn_agent` |
 | Agent-to-agent messaging | — | — | `sessions_send` | — | `send_message`/`send_input` |
 | Agent lifecycle | — | — | `sessions_list`/`session_status` | — | `list_agents`/`resume_agent` |
-| Session / history search | `memory_search` | `session_search` | `sessions_history` | — | — |
-| Skills load | — | `skill_view` | — | `skill` | — |
-| Skills list | — | `skills_list` | — | `skill` (dynamic desc) | — |
+| Session / history search | `session_search` / `memory_search` | `session_search` | `sessions_history` | — | — |
+| Skills load | `skill_view` | `skill_view` | — | `skill` | — |
+| Skills write / manage | `skill_create/edit/patch/delete` | `skill_manage` | — | — | — |
+| Skills list | N/A (`<available_skills>` manifest) | `skills_list` | — | `skill` (dynamic desc) | — |
 | Background task start | `task_start` | `terminal(background=True)` | — | — | `code` / `wait` |
 | Background task status | `task_status` | `process(poll)` | `session_status` | — | `wait_agent` |
 | Memory create | `memory_create` | `memory(add)` | — | — | — |
-| Vision | — | `vision_analyze` | `image` | — | `view_image` |
+| Memory read by slug | `memory_view` | — | — | — | — |
+| Vision | `image_view` | `vision_analyze` | `image` | — | `view_image` |
+| PDF document understanding | `documents`/`office` skill | — | `pdf` | — | — |
 | Image generation | — | `image_generate` | `image_generate` | — | `ImageGeneration` |
 | Text-to-speech | — | `text_to_speech` | `tts` | — | — |
 | LSP | — | — | — | `lsp` | — |
@@ -905,5 +1020,4 @@ Quick lookup for finding the equivalent tool across systems.
 | Cross-platform messaging | — | `send_message` | `message` | — | — |
 | MCP resource read | — | — | — | — | `read_mcp_resource` |
 | Capabilities check | `capabilities_check` | — | — | — | `tool_search` / `tool_suggest` |
-| Obsidian | `obsidian_*` | — | — | — | — |
-| Google Workspace | `drive_*`, `gmail_*`, `calendar_*` | — | — | — | — |
+| Google Workspace | `google_drive_*`, `google_gmail_*`, `google_calendar_*` | — | — | — | — |

@@ -3,7 +3,7 @@
 Compares co-cli's "built-in learning loop" capability against `hermes-agent`'s claim of being "the self-improving AI agent." Every assertion below is grounded in source code in the two repos as scanned on 2026-05-18; every file path is real, every line number was opened and read.
 
 Sibling docs (don't duplicate):
-- `RESEARCH-tools-gaps-co-vs-hermes.md` — broader tool-surface delta
+- `RESEARCH-tools-peers-tiers.md` (Part 5) — broader tool-surface delta + co↔hermes parity/architecture audit
 - `RESEARCH-tui-compare-hermes-and-co.md` — REPL / surface comparison
 - `RESEARCH-context-management-peer-survey.md` — compaction-side (Hermes vs. Openclaw depth dive)
 
