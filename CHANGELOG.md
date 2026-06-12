@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.346]
+
+### Feature: scanned/image-only PDF reading (tier-2 render → vision)
+
+- A scanned PDF (photographed contract, receipt, handout — no text layer) used to dead-end at the tier-1 `[no-text-layer: likely scanned]` sentinel even though the configured model can see images. Adds the thin render+route glue so the `documents` skill reads those pages with the agent model's own vision — no new tool, no new skill, no OCR engine.
+- `co_cli/skills/documents/scripts/extract_pdf.py`: adds a `--render` mode on the existing `co-extract-pdf` console command. Reuses the open pymupdf handle to rasterize the selected pages to PNGs (150 DPI, long-edge clamped to ~2000 px / ~4 MP — the measured model downsample ceiling) into a script-owned OS tempdir, and emits a pinned stdout contract: one `<page>⇥<abs-png-path>` line per page plus a final `total_pages=M` line so a caller detects truncation. Honors `--pages`, `--max-pages` (default 10), `--outdir`; corrupt/encrypted PDFs reuse the existing distinct non-zero exits.
+- `co_cli/skills/documents/SKILL.md`: Step 5 scanned branch. When `image_view` is absent (text-only model) it degrades honestly — names the cause and suggests `web_fetch`/conversion, never fakes a read. When available, it renders, reads each page through `image_view` one at a time, **transcribing each page to text before advancing** (only the tail page's pixels stay in view per the vision history processor), then synthesizes with page-N grounding and states any page truncation.
+- Tests: `tests/test_flow_scanned_pdf.py` (new) + a committed 3-page image-only fixture `tests/skills/fixtures/scanned_invoice.pdf` — real pymupdf render + truncation (no mocks), always-run honest-degradation assertion, and a vision E2E (reads "540.00 USD" off page 3) skipped on text-only hosts.
+- Spec: `docs/specs/skills-document.md` (new) — the namespaced per-skill spec covering the documents skill's two-tier read end to end (already forward-referenced from `skills.md` and the `01-system.md` index).
+
 ## [0.8.344]
 
 ### Feature: office skill — local `.docx`/`.pptx`/`.xlsx` text extraction

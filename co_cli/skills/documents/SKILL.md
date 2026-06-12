@@ -41,9 +41,35 @@ The command writes markdown to stdout with a `## Page N` marker before each page
 ## Step 4 — Handle the result
 
 - **Normal output** (markdown with `## Page N` markers) → answer the user's question and cite **page N** using the markers.
-- **The single line `[no-text-layer: likely scanned]`** → the PDF has no extractable text layer (it is a scanned image). Do **not** answer from a blank extraction. Tell the user the PDF appears to be scanned/image-only and that text extraction found nothing. If the source was a URL, `web_fetch` may offer a text version. Reading scanned pages as images is a separate capability not available in this skill.
+- **The single line `[no-text-layer: likely scanned]`** → the PDF has no extractable text layer (it is a scanned image). Do **not** answer from a blank extraction. Go to **Step 5** to read the pages as images.
 - **A non-zero exit with an error line** (`File not found:`, `Not a PDF`, `PDF is password-protected:`, `Could not open PDF`) → relay the cause plainly. For a password-protected PDF, tell the user the password must be removed before it can be read.
+
+## Step 5 — Scanned / image-only PDFs (read the pages as images)
+
+Reached only when Step 3 returned `[no-text-layer: likely scanned]`. There is no text to extract, but the pages can be read as images **if your model can see them**.
+
+**If you do not have the `image_view` tool**, your model cannot read images — it is hidden on text-only models. Do not attempt a read and never answer from the blank extraction. Tell the user the PDF is scanned/image-only and that your current model cannot read images, then offer a workaround: if the source was a URL, `web_fetch` may have a text version; otherwise the file needs converting to a text-layer PDF (an OCR step) before this skill can read it.
+
+**If you have `image_view`**, render the pages to images and read them one at a time:
+
+1. **Render** the pages with `shell_exec`:
+
+   ```
+   co-extract-pdf --render <path-to-pdf>
+   ```
+
+   This rasterizes the pages (150 DPI, at most 10 pages) into a temporary directory and writes, on stdout, one `<page-number>⇥<png-path>` line per rendered page (TAB-separated), then a final `total_pages=M` line. Add `--pages 0-4` to restrict the range. **Check for truncation:** if the count of rendered lines is fewer than `M`, only the first N of M pages were rendered — you must say so in your answer. Never let a capped read look complete.
+
+2. **Read each page in order** with `image_view`, and **write down what the page shows as text before moving to the next page** — only the most recent page's image stays in view, so the running text notes are what you reason over, not the images:
+
+   ```
+   image_view(<png-path>, prompt="<the user's question> — this is page N of M of <file>. Transcribe the relevant content and describe what this page shows.")
+   ```
+
+3. **Synthesize** the answer from your accumulated per-page notes, citing **page N** for each fact (the same page-number grounding a text PDF gives via `## Page N`). If pages were capped in step 1, state that you read only the first N of M pages.
+
+4. **Clean up:** when finished (or if you stop early), delete the temporary render directory — it is the parent folder of the PNG paths from step 1 — using `shell_exec`. Cleanup is best-effort; if it fails, the OS reclaims the temp files.
 
 ## Scope
 
-PDF text extraction only. No OCR of scanned pages, no Office formats (see the `office` skill), no writing or modifying files.
+Local PDF reading. Born-digital PDFs are read via text extraction (Steps 3–4); scanned/image-only PDFs are read via the model's own vision, page by page (Step 5) — there is no bundled OCR engine. No Office formats (see the `office` skill), no writing or modifying the source file.

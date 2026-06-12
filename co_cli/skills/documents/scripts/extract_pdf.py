@@ -15,10 +15,21 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 SCANNED_SENTINEL = "[no-text-layer: likely scanned]"
 MIN_CHARS_PER_PAGE = 10
+
+# Raster render defaults for the scanned-PDF (tier-2) path. 150 DPI is the measured
+# cost/quality knee on the configured vision model (reads 8pt cleanly at half the
+# token cost of 200). The long-edge clamp matches the model's ~4 MP downsample
+# ceiling, so a large-format page can never waste tokens or breach image_view's cap.
+# The page cap bounds sequential per-page vision latency; the truncation notice
+# (reported via total_pages) is the real safeguard, not the number.
+RENDER_DPI = 150
+RENDER_MAX_LONG_EDGE_PX = 2000
+RENDER_DEFAULT_MAX_PAGES = 10
 
 
 def _parse_pages(spec: str, page_count: int) -> list[int]:
@@ -132,6 +143,53 @@ def _render(chunks: list[dict], pages: list[int]) -> str:
     return "\n\n".join(parts)
 
 
+def _effective_dpi(page) -> int:
+    """DPI to render this page at, clamped so the long edge stays under the px cap.
+
+    pymupdf renders at ``points * dpi / 72`` px. A normal page renders at RENDER_DPI;
+    a large-format page is scaled down so the long edge never exceeds
+    RENDER_MAX_LONG_EDGE_PX (the model's ~4 MP downsample ceiling) — rendering above
+    that wastes tokens and risks image_view's size cap.
+    """
+    long_edge_points = max(page.rect.width, page.rect.height)
+    if long_edge_points <= 0:
+        return RENDER_DPI
+    dpi_cap = RENDER_MAX_LONG_EDGE_PX * 72.0 / long_edge_points
+    return min(RENDER_DPI, round(dpi_cap))
+
+
+def _render_pages(path: Path, pages: list[int], outdir: str | None, max_pages: int) -> int:
+    """Rasterize the selected pages to PNGs and emit the page->path map on stdout.
+
+    Writes at most ``max_pages`` PNGs into ``outdir`` (an OS tempdir is created when
+    None — script-owned, USER_DIR-independent). Stdout contract: one
+    ``<1-based-page>\\t<absolute-png-path>`` line per rendered page, then a final
+    ``total_pages=M`` line where M is the count of selected pages *before* the cap, so
+    a caller detects truncation when the rendered-line count is below M.
+    """
+    import pymupdf
+
+    target_dir = Path(outdir) if outdir else Path(tempfile.mkdtemp(prefix="co-extract-pdf-"))
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    doc = pymupdf.open(path)
+    try:
+        lines: list[str] = []
+        for page_index in pages[:max_pages]:
+            page = doc[page_index]
+            pixmap = page.get_pixmap(dpi=_effective_dpi(page))
+            page_number = page_index + 1
+            png_path = target_dir / f"page-{page_number:03d}.png"
+            pixmap.save(str(png_path))
+            lines.append(f"{page_number}\t{png_path.resolve()}")
+    finally:
+        doc.close()
+
+    body = "".join(f"{line}\n" for line in lines)
+    sys.stdout.write(body + f"total_pages={len(pages)}\n")
+    return 0
+
+
 def main() -> int:
     """Console entry point (``co-extract-pdf``); returns the process exit code."""
     parser = argparse.ArgumentParser(
@@ -144,12 +202,46 @@ def main() -> int:
         default=None,
         help="page range, 0-based (e.g. '0-4', '2', '0-1,3'); default all pages",
     )
+    parser.add_argument(
+        "--render",
+        action="store_true",
+        help="rasterize pages to PNGs for the scanned/vision path instead of extracting "
+        "text; writes a page->path map to stdout",
+    )
+    parser.add_argument(
+        "--outdir",
+        default=None,
+        metavar="DIR",
+        help="render mode: directory to write PNGs into; an OS tempdir is created when omitted",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=RENDER_DEFAULT_MAX_PAGES,
+        help=f"render mode: cap rendered pages (default {RENDER_DEFAULT_MAX_PAGES})",
+    )
     args = parser.parse_args()
 
     path = Path(args.path)
     invalid = _validate_source(path, args.path)
     if invalid:
         return invalid
+
+    if args.render:
+        import pymupdf
+
+        doc = pymupdf.open(path)
+        try:
+            pages = (
+                _parse_pages(args.pages, doc.page_count)
+                if args.pages is not None
+                else list(range(doc.page_count))
+            )
+        except ValueError as error:
+            return _fail(f"Invalid --pages value {args.pages!r}: {error}")
+        finally:
+            doc.close()
+        return _render_pages(path, pages, args.outdir, args.max_pages)
 
     try:
         pages, text_chars = _resolve_pages(path, args.pages)
