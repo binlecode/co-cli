@@ -54,6 +54,8 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 | Dream | [dream.md](dream.md) | Daemon reviewer + clock-driven housekeeping (memory + skill merge, decay, archive) |
 | Tools | [tools.md](tools.md) | Tool registration, approval, `CoDeps` access patterns |
 | Skills | [skills.md](skills.md) | Skill manifest, view/manage surface, dispatch |
+| Documents skill | [skills-document.md](skills-document.md) | `documents` skill: local PDF read — tier-1 text extraction, tier-2 scanned/vision render path |
+| Office skill | [skills-office.md](skills-office.md) | `office` skill: local Word/PowerPoint/Excel read — `.docx`/`.pptx`/`.xlsx` extraction with slide/sheet/heading citations |
 | Personality | [personality.md](personality.md) | Soul files, canon injection, identity layer |
 | Config | [config.md](config.md) | Settings model, env vars, load pipeline |
 | Observability | [observability.md](observability.md) | Structured JSON-line spans log, `@trace` decorator, `co tail` / `co trace` viewers |

@@ -1,10 +1,21 @@
-"""UAT eval — Workflow 4: Skills dispatch (judged case only).
+"""UAT eval — Workflow 4: Skills dispatch + model selection.
 
-Keeps the single judge-backed case (W4.A dispatch_follows_procedure): write a
-user skill, dispatch it via ``/<skill> <args>``, apply ``skill_env`` exactly as
-``main.py:_apply_command_outcome`` does, drive a real ``run_turn``, and judge
-that the response followed each numbered instruction in the skill body. The
-structural cases (env restore, skill CRUD, built-in shadowing, deferred-tool
+W4.A (dispatch_follows_procedure, judged): write a user skill, dispatch it via
+``/<skill> <args>``, apply ``skill_env`` exactly as ``main.py:_apply_command_outcome``
+does, drive a real ``run_turn``, and judge that the response followed each numbered
+instruction in the skill body. This exercises slash-dispatch **mechanics**.
+
+W4.B (skill_selection_mutual_exclusivity, behavioral): the ``documents`` and ``office``
+bundled skills are both ``user-invocable: false`` — the model's only entry path is
+selecting them from the ``<available_skills>`` manifest and loading them with
+``skill_view(name)`` (per the skill-protocol rule). W4.B drives real turns over
+representative prompts and asserts the model selects the right skill from the manifest:
+a PDF prompt selects ``documents`` (not ``office``); a deck / spreadsheet prompt selects
+``office`` (not ``documents``); a bare web URL selects neither (that is ``web_fetch``).
+The observable is which skill name reaches ``skill_view`` — the descriptions are the only
+selection signal, so this is the durable regression gate on their mutual exclusivity.
+
+The structural cases (env restore, skill CRUD, built-in shadowing, deferred-tool
 discovery) are covered by pytest under ``tests/`` — see the phase-2 coverage map.
 
 Eval-seeded artifact (deterministic name; reruns overwrite in place):
@@ -17,6 +28,7 @@ Mission tenet: operator — procedural capability
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import secrets
 import time
@@ -27,7 +39,7 @@ from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S, TOOL_TURN_BUDGET_S
-from evals._trace import record_turn, response_text
+from evals._trace import TurnTrace, record_turn, response_text
 
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, DelegateToAgent, SlashOutcome
@@ -214,6 +226,145 @@ async def case_w4_a_dispatch_user_skill(
 
 
 # ---------------------------------------------------------------------------
+# W4.B — skill_selection_mutual_exclusivity
+# ---------------------------------------------------------------------------
+
+
+def _selected_skills(turn_trace: TurnTrace) -> set[str]:
+    """The set of skill names the agent loaded via ``skill_view`` during a turn.
+
+    Reads the captured ``skill_view`` tool calls and parses the ``name`` argument
+    — the manifest-driven selection the model made, the only entry path for a
+    ``user-invocable: false`` skill.
+    """
+    selected: set[str] = set()
+    for call in turn_trace.tool_calls:
+        if call.tool_name != "skill_view":
+            continue
+        try:
+            args = json.loads(call.args) if call.args else {}
+        except (TypeError, ValueError):
+            args = {}
+        name = args.get("name") if isinstance(args, dict) else None
+        if isinstance(name, str) and name:
+            selected.add(name)
+    return selected
+
+
+_SELECTION_PROMPTS = [
+    (
+        "pdf",
+        "Please summarize the quarterly report saved at ~/reports/q3-report.pdf.",
+        {"documents"},
+        {"office"},
+    ),
+    (
+        "pptx",
+        "Summarize the slide deck at ~/decks/q3-review.pptx for me.",
+        {"office"},
+        {"documents"},
+    ),
+    (
+        "xlsx",
+        "What's in the spreadsheet at ~/data/budget.xlsx?",
+        {"office"},
+        {"documents"},
+    ),
+    (
+        "url",
+        "Summarize this web page for me: https://example.com/quarterly-update",
+        set(),
+        {"documents", "office"},
+    ),
+]
+
+
+async def case_w4_b_skill_selection(
+    deps: CoDeps,
+    agent,
+    frontend: EvalFrontend,
+    run,
+) -> CaseResult:
+    """W4.B — assert documents↔office mutual exclusivity in model skill selection.
+
+    Drives one real turn per prompt in ``_SELECTION_PROMPTS`` (fresh history each),
+    captures the ``skill_view`` selections, and fails on the first prompt whose
+    selection includes a forbidden skill or omits a required one. No judge — the
+    selection is directly observable.
+    """
+    case_id = "W4.B"
+    t0 = time.monotonic()
+    trace_file = run.case_trace_path(case_id)
+    trace_file.touch(exist_ok=True)
+
+    passed = True
+    reason = ""
+    model_call_seconds = 0.0
+    token_usage: dict[str, int] = {}
+    trace_id = ""
+
+    for index, (label, prompt, must_include, must_exclude) in enumerate(_SELECTION_PROMPTS):
+        try:
+            async with asyncio.timeout(CALL_TIMEOUT_S):
+                _, turn_trace = await record_turn(
+                    case_id=case_id,
+                    turn_index=index,
+                    user_input=prompt,
+                    run_turn_callable=lambda p=prompt: run_turn(
+                        agent=agent,
+                        user_input=p,
+                        deps=deps,
+                        message_history=[],
+                        frontend=frontend,
+                    ),
+                    case_dir_path=trace_file,
+                    agent=agent,
+                )
+        except TimeoutError:
+            passed = False
+            reason = f"[{label}] run_turn exceeded CALL_TIMEOUT_S ({CALL_TIMEOUT_S}s)"
+            break
+        except Exception as exc:
+            passed = False
+            reason = f"[{label}] run_turn raised {type(exc).__name__}: {exc}"
+            break
+
+        model_call_seconds += turn_trace.model_call_seconds
+        for key, value in turn_trace.token_usage.items():
+            token_usage[key] = token_usage.get(key, 0) + value
+        if turn_trace.trace_ids and not trace_id:
+            trace_id = turn_trace.trace_ids[0]
+
+        selected = _selected_skills(turn_trace)
+        wrongly_selected = must_exclude & selected
+        missing = must_include - selected
+        if wrongly_selected or missing:
+            passed = False
+            reason = (
+                f"[{label}] prompt {prompt!r}: selected {sorted(selected) or 'none'}; "
+                f"expected to include {sorted(must_include) or 'none'} and exclude "
+                f"{sorted(must_exclude)}"
+            )
+            break
+
+    if passed:
+        reason = (
+            f"all {len(_SELECTION_PROMPTS)} prompts selected the right skill "
+            "(documents↔office mutual exclusivity holds)"
+        )
+
+    return CaseResult(
+        name=case_id,
+        verdict=Verdict.PASS if passed else Verdict.FAIL,
+        duration_s=time.monotonic() - t0,
+        model_call_seconds=model_call_seconds,
+        token_usage=token_usage,
+        trace_id=trace_id,
+        reason=reason,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -244,6 +395,21 @@ async def main() -> int:
             print(
                 f"[skills] {cr_a.name}: {'PASS' if cr_a.passed else 'FAIL'} — "
                 f"{cr_a.reason or 'ok'}"
+            )
+            try:
+                cr_b = await case_w4_b_skill_selection(deps, agent, frontend, run)
+            except Exception as exc:
+                cr_b = CaseResult(
+                    name="W4.B",
+                    verdict=Verdict.FAIL,
+                    duration_s=0.0,
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+            cases.append(cr_b)
+            run.append(cr_b)
+            print(
+                f"[skills] {cr_b.name}: {'PASS' if cr_b.passed else 'FAIL'} — "
+                f"{cr_b.reason or 'ok'}"
             )
     finally:
         await stack.aclose()

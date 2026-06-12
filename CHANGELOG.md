@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.344]
+
+### Feature: office skill — local `.docx`/`.pptx`/`.xlsx` text extraction
+
+- co was blind to Office documents (`file_read` rejects binary). Adds an `office` bundled skill mirroring the `documents` (PDF) skill: locate → extract → answer, driven over `shell_exec` + a thin subprocess script. No new tool, no model-multimodal plumbing.
+- `co_cli/skills/office/scripts/extract_office.py` (new): the `co-extract-office` console entry point. Dispatches by extension to ML-free format-specific backends — `mammoth` (docx), `python-pptx` (pptx), `openpyxl` (xlsx) — emitting markdown with `## Slide N` (pptx), `## Sheet <name>` tables (xlsx), and native headings for docx (flat prose where no heading styles exist). xlsx is row-capped with an explicit `[truncated: …]` notice; five distinct one-line error messages (missing / unsupported / corrupt / password-protected via CFB magic-byte sniff / `.pdf`→documents), each non-zero exit with no traceback.
+- `co_cli/skills/office/SKILL.md` (new): bundled, `user-invocable: false`; routes `.pdf` to the `documents` skill and URLs to `web_fetch`. Reciprocal with `documents` — each owns one backend and one citation contract.
+- Dependencies are ML-free by construction (no torch/CUDA, no onnxruntime/magika, no pandas): `mammoth>=1.12.0`, `python-pptx>=1.0.2`, `openpyxl>=3.1.5`.
+- Tests: real-command `subprocess.run(["co-extract-office", …])` over committed docx/pptx/xlsx fixtures + error paths (no mocks); `office` registered in the bundled-library gate. Eval: new W4.B real-LLM model-selection case asserting `documents`↔`office` mutual exclusivity (pdf→documents, pptx/xlsx→office, bare URL→neither).
+- Spec: `docs/specs/skills-office.md` (new); one-line pointer in `skills.md`; registered in the `01-system.md` Component Docs index.
+
 ## [0.8.343]
 
 ### Fix: dream daemon unresponsive to SIGTERM during cold bootstrap

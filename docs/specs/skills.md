@@ -82,11 +82,13 @@ Every skill is a directory `<name>/` containing a `SKILL.md` entry file; the dir
 
 ### Bundled Executable Assets
 
-A skill folder may ship an **executable asset** alongside its `SKILL.md` — a script the skill body drives at runtime through `shell_exec`, never imported into the agent process (subprocess isolation). The `documents` skill is the first: `co_cli/skills/documents/scripts/extract_pdf.py` extracts a local PDF to markdown via the `co-extract-pdf` command. Conventions for any skill-bundled script:
+A skill folder may ship an **executable asset** alongside its `SKILL.md` — a script the skill body drives at runtime through `shell_exec`, never imported into the agent process (subprocess isolation). The `documents` skill is the first: `co_cli/skills/documents/scripts/extract_pdf.py` (the `co-extract-pdf` command) extracts a local PDF to markdown and rasterizes scanned pages for a vision read — the full two-tier behavior is specified in [skills-document.md](skills-document.md). Conventions for any skill-bundled script:
 
 - **Exposed as a `[project.scripts]` console entry point**, not `uv run python -m`. The skill body invokes the bare command (e.g. `co-extract-pdf <path>`). This is a runtime constraint, not a preference: `shell_exec` spawns with a sanitized allowlist env (`co_cli/tools/shell_env.py` — `PATH` propagates, `VIRTUAL_ENV`/`PYTHONPATH` do not) and `cwd` set to the user's `workspace_dir`, so only a `PATH`-resolved console command resolves `co_cli` reliably on a dev checkout and an installed wheel alike. The skill folder and its `scripts/` dir carry docstring-only `__init__.py` so the entry-point module path import-resolves.
 - **Lives under `co_cli/` and obeys the full `co_cli/` ruff ruleset** — notably T20: output goes through `sys.stdout.write`/`sys.stderr.write`, never `print` (the per-file-ignores that exempt `evals/`/`scripts/`/`tests/` do not cover `co_cli/skills/*/scripts/`).
 - **Approval semantics** — the first run prompts (the command is not in `DEFAULT_SHELL_SAFE_COMMANDS`). A `shell.safe_commands` opt-in auto-approves only the bare command; `shell_policy.py`'s path-traversal guard rejects any arg containing `/`, `~`, or `..`, so only a workspace-root bare path auto-approves. The practical ergonomic win is session-subject auto-approval: once approved this session, the same subject is not re-prompted.
+
+The `documents` skill exercises all three conventions and adds a scanned/image-only tier-2 vision path — its full two-tier behavior, render contract, cost caps, and degradation are specified in [skills-document.md](skills-document.md). The `office` skill is the second bundled-asset skill: `co_cli/skills/office/scripts/extract_office.py` (the `co-extract-office` command) extracts a local `.docx`/`.pptx`/`.xlsx` to markdown via format-specific OOXML backends — its extension dispatch, per-format citation contracts, and dependency footprint are specified in [skills-office.md](skills-office.md). The two skills are reciprocal: `documents` routes Office formats to `office`, and `office` routes `.pdf` back.
 
 ### Load Order
 
@@ -357,7 +359,7 @@ Returns a skill's full body, addressed by the skill name (the skill's directory 
 | `co_cli/skills/usage.py` | usage sidecar I/O (`bump_view`, `bump_use`, `bump_patch`, `bump_recall`, `record_create`, `forget`, `set_pinned`) |
 | `co_cli/daemons/dream/_housekeeping.py` | `merge_skills` / `decay_skills` — dream-daemon skill housekeeping; see [dream.md §2.5](dream.md) |
 | `co_cli/context/rules/06_skill_protocol.md` | dispatch discipline injected into the static system prompt |
-| `co_cli/skills/` | package-default shipped skills |
+| `co_cli/skills/` | package-default shipped skills (the `documents` skill's bundled script is specified in [skills-document.md](skills-document.md)) |
 
 ## 6. Test Gates
 
@@ -412,4 +414,6 @@ Returns a skill's full body, addressed by the skill name (the skill's directory 
 | /skills pin on bundled skill is rejected | `tests/test_flow_skills_pin.py` |
 | /skills pin on unknown skill is rejected | `tests/test_flow_skills_pin.py` |
 | /skills usage lists agent-created skills; excludes bundled | `tests/test_flow_skills_usage.py` |
+
+The `documents` skill's tier-1/tier-2 test gates (text extraction, scanned routing, render contract, vision read) live in [skills-document.md §6](skills-document.md).
 | /skills usage <name> prints full record | `tests/test_flow_skills_usage.py` |

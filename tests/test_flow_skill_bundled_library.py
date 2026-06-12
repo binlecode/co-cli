@@ -15,6 +15,7 @@ _BUNDLED_NAMES = {
     "refactor",
     "skill-creator",
     "documents",
+    "office",
 }
 
 
