@@ -110,50 +110,71 @@ def test_start_daemon_writes_pid_file_and_process_is_live(tmp_path: Path) -> Non
                 pass
 
 
-def test_stop_daemon_terminates_process(tmp_path: Path) -> None:
-    """Daemon spawned directly → stop_daemon sends SIGTERM → daemon exits cleanly.
+def test_stop_daemon_terminates_process(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """SIGTERM during cold bootstrap → daemon exits via its own clean path, promptly.
 
-    Verifies:
+    The PID file is written before create_deps, so stop_daemon's SIGTERM lands
+    mid-bootstrap — the exact window where a cold embedding backend used to leave
+    the daemon deaf for ~10s until force-kill. The embedder is intentionally left
+    cold (no warm-up): ensure_ollama_warm only warms the agent LLM, and warming the
+    embedder here would mask this regression. After the fix the daemon races
+    bootstrap against shutdown and exits cooperatively.
+
+    Verifies the cooperative path (not SIGKILL escalation):
     1. Daemon starts and writes PID file.
-    2. stop_daemon() sends SIGTERM; daemon's signal handler sets shutdown event.
-    3. PID file is removed by daemon's cleanup in finally block.
-    4. Process is dead.
+    2. stop_daemon() reports "daemon stopped" — the clean branch, not "force-killed".
+    3. It returns inside the grace window (so SIGKILL was never reached).
+    4. PID file is removed and the process is dead.
+
+    Uses the detached launcher (no --foreground) exactly as production does: the
+    launcher exits after spawning, so the real daemon reparents to init, which
+    reaps it the instant it os._exits. A --foreground daemon parented to this test
+    process would instead linger as a zombie that os.kill(pid, 0) reads as alive,
+    masking the clean exit.
     """
     core_mod, process_mod = _setup_co_home(tmp_path)
 
-    proc: subprocess.Popen | None = None
+    daemon_pid: int | None = None
     try:
-        proc = subprocess.Popen(
-            ["co", "dream", "start", "--foreground", "--origin=test", "--session-id=test"],
+        launcher = subprocess.Popen(
+            ["co", "dream", "start", "--origin=test", "--session-id=test"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
             env=dict(os.environ),
         )
+        launcher.wait(timeout=10)
 
         pid_file = core_mod.DREAM_PID_FILE
         pid_found = _wait_for_path(pid_file, timeout=10.0)
         assert pid_found, "PID file not created within timeout"
+        daemon_pid = _read_pid_from_file(pid_file)
+        assert daemon_pid is not None, "PID file exists but could not read PID"
 
+        t0 = time.monotonic()
         process_mod.stop_daemon(tmp_path)
+        stop_elapsed = time.monotonic() - t0
+        out = capsys.readouterr().out
+        assert "daemon stopped" in out, (
+            f"daemon must exit via cooperative shutdown, not SIGKILL escalation; got: {out!r}"
+        )
+        assert stop_elapsed < process_mod.STOP_GRACE_SECONDS, (
+            f"clean shutdown must complete within the {process_mod.STOP_GRACE_SECONDS:g}s grace "
+            f"window (pre-fix this took ~10s+); took {stop_elapsed:.1f}s"
+        )
 
-        pid_gone = _wait_for_path_gone(pid_file, timeout=10.0)
+        pid_gone = _wait_for_path_gone(pid_file, timeout=5.0)
         assert pid_gone, "PID file should be removed after clean daemon shutdown"
-
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline and proc.poll() is None:
-            time.sleep(0.1)
-        assert proc.poll() is not None, "Daemon process should have exited after SIGTERM"
-        proc = None
+        assert not _is_pid_live(daemon_pid), "Daemon process should be dead after clean shutdown"
+        daemon_pid = None
     finally:
-        if proc is not None:
-            if proc.poll() is None:
-                proc.kill()
+        if daemon_pid is not None and _is_pid_live(daemon_pid):
             try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+                os.kill(daemon_pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
 
 
 def test_start_daemon_singleton_second_call_exits_nonzero(tmp_path: Path) -> None:

@@ -248,6 +248,38 @@ def _sync_canon_dir(index_store: IndexStore, canon_dir: Path) -> int:
     return indexed
 
 
+def _sync_indexes_offthread(
+    config: Settings,
+    on_status: Callable[[str], None],
+    memory_dir: Path,
+) -> None:
+    """Run the blocking memory + canon index-sync on a worker thread.
+
+    Opens its OWN short-lived IndexStore — created and used wholly within this
+    worker thread — because sqlite connections are thread-affine
+    (check_same_thread defaults True, store.py). The loop-thread IndexStore held
+    by CoDeps is a separate connection to the same DB file; sqlite file-locking
+    serialises these one-time bootstrap writes against the idle loop connection.
+
+    The point of the offload is event-loop responsiveness: the embedding backend
+    can cold-load for ~10s on the first embed, and running that on the loop thread
+    makes the dream daemon deaf to SIGTERM for the whole window. With the embed in
+    a worker thread, _run_foreground can race create_deps against shutdown
+    (process.py) and exit promptly. RuntimeError from memory sync propagates to the
+    caller, which closes the loop-thread store and re-raises.
+    """
+    from co_cli.index.store import IndexStore as _IS
+    from co_cli.memory.store import MemoryStore as _MS
+
+    worker_index = _IS(config=config)
+    try:
+        worker_memory = _MS(index=worker_index, config=config)
+        _sync_memory_domain(worker_memory, config, on_status, memory_dir)
+        _sync_canon_store(worker_index, config, on_status)
+    finally:
+        worker_index.close()
+
+
 def _check_ollama_num_ctx_floor(num_ctx: int, model: str, max_ctx: int) -> None:
     """Raise ValueError when the model's num_ctx undercuts the configured max_ctx floor."""
     if num_ctx < max_ctx:
@@ -412,12 +444,12 @@ async def create_deps(
 
         memory_store = _MS(index=index_store, config=config)
         try:
-            _sync_memory_domain(memory_store, config, on_status, paths["memory_dir"])
+            await asyncio.to_thread(
+                _sync_indexes_offthread, config, on_status, paths["memory_dir"]
+            )
         except RuntimeError:
             index_store.close()
             raise
-
-    _sync_canon_store(index_store, config, on_status)
 
     runtime = CoRuntimeState()
     deps = CoDeps(

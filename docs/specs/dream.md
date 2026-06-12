@@ -120,14 +120,19 @@ co dream start
   → child wires observability via setup_observability() → rotating JSONL
         $CO_HOME/logs/co-dream.jsonl (INFO+ app log) + co-dream-spans.jsonl (spans)
   → child writes DREAM_PID_FILE (pid, origin, session_id, started_at)
-  → child calls create_deps(on_status=logger.info, stack=None)  [headless bootstrap]
+  → child races create_deps(on_status=logger.info, stack=None) against shutdown
+        [headless bootstrap; its blocking canon/memory index-sync runs on a worker
+         thread so the loop stays responsive to SIGTERM while the embedding backend
+         cold-loads — see "Bootstrap responsiveness" below]
+      if shutdown fires first → cancel bootstrap → unlink DREAM_PID_FILE → os._exit(0)
+        (skips asyncio.run's join of the uncancellable embed worker thread)
   → child runs main_loop(deps, queue_dir, state, cfg, shutdown)
   → on shutdown.set(): main_loop exits; finally-block unlinks DREAM_PID_FILE
 
 co dream stop          (default: graceful)
   → read DREAM_PID_FILE; if missing or PID is dead, clean up and print "not running"
   → send SIGTERM to PID
-  → poll up to 10s (20 × 0.5s) for process death; on timeout, send SIGKILL
+  → poll up to STOP_GRACE_SECONDS (3s, 6 × 0.5s) for process death; on timeout, send SIGKILL
   → unlink DREAM_PID_FILE (covers both graceful exit and SIGKILL path —
     SIGKILL bypasses daemon's own finally cleanup)
 
@@ -174,7 +179,9 @@ Skip-sleep-when-busy falls out of the structure: as long as the queue keeps refi
 
 **Token-usage flush.** The daemon runs in its own process with its own `create_deps`, so it gets its own fork-shared `usage_accumulator` and both model-call capture paths (`run_standalone`'s run-boundary `record_usage` for reviewer agent loops, `llm_call` for housekeeping merges) fire there with no extra wiring. At each cycle boundary — after a housekeeping pass in the idle branch and after a reviewer item is moved to `done/` — `_flush_daemon_usage(deps)` appends one ledger line with `origin="daemon"` and a null `session_id`, then resets the accumulator. Because the daemon has no `session_path`, its spend is counted toward the combined/windowed totals but never attributed to any session (`/usage` current-session excludes it). Cross-process appends to `~/.co-cli/usage.jsonl` are atomic (line < `PIPE_BUF`, `O_APPEND`). See [sessions.md](sessions.md) and [tui.md](tui.md).
 
-**Clean-shutdown bound.** Both sleep points — idle poll and retry backoff — are `asyncio.wait_for(shutdown.wait(), timeout=...)`, so SIGTERM wakes the loop immediately rather than after the timeout. The in-flight item is allowed to finish (its `asyncio.timeout` runs to completion or its own timeout fires). Remaining queue files stay in `queue/` and are picked up by the next daemon start. Worst-case shutdown latency is one reviewer call, bounded by `review_timeout_seconds` — inside the 10 s SIGTERM → SIGKILL budget when `review_timeout_seconds ≤ 10`. With the current default (`120`), an in-flight reviewer can exceed the SIGKILL window — that is the timeout's intrinsic cost, not a loop-structure issue. `CancelledError` is `BaseException` and is not caught by `except Exception`, so task-cancel propagates cleanly.
+**Clean-shutdown bound.** Both sleep points — idle poll and retry backoff — are `asyncio.wait_for(shutdown.wait(), timeout=...)`, so SIGTERM wakes the loop immediately rather than after the timeout. The in-flight item is allowed to finish (its `asyncio.timeout` runs to completion or its own timeout fires). Remaining queue files stay in `queue/` and are picked up by the next daemon start. Worst-case shutdown latency is one reviewer call, bounded by `review_timeout_seconds` — inside the `STOP_GRACE_SECONDS` (3 s) SIGTERM → SIGKILL budget when `review_timeout_seconds ≤ 3`. With the current default (`120`), an in-flight reviewer can exceed the SIGKILL window — that is the timeout's intrinsic cost, not a loop-structure issue. `CancelledError` is `BaseException` and is not caught by `except Exception`, so task-cancel propagates cleanly.
+
+**Bootstrap responsiveness.** A SIGTERM arriving during `create_deps` (before `main_loop`) is handled separately from the loop bound above. `create_deps` indexes canon + memory into the shared `IndexStore`, and the embedding call is a synchronous, blocking HTTP request that can take ~10 s while a cold backend loads its model. To keep that off the event-loop thread, the bootstrap index-sync runs in an `asyncio.to_thread` worker that opens its **own** short-lived `IndexStore` connection (sqlite connections are thread-affine). `_run_foreground` races `create_deps` against the shutdown event; if a stop arrives mid-bootstrap it cancels bootstrap, unlinks the PID file, and calls `os._exit(0)` — skipping `asyncio.run`'s join of the uncancellable embed worker — so the stop returns within the grace window instead of being force-killed. A partial index left by a mid-bootstrap stop is resumed on the next start via `needs_reindex`.
 
 ### 1.5 Domain Reviewers
 
@@ -548,7 +555,8 @@ Internal caps (housekeeping — apply to both domains):
 | Symbol | Source | Contract |
 |---|---|---|
 | `start_daemon(co_home, *, foreground, origin, session_id)` | `co_cli/daemons/dream/process.py` | Start daemon; live PID → `SystemExit(1)`; stale PID → overwrite |
-| `stop_daemon(co_home, *, force=False)` | `co_cli/daemons/dream/process.py` | force=False: SIGTERM, poll 10 s for exit, SIGKILL fallback. force=True: SIGKILL directly. Always unlinks DREAM_PID_FILE. |
+| `stop_daemon(co_home, *, force=False)` | `co_cli/daemons/dream/process.py` | force=False: SIGTERM, poll `STOP_GRACE_SECONDS` (3 s) for exit, SIGKILL fallback. force=True: SIGKILL directly. Always unlinks DREAM_PID_FILE. |
+| `create_deps` (daemon path) | `co_cli/bootstrap/core.py` | Blocking canon/memory index-sync offloaded to an `asyncio.to_thread` worker with its own `IndexStore` connection so the event loop stays SIGTERM-responsive during a cold-backend embed |
 | `status_daemon(co_home) -> dict` | `co_cli/daemons/dream/process.py` | File-based status: reads PID file + probes liveness + scans queue directory |
 | `spawn_detached(cmd, env=None) -> int` | `co_cli/daemons/dream/_process.py` | Popen with start_new_session=True (setsid). Returns child PID. Not a classic POSIX double-fork — setsid alone gives the needed detachment on modern Linux/macOS. |
 | `create_deps(*, on_status, stack=None, theme_override=None) -> CoDeps` | `co_cli/bootstrap/core.py` | Shared bootstrap for REPL and daemon; daemon passes `stack=None` to skip MCP |

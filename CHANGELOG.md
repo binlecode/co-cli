@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.343]
+
+### Fix: dream daemon unresponsive to SIGTERM during cold bootstrap
+
+- The dream daemon ran its canon/memory index-sync (a synchronous, blocking embedding `httpx.post`) directly on the event-loop thread inside `create_deps`. On a cold embedding backend the first embed blocks ~10s while the model loads, during which the loop cannot deliver the SIGTERM callback — so a stop issued mid-bootstrap was ignored until the embed returned, then force-killed after the full grace window (bypassing the daemon's own clean teardown).
+- `co_cli/bootstrap/core.py`: the canon + memory index-sync now runs in an `asyncio.to_thread` worker (`_sync_indexes_offthread`) that opens its **own** short-lived `IndexStore` connection (sqlite connections are thread-affine). The embed `timeout=30.0` and `co_cli/index/` internals are unchanged — only where the work runs changes.
+- `co_cli/daemons/dream/process.py`: `_run_foreground` races `create_deps` against the shutdown event (`asyncio.wait(FIRST_COMPLETED)`); a stop arriving mid-bootstrap cancels bootstrap, unlinks the PID file, and calls `os._exit(0)` (skipping `asyncio.run`'s join of the uncancellable embed worker). `stop_daemon`'s SIGTERM→SIGKILL grace tightened 10s→`STOP_GRACE_SECONDS` (3s); SIGKILL fallback retained.
+- Daemon integration tests now spawn via the detached launcher (production path) and assert cooperative shutdown (the "daemon stopped" branch, not SIGKILL). Wall-clock: `test_stop_daemon_terminates_process` 13s→2.8s, `test_queued_kick_processed_after_daemon_restart` 27s→6.5s.
+- Test hygiene: narrow `filterwarnings` ignore for the benign, non-deterministic `BaseSubprocessTransport.__del__` "Event loop is closed" teardown warning (a pytest per-test-loop GC race with no production impact).
+- Spec synced: `docs/specs/dream.md` (stop grace, startup sequence, new "Bootstrap responsiveness" paragraph, `create_deps` daemon-path contract).
+
 ## [0.8.342]
 
 ### Feature: vision input — `image_view` tool

@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -95,7 +96,9 @@ def _write_kick_file(queue_dir: Path, session_id: str) -> Path:
     return path
 
 
-def test_queued_kick_processed_after_daemon_restart() -> None:
+def test_queued_kick_processed_after_daemon_restart(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     """Kick file written when daemon is down is processed on daemon restart.
 
     Flow:
@@ -106,62 +109,67 @@ def test_queued_kick_processed_after_daemon_restart() -> None:
     5. Assert the kick file moves from queue/ to done/.
 
     The kick file uses a nonexistent session_id so process_review returns
-    immediately without LLM calls.
+    immediately without LLM calls. The embedder is left cold (no warm-up) — both
+    stops land during/after a cold bootstrap and must exit via the cooperative
+    "daemon stopped" path rather than the ~10s deaf-SIGTERM force-kill.
     """
     co_home = _short_co_home()
     core_mod, process_mod = _setup_co_home(co_home)
+    pid_file = core_mod.DREAM_PID_FILE
 
-    proc: subprocess.Popen | None = None
-    proc2: subprocess.Popen | None = None
-
+    daemon_pids: list[int] = []
     try:
         env = dict(os.environ)
 
-        proc = subprocess.Popen(
-            [
-                "co",
-                "dream",
-                "start",
-                "--foreground",
-                "--origin=test-crash-recovery",
-                "--session-id=s-initial",
-            ],
+        # Detached launcher (production path, no --foreground): the launcher exits
+        # after spawning, so the real daemon reparents to init and is reaped the
+        # instant it os._exits — letting stop_daemon observe the clean exit instead
+        # of a lingering zombie.
+        launcher = subprocess.Popen(
+            ["co", "dream", "start", "--origin=test-crash-recovery", "--session-id=s-initial"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
             env=env,
         )
+        launcher.wait(timeout=10)
 
-        pid_file = core_mod.DREAM_PID_FILE
-        pid_found = _wait_for_path(pid_file, timeout=15.0)
-        assert pid_found, "PID file never appeared — daemon did not start"
+        assert _wait_for_path(pid_file, timeout=15.0), (
+            "PID file never appeared — daemon did not start"
+        )
+        pid1 = process_mod.read_pid(pid_file)
+        assert pid1 is not None, "could not read first daemon PID"
+        daemon_pids.append(pid1)
 
         process_mod.stop_daemon(co_home)
+        assert "daemon stopped" in capsys.readouterr().out, (
+            "first stop (mid-cold-bootstrap) must exit cooperatively, not via SIGKILL"
+        )
         assert _wait_for_path_gone(pid_file, timeout=10.0), "PID file not removed after stop"
-
-        proc_retcode = proc.wait(timeout=5)
-        assert proc_retcode is not None
-        proc = None
+        assert not process_mod.is_pid_live(pid1), "first daemon must be dead after clean stop"
 
         kick_file = _write_kick_file(core_mod.DREAM_QUEUE_DIR, session_id="no-such-session")
         assert kick_file.exists(), "kick file must be written to queue"
 
-        proc2 = subprocess.Popen(
+        launcher2 = subprocess.Popen(
             [
                 "co",
                 "dream",
                 "start",
-                "--foreground",
                 "--origin=test-crash-recovery-restart",
                 "--session-id=s-restart",
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True,
             env=env,
         )
+        launcher2.wait(timeout=10)
+
+        assert _wait_for_path(pid_file, timeout=15.0), "restart PID file never appeared"
+        pid2 = process_mod.read_pid(pid_file)
+        assert pid2 is not None, "could not read restarted daemon PID"
+        daemon_pids.append(pid2)
 
         done_file = core_mod.DREAM_QUEUE_DONE_DIR / kick_file.name
         done_found = _wait_for_path(done_file, timeout=20.0)
@@ -172,15 +180,18 @@ def test_queued_kick_processed_after_daemon_restart() -> None:
         assert not kick_file.exists(), "original kick file must be gone from queue/"
 
         process_mod.stop_daemon(co_home)
-        _wait_for_path_gone(core_mod.DREAM_PID_FILE, timeout=10.0)
-        proc_retcode2 = proc2.wait(timeout=5)
-        assert proc_retcode2 is not None
-        proc2 = None
+        assert "daemon stopped" in capsys.readouterr().out, (
+            "second stop must exit cooperatively, not via SIGKILL"
+        )
+        assert _wait_for_path_gone(pid_file, timeout=10.0), (
+            "PID file not removed after second stop"
+        )
+        assert not process_mod.is_pid_live(pid2), "restarted daemon must be dead after clean stop"
+        daemon_pids.clear()
     finally:
-        for proc_ref in (proc, proc2):
-            if proc_ref is not None and proc_ref.poll() is None:
+        for pid in daemon_pids:
+            if process_mod.is_pid_live(pid):
                 try:
-                    proc_ref.kill()
-                    proc_ref.wait(timeout=3)
-                except Exception:
+                    os.kill(pid, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
                     pass

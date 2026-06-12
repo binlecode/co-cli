@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "co-cli"
-version = "0.8.342"
+version = "0.8.343"
 description = "Co — your trusted local personal intelligence company"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -95,3 +95,13 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 pythonpath = ["tests"]
 session_timeout = 600
+filterwarnings = [
+    # An asyncio subprocess transport GC'd after its per-test (function-scoped)
+    # event loop has closed: __del__ -> close() -> call_soon() on a dead loop
+    # raises "Event loop is closed". The transport's close callback was still
+    # pending at loop teardown. Benign and non-deterministic test-harness race
+    # (the production loop is long-lived, so the callback always runs there) —
+    # not a leak we can act on in production code. The '.' matches the ':' that
+    # filterwarnings would otherwise treat as a field separator.
+    "ignore:Exception ignored in. <function BaseSubprocessTransport:pytest.PytestUnraisableExceptionWarning",
+]

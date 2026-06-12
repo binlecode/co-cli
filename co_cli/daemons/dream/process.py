@@ -6,6 +6,7 @@ Re-exports: start_daemon, stop_daemon, status_daemon.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -33,6 +34,9 @@ from co_cli.daemons.dream._process import (
 from co_cli.daemons.dream._queue import list_queue_files
 from co_cli.daemons.dream._state import DaemonState
 from co_cli.observability.setup import setup_observability
+
+STOP_GRACE_SECONDS = 3.0
+_STOP_POLL_INTERVAL_SECONDS = 0.5
 
 
 def start_daemon(
@@ -77,7 +81,9 @@ def start_daemon(
 def stop_daemon(co_home: Path, *, force: bool = False) -> None:
     """Stop the running dream daemon.
 
-    force=False (default): SIGTERM, then SIGKILL after 10s if still alive.
+    force=False (default): SIGTERM, then SIGKILL after STOP_GRACE_SECONDS if still
+    alive. The daemon now races bootstrap against shutdown and exits promptly even
+    mid-cold-bootstrap, so the grace only has to cover a genuinely wedged process.
     force=True: SIGKILL immediately, no grace period.
 
     Always unlinks the PID file after the process is confirmed dead — SIGKILL
@@ -103,8 +109,8 @@ def stop_daemon(co_home: Path, *, force: bool = False) -> None:
         return
 
     os.kill(pid, signal.SIGTERM)
-    for _ in range(20):
-        time.sleep(0.5)
+    for _ in range(int(STOP_GRACE_SECONDS / _STOP_POLL_INTERVAL_SECONDS)):
+        time.sleep(_STOP_POLL_INTERVAL_SECONDS)
         if not is_pid_live(pid):
             pid_file.unlink(missing_ok=True)
             print("daemon stopped")  # noqa: T201
@@ -115,7 +121,9 @@ def stop_daemon(co_home: Path, *, force: bool = False) -> None:
         if not is_pid_live(pid):
             break
     pid_file.unlink(missing_ok=True)
-    print("daemon force-killed (did not respond to SIGTERM in 10s)")  # noqa: T201
+    print(  # noqa: T201
+        f"daemon force-killed (did not respond to SIGTERM in {STOP_GRACE_SECONDS:g}s)"
+    )
 
 
 def status_daemon(co_home: Path) -> dict:
@@ -162,10 +170,15 @@ def status_daemon(co_home: Path) -> dict:
 async def _run_foreground(co_home: Path, origin: str, session_id: str) -> None:
     """Run the daemon in the foreground (called after detach or --foreground flag).
 
-    Order matters: signal handlers install first so SIGTERM during the
-    (potentially several-second) create_deps call still triggers clean shutdown.
-    Observability is wired before write_pid so any crash from this point is
-    captured in $CO_HOME/logs/co-dream.jsonl.
+    Order matters: signal handlers install first so a SIGTERM arriving during
+    create_deps is observed. The blocking embed in create_deps runs on a worker
+    thread (bootstrap/core.py:_sync_indexes_offthread), so the event loop stays
+    responsive and bootstrap is raced against shutdown below — a stop requested
+    mid-bootstrap cancels bootstrap and exits via os._exit (skipping the executor
+    join on the uncancellable embed worker), instead of going deaf to SIGTERM and
+    being force-killed after the grace window. Observability is wired before
+    write_pid so any crash from this point is captured in
+    $CO_HOME/logs/co-dream.jsonl.
     """
     from co_cli.bootstrap.core import create_deps
 
@@ -200,7 +213,18 @@ async def _run_foreground(co_home: Path, origin: str, session_id: str) -> None:
 
     logger.info("Dream daemon starting (pid=%d, origin=%s)", os.getpid(), origin)
     try:
-        deps = await create_deps(on_status=logger.info, stack=None)
+        bootstrap = asyncio.create_task(create_deps(on_status=logger.info, stack=None))
+        shutdown_wait = asyncio.create_task(shutdown.wait())
+        await asyncio.wait({bootstrap, shutdown_wait}, return_when=asyncio.FIRST_COMPLETED)
+        if not bootstrap.done():
+            bootstrap.cancel()
+            logger.info("Dream daemon: shutdown during bootstrap — exiting")
+            pid_file.unlink(missing_ok=True)
+            os._exit(0)
+        shutdown_wait.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await shutdown_wait
+        deps = bootstrap.result()
         await main_loop(deps, queue_dir, state, deps.config.dream, shutdown)
     finally:
         pid_file.unlink(missing_ok=True)
