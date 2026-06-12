@@ -1,30 +1,38 @@
-"""UAT eval — Workflow 10: Durable user model (preferences across rotation).
+"""UAT eval — Workflow 10: Durable user model (recall and reuse).
 
 Drives the agent against the ``user_model_baseline`` fixture — three seeded
-preference artifacts (``pref_terse``, ``pref_python``, ``pref_pst``) plus two
-prior session transcripts where those preferences surfaced naturally. After a
-session rotation (simulated ``/new`` by driving with an empty
-``message_history``), the agent should adapt to the durable user model without
-being re-told: terse responses, Python by default, PST time references. A
-one-shot override ("give me the Go version") must apply for that turn only and
-not leak forward.
+preference items (``pref_terse``, ``pref_python``, ``pref_pst``) plus two prior
+session transcripts where those preferences surfaced naturally.
 
-Each judged case combines the LLM rubric verdict from ``user_model.v1.md``
-(mapped onto the 4-state Verdict per the rubric's SOFT tone notes) with the
-case-specific structural expectations from the scenario table. The decay case
-is SOFT-only and never gates: it ages a preference artifact past the decay
-window and runs the dream cycle to observe whether disuse-decay archives it.
+co's memory is **recall-on-demand**: preference items are NOT auto-injected into
+the prompt (only canon/personality is). After a session rotation (simulated
+``/new`` by driving with an empty ``message_history``) the preferences are no
+longer in the conversation, so the agent reaches them only by calling a recall
+tool (``memory_search`` / ``memory_view`` / ``session_search`` / ``session_view``).
+This eval therefore tests the recall→reuse path co actually supports: when the
+user asks the agent to draw on what it knows, does it consult memory and then
+apply what it finds? It is deliberately NOT a test of auto-applied preferences —
+co has no always-on preference tier, so "the agent should just know" is out of
+scope (that would be a new capability, not a behavior to assert here).
+
+Each judged case combines a structural recall check (a recall tool was actually
+called) with the LLM rubric verdict from ``user_model.v2.md``. The decay case is
+SOFT-only and never gates: it ages a preference item past the decay window and
+runs the dream cycle to observe whether disuse-decay archives it.
 
 Cases:
-  W10.A  post_rotation_adaptation  2-turn: T0 "read a CSV"; T1 "standup time?".
-                                    PASS if both honor terse / Python / PST.
-  W10.B  contradiction_handling    3-turn: T0 CSV; T1 "Go version"; T2 "JSON".
-                                    PASS if T1 switches to Go AND T2 reverts.
-  W10.C  decay_under_disuse        SOFT-only: age ``pref_terse`` ~90d, run dream,
-                                    check survival. Never emits PASS/FAIL.
+  W10.A  recall_then_apply       2-turn: T0 "check what you've saved about how I
+                                  work, then read a CSV"; T1 "standup time?".
+                                  PASS if T0 calls a recall tool AND the answers
+                                  reuse the recalled prefs (terse / Python / PST).
+  W10.B  contradiction_handling  3-turn: T0 recall + CSV; T1 "Go version"; T2 "JSON".
+                                  PASS if T0 recalls AND T1 switches to Go AND
+                                  T2 reverts to the recalled Python default.
+  W10.C  decay_under_disuse      SOFT-only: age ``pref_terse`` ~95d, run dream,
+                                  check survival. Never emits PASS/FAIL.
 
 Specs: docs/specs/core-loop.md, prompt-assembly.md, memory.md, dream.md.
-Mission tenet: for knowledge work — adapts to the user; trusted — durable model.
+Mission tenet: trusted — durable user model is real and usable when consulted.
 
 Usage:
     uv run python evals/eval_user_model.py
@@ -94,6 +102,16 @@ def _tool_calls_from(messages: list[Any]) -> list[ToolCallPart]:
                 if isinstance(part, ToolCallPart):
                     calls.append(part)
     return calls
+
+
+# Tools that read curated memory / past sessions. A turn that calls one of these
+# has consulted the durable user model — the recall half of recall→reuse.
+_RECALL_TOOLS = frozenset({"memory_search", "memory_view", "session_search", "session_view"})
+
+
+def _recall_attempted(tool_calls: list[ToolCallPart]) -> bool:
+    """True if any tool call in the turn consulted memory or past sessions."""
+    return any(tc.tool_name in _RECALL_TOOLS for tc in tool_calls)
 
 
 def _aggregate_trace_stats(slices: list[_TurnSlice]) -> tuple[float, dict[str, int]]:
@@ -170,26 +188,30 @@ async def _drive_turns(
     return slices
 
 
-async def _case_w10_a_post_rotation_adaptation(
+async def _case_w10_a_recall_then_apply(
     deps: Any,
     agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
 ) -> CaseResult:
-    """W10.A — 2-turn post-rotation preference adaptation.
+    """W10.A — 2-turn recall-then-reuse of the durable user model.
 
     After loading the fixture, a fresh session (empty ``message_history``
-    simulates ``/new``) drives two neutral asks: T0 "show me how to read a CSV"
-    (exercises the Python + terse defaults) and T1 "what time is standup
-    tomorrow?" (exercises the PST default). The judge grades the transcript
-    against ``user_model.v1.md`` criterion 1 — at least 2 of 3 seeded
-    preferences honored is PASS, exactly 1 is SOFT_PASS, JS-or-verbose-or-UTC
-    is FAIL.
+    simulates ``/new``) drives two asks. T0 cues the agent to consult what it
+    knows — "check what you've saved about how I like to work, then show me how
+    to read a CSV" — so the agent must call a recall tool to reach the
+    preferences (they are not auto-injected). T1 "what time is standup
+    tomorrow?" then exercises the PST default now that the prefs are in context.
+
+    PASS requires BOTH halves of recall→reuse: T0 actually called a recall tool
+    (structural), AND the judge confirms the answers reuse the recalled prefs
+    (``user_model.v2.md`` criterion 1). No recall tool call is a structural FAIL
+    regardless of how the answer reads.
     """
     case_id = "W10.A"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("user_model")
+    rubric_text, rubric_version = load_rubric("user_model", "v2")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
@@ -200,7 +222,7 @@ async def _case_w10_a_post_rotation_adaptation(
         load_fixture(_FIXTURE_NAME, deps)
 
         inputs = [
-            "show me how to read a CSV",
+            "check what you've saved about how I like to work, then show me how to read a CSV",
             "what time is standup tomorrow?",
         ]
         slices = await _drive_turns(
@@ -213,6 +235,9 @@ async def _case_w10_a_post_rotation_adaptation(
         )
         model_call_seconds, token_usage = _aggregate_trace_stats(slices)
 
+        t0_recall = _recall_attempted(slices[0].tool_calls) if slices else False
+        reason_parts.append(f"t0_recall={t0_recall}")
+
         final_history = slices[-1].result.messages if slices else []
         async with asyncio.timeout(CALL_TIMEOUT_S):
             verdict = await judge_with_llm(
@@ -222,7 +247,10 @@ async def _case_w10_a_post_rotation_adaptation(
         if verdict.rationale:
             reason_parts.append(verdict.rationale[:160])
 
-        if verdict.passed:
+        if not t0_recall:
+            case_verdict = Verdict.FAIL
+            reason_parts.append("no_recall_attempted")
+        elif verdict.passed:
             case_verdict = Verdict.PASS
         elif verdict.score >= 6:
             case_verdict = Verdict.SOFT_PASS
@@ -259,18 +287,20 @@ async def _case_w10_b_contradiction_handling(
     run: Any,
     spans_log: Path,
 ) -> CaseResult:
-    """W10.B — 3-turn one-shot override handling.
+    """W10.B — 3-turn recall-grounded one-shot override handling.
 
-    T0 "read a CSV" establishes the Python default; T1 "actually, do the Go
-    version" is a one-shot override that should apply to that turn only; T2
-    "now read JSON" must revert to the Python default while staying terse. The
-    judge grades against ``user_model.v1.md`` criterion 2 — a persistent Go
-    switch (T2 stays Go without re-prompt) is the FAIL mode, and T2 asking which
-    language is the SOFT_PASS hedge.
+    T0 cues recall — "check my saved preferences, then show me how to read a
+    CSV" — so the agent retrieves the Python default and applies it. T1
+    "actually, do the Go version" is a one-shot override that should apply to
+    that turn only; T2 "now read JSON" must revert to the recalled Python
+    default while staying terse. The judge grades against ``user_model.v2.md``
+    criterion 2 — a persistent Go switch (T2 stays Go without re-prompt) is the
+    FAIL mode, T2 asking which language is the SOFT_PASS hedge. PASS also
+    requires T0 to have called a recall tool (structural).
     """
     case_id = "W10.B"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("user_model")
+    rubric_text, rubric_version = load_rubric("user_model", "v2")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
@@ -281,7 +311,7 @@ async def _case_w10_b_contradiction_handling(
         load_fixture(_FIXTURE_NAME, deps)
 
         inputs = [
-            "show me how to read a CSV",
+            "check my saved preferences, then show me how to read a CSV",
             "actually, do the Go version",
             "now read JSON",
         ]
@@ -295,6 +325,9 @@ async def _case_w10_b_contradiction_handling(
         )
         model_call_seconds, token_usage = _aggregate_trace_stats(slices)
 
+        t0_recall = _recall_attempted(slices[0].tool_calls) if slices else False
+        reason_parts.append(f"t0_recall={t0_recall}")
+
         final_history = slices[-1].result.messages if slices else []
         async with asyncio.timeout(CALL_TIMEOUT_S):
             verdict = await judge_with_llm(
@@ -304,7 +337,10 @@ async def _case_w10_b_contradiction_handling(
         if verdict.rationale:
             reason_parts.append(verdict.rationale[:160])
 
-        if verdict.passed:
+        if not t0_recall:
+            case_verdict = Verdict.FAIL
+            reason_parts.append("no_recall_attempted")
+        elif verdict.passed:
             case_verdict = Verdict.PASS
         elif verdict.score >= 6:
             case_verdict = Verdict.SOFT_PASS
@@ -407,7 +443,7 @@ async def main() -> int:
         cases: list[CaseResult] = []
 
         for runner in (
-            _case_w10_a_post_rotation_adaptation,
+            _case_w10_a_recall_then_apply,
             _case_w10_b_contradiction_handling,
             _case_w10_c_decay_under_disuse,
         ):

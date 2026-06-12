@@ -84,14 +84,19 @@ Inflation drives ~10 brief turns to push history past compaction_ratio, then
 turns + one compaction call.
 """
 
-WARM_CALL_BUDGET_S: float = 20.0
-"""PROVISIONAL — re-pinned by T-8b once the T-2..7 suite exists to calibrate against.
-
-Per-*model-request* warm-latency band: a single LLM call within a turn, distinct
+WARM_CALL_BUDGET_S: float = 15.0
+"""Per-*model-request* warm-latency band: a single LLM call within a turn, distinct
 from the per-turn ``TURN_BUDGET_S`` (35s) and the ``CALL_TIMEOUT_S`` stall ceiling
-(50s). The context-stability appendix observed trivial warm calls ≈ 2.4–17.4s
-(prefill-bound) and summarizer calls ≈ 15–18s; 20s flags a call running above
-normal warm prefill without firing on it. ``evals/_perf.perf_verdict`` only gates
-on this band when ``PERF_BANDS_GATING`` is True — flipped on by T-8b after
-calibration. Until then the Perf column is record-only.
+(50s). ``evals/_perf.perf_verdict`` SOFT_FAILs a case whose ``call_p95_s`` exceeds
+this band when ``PERF_BANDS_GATING`` is True.
+
+Calibrated by T-8b (2026-06-11) from the raw model-request span durations across the
+phase-2 behavioral suite — 291 OK warm calls (4 ERROR spans excluded). True per-call
+distribution: p50 3.3s, p90 7.5s, p95 9.7s, p99 24.5s, max 35.8s. The bulk of warm
+calls finish under 10s; the 24-36s tail is **decode-bound, not a latency regression**
+— those calls each emit 1700-1840 output tokens at ~50-70 tok/s (verbose
+reasoning), so duration tracks output length, not prefill. The 48-50s spans are
+``CALL_TIMEOUT_S`` errors, not warm calls. 15s ≈ 1.5× the warm p95 (9.7s): it flags
+the genuinely slow tail (a prefill/infra regression, or a pathologically long
+generation) as a SOFT review signal while leaving the normal <10s working set clean.
 """

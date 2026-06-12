@@ -33,6 +33,12 @@ from co_cli.observability.tracing import current_trace_id
 _INLINE_MAX_CHARS = 4096
 _THINKING_ENV = "EVAL_VERBOSE_TRACE"
 
+_PRIOR_MSG_COUNT: dict[str, int] = {}
+"""Per-case running count of messages already traced, so each ``TurnTrace`` records
+only THIS turn's new messages. ``run_turn`` returns ``all_messages()`` (cumulative
+history), so without slicing, turn N's ``assistant_text``/``tool_calls`` would include
+turns 0..N-1. Keyed by ``case_id``; reset when ``turn_index == 0`` (new case)."""
+
 
 @dataclass
 class ToolCallRecord:
@@ -140,6 +146,27 @@ def _extract_messages(messages: list[Any]) -> tuple[str, list[ToolCallRecord], s
     return assistant_text, list(tool_calls_by_id.values()), thinking
 
 
+def _system_prompt_from_messages(messages: list[Any]) -> str:
+    """The system/instructions text the model actually received this turn.
+
+    co's assembled prompt rides on the first ``ModelRequest`` — pydantic-ai routes
+    it through the request's ``instructions`` attribute, with system messages as
+    ``SystemPromptPart``. Captured verbatim so a reviewer can confirm what context
+    (auto-injected memory, personality, tool manifest) reached the model — the
+    earlier hash-only snapshot could not answer "were the seeded prefs injected?".
+    """
+    for msg in messages:
+        instructions = getattr(msg, "instructions", None)
+        if isinstance(instructions, str) and instructions:
+            return instructions
+        for part in getattr(msg, "parts", None) or []:
+            if type(part).__name__ == "SystemPromptPart":
+                content = getattr(part, "content", "") or ""
+                if content:
+                    return content
+    return ""
+
+
 def _extract_usage(usage: Any) -> dict[str, int]:
     """Pull prompt/completion/total tokens from a pydantic-ai ``RunUsage`` object."""
     if usage is None:
@@ -217,12 +244,19 @@ async def record_turn(
             trace_ids.append(tid)
         if turn_result is not None:
             msgs = getattr(turn_result, "messages", None) or []
-            assistant_text, tool_calls, thinking_raw = _extract_messages(msgs)
+            prior = 0 if turn_index == 0 else _PRIOR_MSG_COUNT.get(case_id, 0)
+            new_msgs = msgs[prior:]
+            _PRIOR_MSG_COUNT[case_id] = len(msgs)
+            assistant_text, tool_calls, thinking_raw = _extract_messages(new_msgs)
             if not assistant_text:
                 assistant_text = response_text(turn_result)
             if verbose_thinking:
                 thinking = thinking_raw
             usage_dict = _extract_usage(getattr(turn_result, "usage", None))
+            sys_prompt = _system_prompt_from_messages(msgs)
+            if sys_prompt:
+                sys_trunc, _ = _truncate(sys_prompt)
+                snapshot = {"system_prompt": sys_trunc, "static_hash": _hash_text(sys_prompt)}
 
         assistant_trunc, _ = _truncate(assistant_text)
         thinking_trunc, _ = _truncate(thinking) if thinking else ("", False)

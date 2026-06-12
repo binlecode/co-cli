@@ -55,6 +55,7 @@ class FixtureHandle:
     name: str
     knowledge_paths: list[Path] = field(default_factory=list)
     session_paths: list[Path] = field(default_factory=list)
+    workspace_paths: list[Path] = field(default_factory=list)
 
 
 def load_fixture(
@@ -65,17 +66,25 @@ def load_fixture(
 ) -> FixtureHandle:
     """Copy a fixture's knowledge artifacts into ``~/.co-cli/``, sync FTS, build sessions.
 
+    A fixture may also carry an optional ``<name>/workspace/`` subtree. When present
+    it is copied into ``deps.workspace_dir`` (the eval-isolated ``EVAL_WORKSPACE_DIR``
+    re-anchored by ``apply_eval_workspace``) so a behavioral case has real files the
+    agent under test can actually reach — e.g. a codebase to plan a refactor over.
+    Without this, file-based cases run against an empty workspace and the agent
+    correctly reports "nothing here", invalidating the behavioral signal.
+
     Args:
         name: Fixture name — must match a subdir under ``evals/_fixtures/``.
-        deps: Production ``CoDeps`` from ``make_eval_deps()``. Paths and
-            ``memory_store`` come from here.
+        deps: Production ``CoDeps`` from ``make_eval_deps()``. Paths,
+            ``workspace_dir``, and ``memory_store`` come from here.
         re_stamp_mtimes: When True (default), ``os.utime`` each copied knowledge
             file to ``now`` so fixtures look fresh regardless of how old the
             committed bytes are. Set False for cases that explicitly want to
             test mtime-aware behavior (e.g. B3.D decay simulation).
 
     Returns:
-        FixtureHandle with absolute paths to seeded artifacts and session JSONLs.
+        FixtureHandle with absolute paths to seeded artifacts, session JSONLs, and
+        any workspace files.
 
     Raises:
         FileNotFoundError if the fixture dir doesn't exist.
@@ -100,6 +109,20 @@ def load_fixture(
     if deps.memory_store is not None:
         deps.memory_store.sync_dir(deps.memory_dir)
 
+    workspace_source = _FIXTURES_DIR / name / "workspace"
+    workspace_paths: list[Path] = []
+    if workspace_source.exists():
+        deps.workspace_dir.mkdir(parents=True, exist_ok=True)
+        for src_path in sorted(workspace_source.rglob("*")):
+            if src_path.is_dir():
+                continue
+            dst_path = deps.workspace_dir / src_path.relative_to(workspace_source)
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            dst_path.write_bytes(src_path.read_bytes())
+            if re_stamp_mtimes:
+                os.utime(dst_path, (now, now))
+            workspace_paths.append(dst_path)
+
     session_paths: list[Path] = []
     for index, turns in enumerate(_SESSION_SPECS.get(name, [])):
         path = _build_session_jsonl(deps, name, index, turns)
@@ -109,6 +132,7 @@ def load_fixture(
         name=name,
         knowledge_paths=knowledge_paths,
         session_paths=session_paths,
+        workspace_paths=workspace_paths,
     )
 
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.348]
+
+### Feature: UAT behavioral+performance eval suite — phase 2 close-out
+
+- Closes out the phase-2 behavioral eval suite (W7–W12) with the 2026-06-11/12 validation pass: perf-band calibration, eval-harness fixes, and the W10 recall→reuse rescope. The suite now drives a real workspace, traces per-turn deltas correctly, and gates perf on calibrated bands.
+- `evals/_perf.py` + `evals/_timeouts.py`: T-8b calibration — `PERF_BANDS_GATING=True`, `WARM_CALL_BUDGET_S=15.0` (≈1.5× the warm p95 of 9.7s; the 24–36s tail is decode-bound, not latency), `PEAK_INPUT_TOKENS_BUDGET=24000` (≈1.5× observed max, zero overflows). PROVISIONAL markers dropped. SOFT_FAIL stays a review signal, never overrides a behavioral FAIL.
+- `evals/_trace.py`: per-case message slicing so each `TurnTrace` records only the turn's new messages (was including cumulative history from `all_messages()`); plus verbatim system-prompt capture so a reviewer can confirm what context actually reached the model.
+- `evals/_settings.py` + `evals/_fixtures.py`: workspace isolation — `EVAL_WORKSPACE_DIR` is wiped per build (no cross-run file bleed), and `load_fixture` copies an optional `<name>/workspace/` subtree so file-based cases run against real files (new `multistep_research_baseline/workspace/` helios codebase).
+- `evals/eval_user_model.py` + `evals/_rubrics/user_model.v2.md`: W10 rescoped from "auto-applied preferences" to the recall→reuse path co actually supports (memory is recall-on-demand, not auto-injected) — each case now pairs a structural recall-tool check with the v2 rubric verdict.
+- `evals/eval_approval_discipline.py`: W8 scratch dir migrated from `tmp/` to the isolated `EVAL_WORKSPACE_DIR`.
+- Spec: `docs/specs/uat_evals.md` synced to the behavior+performance-only suite (W12 + perf dimension + pytest-coverage map).
+
 ## [0.8.346]
 
 ### Feature: scanned/image-only PDF reading (tier-2 render → vision)

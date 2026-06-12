@@ -20,6 +20,7 @@ real ``CoDeps`` builder). This module owns sizing/config constants. Mirrors
 from __future__ import annotations
 
 import os
+import shutil
 from typing import Any
 
 from co_cli.config.core import USER_DIR, Settings, load_config
@@ -125,7 +126,15 @@ def apply_eval_workspace(deps: Any) -> None:
     (``workspace_dir``) AND ``file_search_roots`` together — mirroring production's
     ``resolve_workspace_paths`` default (``file_search_roots = [workspace_dir]``). Applied
     centrally in ``_deps`` for every eval; isolation is a safety invariant, not opt-in.
+
+    The dir is wiped on each build so every eval starts from a clean workspace —
+    otherwise agent-created files (a written test module, ``__pycache__``, a leaked
+    decision doc) accumulate across runs and bleed into a later case's file search,
+    corrupting its behavioral signal. Fixtures re-seed their ``workspace/`` subtree
+    via ``load_fixture`` after this runs.
     """
+    if EVAL_WORKSPACE_DIR.exists():
+        shutil.rmtree(EVAL_WORKSPACE_DIR)
     EVAL_WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     deps.workspace_dir = EVAL_WORKSPACE_DIR
     deps.file_search_roots = [EVAL_WORKSPACE_DIR]

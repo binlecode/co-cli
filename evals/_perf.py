@@ -20,12 +20,15 @@ Model-request spans carry ``kind == "model"`` (both the agent-path ``chat
 top-level and ``attributes["co.model.tokens.input"]`` for prompt tokens
 (``co_cli/llm/surrogate_recovery_model.py``, ``co_cli/llm/call.py``).
 
-Provisional bands
------------------
-``PERF_BANDS_GATING`` is False this cycle: the duration/peak-ctx bands are
-provisional until T-8b calibrates them against the real T-2..7 suite. While
-False, :func:`perf_verdict` only FAILs on a hard context overflow — duration
-and goal-fulfillment are recorded but never gate. T-8b flips the flag on.
+Bands (calibrated)
+------------------
+``PERF_BANDS_GATING`` is True: T-8b (2026-06-11) calibrated the duration and
+peak-ctx bands against the phase-2 behavioral suite (W7-W12, multiple runs, distinct
+Gemini judge). :func:`perf_verdict` FAILs on a hard context overflow and SOFT_FAILs
+a case whose ``call_p95_s`` exceeds ``WARM_CALL_BUDGET_S`` (15s), whose
+``peak_input_tokens`` exceeds ``PEAK_INPUT_TOKENS_BUDGET`` (24k), or whose
+``goal_fulfillment`` is below 1.0. SOFT_FAIL is a review signal — it never overrides
+a behavioral FAIL upstream.
 """
 
 from __future__ import annotations
@@ -39,8 +42,18 @@ from evals._timeouts import WARM_CALL_BUDGET_S
 
 from co_cli.observability import tracing
 
-PERF_BANDS_GATING: bool = False
-"""PROVISIONAL — T-8b flips to True once the T-2..7 suite calibrates the bands."""
+PERF_BANDS_GATING: bool = True
+"""Calibrated by T-8b (2026-06-11) — duration + peak-ctx bands gate as SOFT_FAIL."""
+
+PEAK_INPUT_TOKENS_BUDGET: int = 24_000
+"""Peak per-case model-request input-token band.
+
+Calibrated by T-8b against the phase-2 behavioral suite: observed
+``peak_input_tokens`` p50 12.0k, p90 13.4k, p95 15.8k, max 16.1k, zero context
+overflows. 24k sits ~1.5x over the observed max — flags a context regression
+(e.g. compaction not firing, history ballooning) without firing on the steady
+~16k working set. ``perf_verdict`` SOFT_FAILs a case exceeding this band.
+"""
 
 _MODEL_SPAN_KIND = "model"
 
@@ -195,15 +208,20 @@ def collect_perf(
 def perf_verdict(rec: PerfRecord, *, gate_bands: bool | None = None) -> Verdict:
     """Fold a PerfRecord into a Verdict — never overrides a behavioral FAIL upstream.
 
-    A hard context overflow always FAILs. The duration / goal-fulfillment bands
-    only produce SOFT_FAIL when band gating is on (``PERF_BANDS_GATING``, flipped
-    by T-8b); ``gate_bands`` overrides the module default for the unit smoke.
+    A hard context overflow always FAILs. The duration / peak-ctx / goal-fulfillment
+    bands only produce SOFT_FAIL when band gating is on (``PERF_BANDS_GATING``,
+    calibrated by T-8b); ``gate_bands`` overrides the module default for the unit smoke.
     """
     if rec.context_overflow:
         return Verdict.FAIL
     gate = PERF_BANDS_GATING if gate_bands is None else gate_bands
     if not gate:
         return Verdict.PASS
-    if rec.call_p95_s > WARM_CALL_BUDGET_S or rec.goal_fulfillment < 1.0:
+    over_band = (
+        rec.call_p95_s > WARM_CALL_BUDGET_S
+        or rec.peak_input_tokens > PEAK_INPUT_TOKENS_BUDGET
+        or rec.goal_fulfillment < 1.0
+    )
+    if over_band:
         return Verdict.SOFT_FAIL
     return Verdict.PASS
