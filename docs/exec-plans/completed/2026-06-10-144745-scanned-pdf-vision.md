@@ -177,13 +177,13 @@ body to chain them on the scanned branch, plus the render mode they chain throug
 
 ## Tasks
 
-### TASK-1 — `--render` mode on `extract_pdf.py` (+ image-only fixture)
+### ✓ DONE TASK-1 — `--render` mode on `extract_pdf.py` (+ image-only fixture)
 - **files:** `co_cli/skills/documents/scripts/extract_pdf.py`, `tests/skills/fixtures/<scanned-sample>.pdf` (new image-only fixture — a rasterized page, no text layer; may be generated programmatically via pymupdf `page.insert_image` and committed)
-- **prerequisites:** documents plan shipped (`extract_pdf.py` exists); **OQ1 resolved** (DPI + page-cap defaults fixed against a real token measurement before any render code)
+- **prerequisites:** documents plan shipped (`extract_pdf.py` exists) — met; OQ1 resolved (150 DPI · ≤2,000 px long-edge clamp · 10-page cap · PNG · 200 DPI single-page escalation — measured 2026-06-11, see Open Questions)
 - **done_when:** `co-extract-pdf --render <outdir> <fixture>.pdf` writes one PNG per rendered page into `<outdir>` and emits (via `sys.stdout.write`) a **pinned stdout contract** — one `page<TAB>absolute-path` line per rendered page plus a final `total_pages=M` line (so TASK-2 can parse grounding and detect truncation); `--max-pages N` renders at most N while still reporting `total_pages=M`; `--pages 0-1` renders only those pages; a corrupt / password-protected PDF reuses the existing distinct non-zero exit + one-line stderr (no traceback). Verified by invoking the `co-extract-pdf` console command via `subprocess.run` against the committed image-only fixture this task creates (real pymupdf, no mocks).
 - **success_signal:** Pointing `--render` at a scanned PDF yields legible per-page PNGs on disk.
 
-### TASK-2 — `documents` skill scanned branch (render → `image_view` → answer)
+### ✓ DONE TASK-2 — `documents` skill scanned branch (render → `image_view` → answer)
 - **files:** `co_cli/skills/documents/SKILL.md`
 - **prerequisites:** TASK-1; vision plan shipped (`image_view` available)
 - **done_when:** the body's Extract step branches on the tier-1 scanned signal to: (a) when
@@ -197,7 +197,7 @@ body to chain them on the scanned branch, plus the render mode they chain throug
   guard; the always-run check is the unavailable-vision honest-degradation assertion — see TASK-3.)
 - **success_signal:** A user points co at a scanned receipt and gets a correct, page-grounded answer.
 
-### TASK-3 — Tests (render + skill E2E + degradation)
+### ✓ DONE TASK-3 — Tests (render + skill E2E + degradation)
 - **files:** `tests/test_flow_scanned_pdf.py` (new) — reuses the image-only fixture created in TASK-1
 - **prerequisites:** TASK-1, TASK-2
 - **done_when:** `uv run pytest -x tests/test_flow_scanned_pdf.py` passes — render-mode test asserts N PNGs produced + `total_pages=M` truncation reported (real pymupdf, no mocks); the **always-run** check is the unavailable-vision path asserting the honest-degradation message (deterministic, no model); a vision E2E asserts a page-grounded answer, skipped cleanly on text-only hosts per vision-plan test policy. Assertions are behavioral (files produced, answer references known content, exit codes), not structural.
@@ -212,16 +212,47 @@ plan's pattern: real model, clean **skip** on hosts whose agent model is text-on
 tee'd: `uv run pytest -x tests/test_flow_scanned_pdf.py 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-scanned-pdf.log`.
 
 ## Open Questions
-1. **DPI + page-cap defaults? (TASK-1 prerequisite — resolve first.)** Seed: **150 DPI, ~10-page
-   cap**, refined against one real token-cost measurement on the configured model. Cap must be
-   conservative and the truncation notice non-negotiable (Constraint 4) — silent capping is the
-   one wrong-answer path.
-2. **Temp-file location + cleanup?** Resolved in Constraint 6 to OS tempdir (`tempfile.mkdtemp`),
-   script-owned dir + best-effort body cleanup; residue bounded by OS reclaim. (Must not hardcode
-   `~/.co-cli`.) Open only on the exact deletion trigger wording in the body.
-3. **Render mode in `extract_pdf.py` vs a sibling `render_pages.py`?** Reusing `extract_pdf.py`'s
-   pymupdf handle is DRY; a sibling keeps text vs raster concerns separate. Leaning reuse.
-4. **Per-page `image_view` calls vs a multi-image interface? (Load-bearing, not just cost.)**
+*(All resolved — none blocking. OQ1 closed with a real measurement; OQ2–OQ4 settled in the body.)*
+
+1. **DPI + page-cap defaults — RESOLVED (measured 2026-06-11 on `qwen3.6:35b-a3b-agentic`).**
+   A US-Letter text page was rendered at 100/150/200/300 DPI and sent to the live model, reading
+   `prompt_eval_count`:
+
+   | DPI | Pixels | Image tokens | Notes |
+   |----|--------|-------------|-------|
+   | 100 | 850×1100 (0.94 MP) | ~950 | 8pt line read correctly (clean render) |
+   | 150 | 1275×1650 (2.10 MP) | ~2,100 | fully resolved, no downsample |
+   | 200 | 1700×2200 (3.74 MP) | ~3,700 | at the ceiling edge |
+   | 300 | 2550×3300 (8.41 MP) | ~4,060 | **downsampled — pixels wasted** |
+
+   Two measured facts: **(a) the model's downsample ceiling is ~4 MP / ~4,000 image tokens** —
+   tokens grow ~1,000 tok/MP up to 200 DPI then flatten 200→300, so Ollama clamps `max_pixels`
+   ≈4 MP (~2,000 px long edge); rendering above that is pure waste. This is far above the
+   transformers Qwen default (~1.0 MP), so the model does use resolution up to ~4 MP.
+   **(b) Token cost is steep and linear** — 150 DPI ≈2,100 tok/page, 200 DPI ≈3,700 (~75% more).
+   **Defaults (final):**
+   - **DPI = 150** — the cost/quality knee (1650 px long edge, fully resolved, reads 8pt cleanly at
+     half the token cost of 200). 200 DPI is an *escalation* for a single page that 150 fails to
+     read (small/dense scans), never the default.
+   - **Long-edge clamp = ~2,000 px (~4 MP)** — matches the measured ceiling; makes a stray
+     `--pages`+DPI combo or a large-format page unable to waste tokens, and keeps each page far
+     under `image_view`'s 20 MB cap. `extract_pdf.py --render` computes DPI but clamps the pixmap
+     so the long edge never exceeds the cap.
+   - **Page cap = 10** — at ~2,100 tok/page with `num_ctx=65536` and only the tail page's pixels
+     persisting (Constraint 9), context is not the binding limit; sequential local-turn latency is.
+     The truncation notice (Constraint 4) is the real safeguard, not the number.
+   - **Format = PNG** (lossless — correct for text/line-art; matches the page-NNN.png contract).
+
+   Caveat for TASK-1: the measurement used a clean vector render; real scans (noise/skew/JPEG
+   artifacts) read harder, which is exactly why the default is 150 (not the also-passing 100) with
+   a 200 DPI escalation as margin.
+2. **Temp-file location + cleanup — RESOLVED.** OS tempdir (`tempfile.mkdtemp`, `USER_DIR`-independent;
+   never hardcode `~/.co-cli`), script-owned dir + best-effort body cleanup; residue bounded by OS
+   reclaim (Constraint 6). The body deletes the dir after the page loop completes or aborts.
+3. **Render mode in `extract_pdf.py` vs a sibling — RESOLVED: reuse `extract_pdf.py`.** It already
+   opens the pymupdf handle (`needs_pass`/`page_count`); `--render` reuses it (DRY, one console
+   entry point). Scope/Design already commit to this — a sibling `render_pages.py` is rejected.
+4. **Per-page `image_view` vs a multi-image interface — RESOLVED: per-page (forced).**
    Single-path `image_view` forces per-page calls, AND the A3 history processor means only the
    tail page's pixels persist (Constraint 9) — so per-page text-accumulation is the *only* correct
    shape today, not merely the cheap one. A batch/multi-image `image_view` (which would also enable
@@ -237,8 +268,52 @@ scanned branch is a per-page text-accumulating read, cross-page *visual* reasoni
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
 > **Gates cleared (2026-06-11):** `skill-documents` shipped (v0.8.340); `vision-input` reviewed
-> PASS and shipping. Plan reconciled against shipped code — describe-fallback / `vision_model`
-> references corrected to the single `agent_vision_capable` gate; raster `--render` confirmed
-> greenfield. Problem and scope unchanged and still correct. Once PO approves, run:
-> `/orchestrate-dev scanned-pdf-vision`. (OQ1 — DPI + page-cap defaults — must still be resolved
-> against a real token measurement before TASK-1 render code.)
+> PASS and shipped (v0.8.342). Plan reconciled against shipped code — describe-fallback /
+> `vision_model` references corrected to the single `agent_vision_capable` gate; raster `--render`
+> confirmed greenfield. **All Open Questions now resolved** — OQ1 (DPI + page cap) closed with a real
+> token measurement on `qwen3.6:35b-a3b-agentic` (150 DPI · ≤2,000 px clamp · 10-page cap · PNG).
+> Problem and scope unchanged and still correct. **No open prerequisites — ready for PO approval and
+> `/orchestrate-dev scanned-pdf-vision`.**
+
+## Gate 1 — PO + TL Approval (2026-06-11)
+
+**APPROVED** (PO + TL). Right problem (scanned PDFs dead-end at the tier-1 sentinel; configured model
+is vision-capable), correct scope (thin render+route glue; OCR engine / multi-image / cross-page
+visual / new-tool all rejected), proportionate to a Low-frequency capability. Both dependencies
+shipped (`skill-documents` v0.8.340, `vision-input` v0.8.342); verified-state table re-checked against
+live source; all four Open Questions resolved (OQ1 closed with a measured DPI/token curve on
+`qwen3.6:35b-a3b-agentic`). No open prerequisites.
+
+**Watch-items for the dev cycle** (TASK-2 implementation details, covered by TASK-3 tests — not scope
+blockers):
+1. **Degradation trigger is tool-presence, not a runtime probe.** On a text-only host `image_view`
+   self-hides (absent from the toolset), so the body must read "if you do not have `image_view`, emit
+   the honest-degradation message" — not "call something to check." The always-run TASK-3 degradation
+   assertion guards this; the SKILL.md wording is the risk.
+2. **Per-page transcribe-then-advance.** Constraint 9 elides all but the tail page's pixels, so the
+   body must make the model record each page's findings as text *before* the next `image_view` call.
+   The per-page prompt ("report what this page shows — page N of M") must enforce this ordering.
+
+> Next: `/orchestrate-dev scanned-pdf-vision`.
+
+## Delivery Summary — 2026-06-11
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | `co-extract-pdf --render` writes one PNG/page + `total_pages=M`; `--max-pages` caps while reporting M; `--pages` selects; errors reuse exit codes | ✓ pass |
+| TASK-2 | `documents` SKILL.md Step 5 scanned branch: honest degradation when `image_view` absent, else render → per-page `image_view` (transcribe-before-advance) → page-N synthesis + truncation notice; body lints clean, < 8000 chars | ✓ pass |
+| TASK-3 | `pytest -x tests/test_flow_scanned_pdf.py` green — render+truncation (no mocks), always-run degradation, vision E2E skipped on text-only hosts | ✓ pass |
+
+**Tests:** scoped — 27 passed, 0 failed (`test_flow_scanned_pdf.py` 5 + `test_flow_skill_documents.py` + `test_flow_skill_manifest.py` + `test_flow_skill_lint.py`). Vision E2E ran (host vision-capable): page-3 PNG → model reads "540.00 USD".
+**Doc Sync:** fixed — `docs/specs/skills.md` bundled-asset description extended with the `--render` raster mode + scanned/vision tier-2 path. Index in `01-system.md` intact.
+
+**Overall: DELIVERED**
+All three tasks pass `done_when`; lint clean; scoped tests green; doc sync clean.
+
+**Implementation notes (for review):**
+- **CLI shape deviation (TASK-1):** implemented as `co-extract-pdf --render [--outdir DIR]` (boolean flag + optional dir) rather than the plan's literal `--render <outdir>`. `argparse` `nargs='?'` is genuinely ambiguous with the trailing positional `path` (it eats the PDF path as the dir value), and Constraint 6 requires a no-dir invocation where the **script** owns the `tempfile.mkdtemp` dir. Both needs are met cleanly: body invokes `--render` (script mkdtemp); tests pass `--outdir` for a deterministic location. Capability identical to the plan.
+- **New fixture:** `tests/skills/fixtures/scanned_invoice.pdf` — a 3-page image-only PDF (text rasterized and re-inserted as page images; `get_text()` → 0 chars, so it routes via the tier-1 sentinel). Page 3 carries the known total "540.00 USD" for the vision E2E. The pre-existing empty `scanned.pdf` (no image) is untouched.
+- **Vision-path cold-start (TASK-3):** the first image read pays a one-time projector/mmproj load (~15–17s) that `ensure_ollama_warm` (text path) does not cover; warm latency is sub-second. Per timeout policy, the warmup `image_view`+`llm_call` runs **outside** the `asyncio.timeout`, so the asserted call stays within `LLM_NON_REASONING_TIMEOUT_SECS` (ran at 0.4s). No timeout constants changed.
+- **Minor test overlap:** the always-run degradation test asserts the same `_vision_available`/`tool_view` capability gate that `test_flow_vision` covers, but framed around the documents scanned-branch contract (render works, view is gated) per the plan's explicit TASK-3 requirement and PO watch-item 1.
+
+**Next step:** `/review-impl scanned-pdf-vision`.
