@@ -1,7 +1,7 @@
 # RESEARCH: Peer Personality & Emotional Architecture — Comparison + Functional Emotions
 
-Sources: Local peers (`~/workspace_genai/codex`, `~/workspace_genai/opencode`), frontier personality systems (ElizaOS, SillyTavern, Soul.md), Anthropic Transformer Circuits "Emotion Concepts and their Function in a Large Language Model" (Sofroniew et al., April 2026), co-cli codebase
-Scan date: 2026-04-05; grounded against HEAD 2026-04-29
+Sources: Local peers (`~/workspace_genai/codex`, `~/workspace_genai/opencode`), frontier personality systems (ElizaOS, SillyTavern, Soul.md), memory-structure peers (Letta, Mem0 — surveyed only on preference-state typing, see §A), Anthropic Transformer Circuits "Emotion Concepts and their Function in a Large Language Model" (Sofroniew et al., April 2026), co-cli codebase
+Scan date: 2026-04-05; refreshed against peer HEADs 2026-06-13 (codex `9d938a4`, opencode `dbbe67f`, elizaos `e62504d`, sillytavern `51ad27f`, soul.md `6e643c7`, letta `1131535`, mem0 `06d33f6`)
 
 ---
 
@@ -11,7 +11,7 @@ Co-cli treats personality as a first-class, configurable, deeply character-drive
 
 This document compares all systems across six functional dimensions: soul definition, role definition, role/soul separation, emotional architecture, anti-sycophancy, and safety under pressure. Paper findings from the functional emotions paper are integrated into each dimension where they apply.
 
-Systems covered: **opencode**, **codex** (local CLI peers); **ElizaOS**, **SillyTavern**, **Soul.md** (frontier personality-first systems); **co-cli** (subject).
+Systems covered: **opencode**, **codex** (local CLI peers); **ElizaOS**, **SillyTavern**, **Soul.md** (frontier personality-first systems); **co-cli** (subject). **Letta** and **Mem0** are added in §A as memory-structure peers — surveyed only on whether typed/scoped preference state has a peer precedent, not on soul/role/emotion.
 
 ---
 
@@ -38,6 +38,15 @@ Critical finding: **emotion vectors at the Assistant colon token predict respons
 
 Soul.md and SillyTavern are the only non-co-cli systems with genuine soul coverage. Both converge on "context-over-command" — emotional anchors and worldview grounding over explicit behavioral rules. The paper validates this: soul prompts shape *which character* the model simulates, not whether character simulation occurs. opencode and codex have no soul — they have behavioral stances. ElizaOS has character labels but no narrative substrate.
 
+> **Provenance caveat (added 2026-06-13 refresh):** "context-over-command," "first message is the
+> strongest style signal," and "emotional anchors" are **community/usage-consensus** principles
+> attributed to SillyTavern, not statements the SillyTavern repo makes. A HEAD re-scan finds the
+> *mechanisms* in code (`charDepthPrompt`, the first-message field, depth injection) but no design
+> philosophy in code, comments, or docs. Treat these as the survey author's synthesis of
+> practitioner consensus — directionally supported by the functional-emotions paper, not
+> repo-substantiated empirical evidence. Downstream docs should not cite them as "the survey's
+> empirical lesson."
+
 ---
 
 ## 2. Role — Behavioral Posture & Task Scope
@@ -52,8 +61,8 @@ The failure mode of role-only design: every "helpful engineering assistant" conv
 | **codex** | Personality profiles (Friendly, Pragmatic) with values, tone, escalation sections, and response structure guidance ("1–2 sentence preambles") | None | Config field: `personality: friendly/pragmatic/none` |
 | **ElizaOS** | `topics` (knowledge areas), `system` (prompt override), `style` (per-medium writing conventions: all/chat/post), `templates` | `style` object adapts tone per medium (all/chat/post) | Character JSON |
 | **SillyTavern** | World Info (lore injected as context) + scenario field; Character's Note enables mid-conversation role-context injection at specific depths | Character's Note for depth-specific injection | Per-card scenario and World Info |
-| **Soul.md** | `SKILL.md` defines five explicit interaction modes (Default, Tweet, Chat, Essay, Idea Generation) and interpolation rules for topics not covered | Five explicit modes; SKILL.md defines transition rules | External file set |
-| **co-cli** | 6 mindset files per personality (technical, emotional, exploration, debugging, teaching, memory) + 5 universal rules (`01_identity.md`–`05_workflow.md`) | Mindsets activate by task context; rules are universal | Config field + env var; auto-discovered from `souls/` dirs |
+| **Soul.md** | `SKILL.md` defines five explicit interaction modes (Default, Tweet, Chat, Essay, Idea Generation) and interpolation rules for topics not covered | Five explicit modes; transitions are **implicit/contextual**, not formally specified (HEAD re-scan: SKILL.md lists modes + interpolation rules, no transition triggers) | External file set |
+| **co-cli** | 6 mindset files per personality (technical, emotional, exploration, debugging, teaching, memory) + 7 universal rules (`01_identity.md`–`07_memory_protocol.md`) | Mindsets activate by task context; rules are universal | Config field + env var; auto-discovered from `souls/` dirs |
 
 ### Observation
 
@@ -73,7 +82,7 @@ Two engineers can share identical role definitions — same task scope, same beh
 | **codex** | Strong | None | Conflated — behavioral profiles describe stance, not identity; "Friendly" is a stance, not a person |
 | **ElizaOS** | Moderate | Partial | Implicit — `topics`/`system` (role) and `bio`/`adjectives` (soul) coexist in flat JSON with no hierarchy; soul cannot override or constrain role |
 | **SillyTavern** | Weak | Strong | Implicit — soul lives in the character card; role is implied by scenario and World Info. Soul-dominant design: scenario provides enough role grounding that explicit role definition is unnecessary |
-| **Soul.md** | Moderate | Strong | **Explicit** — `SKILL.md` = role (operating modes, task-scope instructions); `SOUL.md` = soul (identity, worldview, opinions). Reading order: SKILL first, SOUL second — role context established before soul, but soul is the deeper persistent layer |
+| **Soul.md** | Moderate | Strong | **Explicit** — `SKILL.md` = role (operating modes, task-scope instructions); `SOUL.md` = soul (identity, worldview, opinions). Reading order **inverted at HEAD**: now SOUL → STYLE → examples (soul/identity established *before* style and skill), reversing the prior SKILL-first order |
 | **co-cli** | Strong | Strong | **Explicit** — soul seeds define *who* (identity, worldview, emotional register); mindsets define *how in which context* (task-type behavioral guidance). Finch and TARS share the same mindset structure but wholly distinct souls |
 
 **The co-cli design and Soul.md are the only systems that treat role and soul as first-class, separately defined concerns.** This separation is mechanistically meaningful: the functional emotions paper shows soul-level grounding (narrative context, emotional anchors) sets the emotion vector baseline that drives behavioral output, while role-level guidance (mindsets, rules) shapes that output within the established emotional space. Role without soul produces interchangeable agents. Soul without role produces inconsistent agents. Both layers, explicitly separated, produce a character that is simultaneously coherent in identity and adaptive in task behavior.
@@ -124,7 +133,7 @@ Co-cli is the only system that treats emotional register as an explicit behavior
 
 | Strategy | Systems | Mechanism |
 |----------|---------|-----------|
-| **Static + per-turn hybrid** | co-cli | Static personality baked at agent creation (soul + mindsets + rules + examples + critique); fresh per-turn injection (personality-context memories, always-on memories, date, shell guidance) |
+| **Static + per-turn hybrid** | co-cli | Static personality baked at agent creation (soul seed + 6 mindsets + 7 rules + critique `## Review lens`); fresh per-turn injection (canon/personality-context memory auto-injection, date, conditional safety guardrails). `curation.md` is loaded separately by the dream daemon, not the orchestrator prompt |
 | **Preamble rules** | codex | Explicit guidance on response structure ("1–2 sentence preambles," "light, friendly and curious") |
 | **Emotional anchor re-injection** | SillyTavern | Character's Note enables mid-conversation prompt injection at specific message depths to re-establish emotional register |
 | **Session log re-load** | Soul.md | `MEMORY.md` session log loaded fresh each session; prior personality-consistent exchanges visible at context start |
@@ -198,7 +207,7 @@ No peer system (including co-cli) monitors for emotional escalation patterns as 
 | Professional objectivity as explicit value (disagree when necessary, truth over validation) | opencode `anthropic.txt:20` | Directly addresses the sycophancy-harshness tradeoff. Could be adapted as a cross-personality rule in co-cli's `01_identity.md` |
 | Model-specific prompt variants | opencode `system.ts:19–33` | Post-training shifts the emotional baseline per model. Co-cli's `model_quirks/` files address model-specific quirks but not model-specific emotional baselines |
 | Dual-personality selection with explicit anti-sycophancy on the cooler profile | codex `templates/personalities/` | Pragmatic's explicit counter-pressure ("avoid cheerleading") + Friendly's implicit warmth bias = configurable sycophancy-harshness dial. Co-cli's character switching serves the same function but needs deliberate calibration per personality |
-| Context-over-command: fewer rules, clearer emotional anchors | SillyTavern 2026 consensus, Soul.md | Co-cli's 29-file assembly (soul + 6 mindsets + 5 rules + examples + critique + counter-steering) may be over-specified. The soul seed, never-list, and planted memories may be doing the real work; mindsets may be adding weight without proportional behavioral influence |
+| Context-over-command: fewer rules, clearer emotional anchors | SillyTavern (practitioner consensus, not repo-stated — see §1 provenance caveat), Soul.md | Co-cli's static block (soul seed + 6 mindsets + 7 rules + critique ≈ 3,760 words / ~5k tokens for `tars`) may be over-specified. The soul seed, never-list, and planted memories may be doing the real work; the always-on mindsets and episodic procedural rules may add weight without proportional behavioral influence. See `RESEARCH-personality-self-working-style.md` §2.0/§4.0 for a measured breakdown and subtractive plan |
 
 ### 7c. Design gaps no peer addresses
 
@@ -212,7 +221,7 @@ No peer system (including co-cli) monitors for emotional escalation patterns as 
 
 5. **User-emotion modeling guidance**: the paper reveals the other-speaker→present-speaker emotion channel. Co-cli's mindsets prescribe responses to emotional situations but don't coach how to *model* user emotions explicitly. "When you detect the user is frustrated, name it briefly before proceeding" would engage this channel directly.
 
-6. **Personality assembly weight**: SillyTavern's 2026 consensus and ElizaOS's flat schema suggest co-cli's assembly depth may be over-specified. If the soul seed, never-list, and planted memories are the load-bearing elements, the 6 mindset files may add weight without proportional behavioral influence. If co-cli keeps the weight, it should formalize priority and conflict resolution rather than relying on implicit ordering.
+6. **Personality assembly weight**: SillyTavern's context-over-command consensus (practitioner-level, not repo-stated — §1 caveat) and ElizaOS's flat schema suggest co-cli's assembly depth may be over-specified. If the soul seed, never-list, and planted memories are the load-bearing elements, the 6 always-on mindset files may add weight without proportional behavioral influence. If co-cli keeps the weight, it should formalize priority and conflict resolution rather than relying on implicit ordering. (`RESEARCH-personality-self-working-style.md` develops both halves: §2.0/§4.0 the subtractive thinning, §2.5 the precedence formalization.)
 
 ---
 
