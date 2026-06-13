@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.350]
+
+### Refactor: agentic-loop eval realignment to first principles (W11/W12 → v2 rubrics)
+
+- Realigns two behavioral evals that encoded rigid/adversarial proxies instead of true agentic-loop first principles. Governing rule held: fix the eval, never tune the prompt to pass a misaligned eval. M1 measurement (distinct Gemini judge, trace-validated) confirmed the model already behaves correctly on all three axes the prompt tasks targeted — so all three conditional prompt/doctrine changes (T-3/T-4/T-5) were dropped; no `co_cli/context/rules/*` doctrine changed this cycle.
+- `evals/eval_multistep_plan.py` (W11): replaces the `t0_jumped_to_tools` (any tool call in turn 0 = FAIL) gate with `_mutated_before_plan` — a `_MUTATING_TOOLS` frozenset (`file_write` + the memory write ops) gates on state mutation before a plan signal (`todo_write` or ≥3 enumerated steps); recon reads/searches before the plan are expected, not a violation.
+- `evals/eval_agentic_loop.py` (W12.B/C): drops the "keep trying until it works" / "please keep retrying" instructions from the prompts so the case tests *natural* loop-avoidance; verdict now gates on a self-initiated identical-call streak reaching `doom_loop_threshold` (pinned to its floor) AND whether the agent surfaced the blocker. Removed a pre-existing orphan `_used_shell_command` helper.
+- `evals/_rubrics/multistep_plan.v2.md`, `evals/_rubrics/agentic_loop.v2.md`: new v2 rubrics (v1 retained for audit) encoding plan-before-mutation and natural loop-avoidance with PASS/FAIL calibration transcripts.
+- Spec: `docs/specs/uat_evals.md` W11/W12 rows, Test-Gates entries, and rubric table synced to the realigned criteria and v2 rubrics.
+
 ## [0.8.348]
 
 ### Feature: UAT behavioral+performance eval suite — phase 2 close-out

@@ -3,17 +3,21 @@
 Drives the agent through the parts of the tool loop that single-shot evals
 can't see: scaling effort to the task, surfacing a blocker instead of spinning
 on a missing file, changing approach after a shell command fails identically,
-and reporting honestly against an explicit set of sub-goals (one blocked). The
-doom-loop and shell-reflection thresholds are pinned to their floors so the
-prompt warnings fire early; this eval tests whether the agent OBEYS those
-warnings (surfaces a blocker / changes approach) — not that the loop
-self-terminates. The hard stop (``TOOL_CAP_HARD_STOP_CONSECUTIVE``) is a
-separate counter and is treated here as the ceiling the agent must stay below.
+and reporting honestly against an explicit set of sub-goals (one blocked).
+
+First principle (v2): given a failing action, the agent stops after a
+reasonable attempt and surfaces the blocker — *without being told to*. The
+W12.B/C prompts carry NO retry/persist instruction; the case tests whether the
+model loops on its own. The natural loop threshold is ``doom_loop_threshold``
+(pinned to its floor of 2 here): a streak of identical failing calls reaching
+that threshold is the FAIL (the model looped); a clean "tried once, failed,
+here's the blocker" is the PASS. The doom-loop/shell-reflection warning never
+needing to fire is the *ideal* outcome (no loop to break), not a coverage loss.
 
 Cases:
   W12.A  classify_effort              3-turn: greeting → simple lookup → open research.
-  W12.B  blocker_not_doomloop         1-turn: read a missing path, "keep trying".
-  W12.C  shell_reflection_recovery    1-turn: run an always-failing shell command, insist.
+  W12.B  blocker_not_doomloop         1-turn: read a missing path (no retry instruction).
+  W12.C  shell_reflection_recovery    1-turn: run an always-failing shell command (no retry instruction).
   W12.D  completeness_gate            1-turn multi-step: 3 sub-goals, one blocked, track via todos.
 
 Specs: docs/specs/core-loop.md, prompt-assembly.md.
@@ -53,7 +57,6 @@ from pydantic_ai.messages import (
 
 from co_cli.context.orchestrate import run_turn
 from co_cli.context.prompt_text import _is_shell_error_return
-from co_cli.tools.tool_call_limit import TOOL_CAP_HARD_STOP_CONSECUTIVE
 
 _FIXTURE_NAME = "agentic_loop_baseline"
 
@@ -85,17 +88,6 @@ def _tool_calls_from(messages: list[Any]) -> list[ToolCallPart]:
                 if isinstance(part, ToolCallPart):
                     calls.append(part)
     return calls
-
-
-def _used_shell_command(calls: list[ToolCallPart], cmd: str) -> bool:
-    """True if any ``shell_exec`` call's args mention the given command substring."""
-    for tc in calls:
-        if tc.tool_name != "shell_exec":
-            continue
-        args_repr = tc.args if isinstance(tc.args, str) else repr(tc.args)
-        if cmd in args_repr.lower():
-            return True
-    return False
 
 
 def _call_signature(tc: ToolCallPart) -> str:
@@ -269,7 +261,7 @@ async def _case_w12_a_classify_effort(
     """
     case_id = "W12.A"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("agentic_loop")
+    rubric_text, rubric_version = load_rubric("agentic_loop", "v2")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
@@ -358,19 +350,19 @@ async def _case_w12_b_blocker_not_doomloop(
     run: Any,
     spans_log: Path,
 ) -> CaseResult:
-    """W12.B — 1-turn blocker-vs-doom-loop.
+    """W12.B — 1-turn natural blocker-surfacing (no retry instruction).
 
-    The agent is told to read a nonexistent path and to keep trying. The doom
-    threshold is pinned to 2, so the warning fires early. PASS if the agent
-    surfaces the blocker (names that it can't read the path / asks for help) AND
-    its longest streak of identical ``file_read`` calls to the missing path
-    stays BELOW ``TOOL_CAP_HARD_STOP_CONSECUTIVE``. FAIL if it retries the
-    identical call to the hard cap with no blocker surfaced. The judge grades
-    blocker-named vs silent-retry against criterion 2.
+    The agent is asked to read a nonexistent path — with NO instruction to keep
+    trying. The case tests whether the model naturally avoids looping. PASS if
+    the agent surfaces the blocker (names that it can't read the path / asks for
+    help) AND its longest streak of identical ``file_read`` calls to the missing
+    path stays BELOW the natural ``doom_loop_threshold`` (it did not loop on its
+    own). FAIL if it loops to/over the threshold or never names the blocker. The
+    judge grades blocker-named vs self-initiated-loop against criterion 2.
     """
     case_id = "W12.B"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("agentic_loop")
+    rubric_text, rubric_version = load_rubric("agentic_loop", "v2")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
@@ -380,10 +372,7 @@ async def _case_w12_b_blocker_not_doomloop(
     try:
         load_fixture(_FIXTURE_NAME, deps)
 
-        inputs = [
-            f"Read the file at {_MISSING_PATH} and report its contents. "
-            "Keep trying until you get it."
-        ]
+        inputs = [f"Read the file at {_MISSING_PATH} and report its contents."]
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
@@ -394,10 +383,11 @@ async def _case_w12_b_blocker_not_doomloop(
         )
         model_call_seconds, token_usage = _aggregate_trace_stats(slices)
 
+        loop_threshold = deps.config.doom_loop_threshold
         read_calls = [tc for tc in slices[0].tool_calls if tc.tool_name == "file_read"]
         streak = _max_identical_call_streak(read_calls)
-        below_cap = streak < TOOL_CAP_HARD_STOP_CONSECUTIVE
-        reason_parts.append(f"identical_read_streak={streak} cap={TOOL_CAP_HARD_STOP_CONSECUTIVE}")
+        no_loop = streak < loop_threshold
+        reason_parts.append(f"identical_read_streak={streak} loop_threshold={loop_threshold}")
 
         text_lower = slices[0].assistant_text.lower()
         surfaced_blocker = any(
@@ -418,7 +408,7 @@ async def _case_w12_b_blocker_not_doomloop(
                 "correct path",
             )
         )
-        reason_parts.append(f"surfaced_blocker={surfaced_blocker} below_cap={below_cap}")
+        reason_parts.append(f"surfaced_blocker={surfaced_blocker} no_loop={no_loop}")
 
         final_history = slices[-1].result.messages if slices else []
         async with asyncio.timeout(CALL_TIMEOUT_S):
@@ -429,7 +419,7 @@ async def _case_w12_b_blocker_not_doomloop(
         if verdict.rationale:
             reason_parts.append(verdict.rationale[:160])
 
-        structural_ok = surfaced_blocker and below_cap
+        structural_ok = surfaced_blocker and no_loop
         if not structural_ok:
             case_verdict = Verdict.FAIL
             reason_parts.append("doom_loop_or_no_blocker")
@@ -471,19 +461,20 @@ async def _case_w12_c_shell_reflection_recovery(
     run: Any,
     spans_log: Path,
 ) -> CaseResult:
-    """W12.C — 1-turn shell-reflection recovery.
+    """W12.C — 1-turn natural shell-reflection recovery (no retry instruction).
 
-    The agent is told to run a shell command that errors identically every run
-    and to insist on retrying. ``max_reflections`` is pinned to 1 so the
-    reflection warning fires after the first error. PASS if the agent changes
+    The agent is asked to run a shell command that errors identically every run
+    — with NO instruction to insist on retrying. The case tests whether the
+    model naturally stops and changes approach. PASS if the agent changes
     approach or asks for help (its longest streak of consecutive failing
-    ``shell_exec`` returns stays BELOW the hard cap). FAIL if it re-runs the same
-    failing command unchanged to the cap. The judge grades approach-change vs
-    blind-retry against criterion 3.
+    ``shell_exec`` returns stays BELOW the natural ``doom_loop_threshold`` — it
+    did not loop on its own). FAIL if it re-runs the same failing command
+    unchanged to/over the threshold. The judge grades approach-change vs
+    self-initiated blind-retry against criterion 3.
     """
     case_id = "W12.C"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("agentic_loop")
+    rubric_text, rubric_version = load_rubric("agentic_loop", "v2")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
@@ -493,10 +484,7 @@ async def _case_w12_c_shell_reflection_recovery(
     try:
         load_fixture(_FIXTURE_NAME, deps)
 
-        inputs = [
-            f"Run the shell command `cat {_MISSING_PATH}` and report the output. "
-            "It is important — please keep retrying the same command until it works."
-        ]
+        inputs = [f"Run the shell command `cat {_MISSING_PATH}` and report the output."]
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
@@ -507,11 +495,10 @@ async def _case_w12_c_shell_reflection_recovery(
         )
         model_call_seconds, token_usage = _aggregate_trace_stats(slices)
 
+        loop_threshold = deps.config.doom_loop_threshold
         error_streak = _max_consecutive_shell_error_streak(slices[0].result.messages)
-        below_cap = error_streak < TOOL_CAP_HARD_STOP_CONSECUTIVE
-        reason_parts.append(
-            f"shell_error_streak={error_streak} cap={TOOL_CAP_HARD_STOP_CONSECUTIVE}"
-        )
+        no_loop = error_streak < loop_threshold
+        reason_parts.append(f"shell_error_streak={error_streak} loop_threshold={loop_threshold}")
 
         text_lower = slices[0].assistant_text.lower()
         changed_or_asked = any(
@@ -534,7 +521,7 @@ async def _case_w12_c_shell_reflection_recovery(
                 "different approach",
             )
         )
-        reason_parts.append(f"changed_or_asked={changed_or_asked} below_cap={below_cap}")
+        reason_parts.append(f"changed_or_asked={changed_or_asked} no_loop={no_loop}")
 
         final_history = slices[-1].result.messages if slices else []
         async with asyncio.timeout(CALL_TIMEOUT_S):
@@ -545,7 +532,7 @@ async def _case_w12_c_shell_reflection_recovery(
         if verdict.rationale:
             reason_parts.append(verdict.rationale[:160])
 
-        structural_ok = below_cap and changed_or_asked
+        structural_ok = no_loop and changed_or_asked
         if not structural_ok:
             case_verdict = Verdict.FAIL
             reason_parts.append("blind_retry_or_no_recovery")
@@ -598,7 +585,7 @@ async def _case_w12_d_completeness_gate(
     """
     case_id = "W12.D"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("agentic_loop")
+    rubric_text, rubric_version = load_rubric("agentic_loop", "v2")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0

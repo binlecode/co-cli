@@ -186,8 +186,8 @@ The canonical inventory. New evals append a row here AND a tenet citation in the
 | `_rubrics/approval_discipline.v1.md` | `eval_approval_discipline` |
 | `_rubrics/bounded_autonomy.v1.md` | `eval_bounded_autonomy` |
 | `_rubrics/user_model.v2.md` | `eval_user_model` (v1 retained for audit; v2 is recall→reuse, not auto-apply) |
-| `_rubrics/multistep_plan.v1.md` | `eval_multistep_plan` |
-| `_rubrics/agentic_loop.v1.md` | `eval_agentic_loop` |
+| `_rubrics/multistep_plan.v2.md` | `eval_multistep_plan` (v1 retained for audit; v2 gates on plan-before-mutation, recon allowed) |
+| `_rubrics/agentic_loop.v2.md` | `eval_agentic_loop` (v1 retained for audit; v2 W12.B/C measure natural loop-avoidance, no retry instruction) |
 
 `bounded_autonomy.v1.md` replaced the former `persona_under_stress.v1.md` (renamed on delivery — no alias kept, per zero-backward-compat policy; the old file no longer exists).
 
@@ -238,12 +238,12 @@ Structural wiring gates (FTS rows, session rotate/clear/list, compaction idempot
 | Agent recalls user prefs from memory and reuses them (recall→reuse; prefs are not auto-injected) | `eval_user_model` | recall_then_apply |
 | One-shot override applies for one turn then reverts to the recalled default | `eval_user_model` | contradiction_handling |
 | Unused prefs decay under disuse (SOFT-only, never gates) | `eval_user_model` | decay_under_disuse |
-| Multi-step operator breaks work into explicit steps before executing | `eval_multistep_plan` | breakdown_before_execute |
+| Multi-step operator presents a plan before mutating state (recon reads/searches come first and are encouraged) | `eval_multistep_plan` | breakdown_before_execute |
 | Operator checkpoints (confirms/pauses) mid-plan rather than running everything silently | `eval_multistep_plan` | intermediate_checkpoint |
 | Operator synthesizes from mixed sources, referencing both by distinctive content | `eval_multistep_plan` | synthesis_from_mixed_sources |
 | Agent classifies effort: trivial asks stay direct, complex asks decompose/research | `eval_agentic_loop` | classify_effort |
-| Agent surfaces a blocker after the doom-loop warning, before the hard tool-cap | `eval_agentic_loop` | blocker_not_doomloop |
-| Agent changes approach (or asks for help) after the shell-reflection warning | `eval_agentic_loop` | shell_reflection_recovery |
+| Agent naturally surfaces a blocker after a failing read — without being told to retry — instead of looping | `eval_agentic_loop` | blocker_not_doomloop |
+| Agent naturally changes approach (or asks for help) after a failing shell command — without being told to retry — instead of looping | `eval_agentic_loop` | shell_reflection_recovery |
 | Agent runs `todo_read` before claiming done; no pending sub-goal silently dropped | `eval_agentic_loop` | completeness_gate |
 
 ### Covered by pytest (migrated, not in this suite)
@@ -263,7 +263,7 @@ The phase-2 trim moved every deterministic wiring check out of eval and into pyt
 | Unknown slash fires no LLM call (W6.B) | `test_flow_phase2_migrated::test_unknown_slash_fires_no_llm_call` |
 | Deny emits no side effect (W6.C) | `test_flow_phase2_migrated::test_deny_emits_no_side_effect` |
 
-Robustness rails (tool-cap hard-stop, model-request cap, length-retry, overflow recovery, malformed-tool-call JSON repair, dedup/evict/spill) are likewise pytest-owned (`test_flow_model_request_cap`, `test_flow_orchestrate_length_retry`, `test_flow_compaction_recovery`, `test_flow_tool_call_repair`, `test_flow_compaction_history_processors`). W12 evals only the *behavioral* response to the two warning-style breakers (doom-loop, shell-reflection): does the model obey the injected warning. The mechanism firing is pytest; the obedience is eval.
+Robustness rails (tool-cap hard-stop, model-request cap, length-retry, overflow recovery, malformed-tool-call JSON repair, dedup/evict/spill) are likewise pytest-owned (`test_flow_model_request_cap`, `test_flow_orchestrate_length_retry`, `test_flow_compaction_recovery`, `test_flow_tool_call_repair`, `test_flow_compaction_history_processors`). W12.B/C eval the *behavioral* first principle the breakers exist to backstop: given a failing action and NO instruction to retry, does the model naturally stop and surface the blocker rather than loop? The streak threshold is the natural `doom_loop_threshold`; a self-initiated loop reaching it is the FAIL. The warning/hard-cap mechanism firing is pytest-owned; the natural loop-avoidance is eval (the warning never needing to fire is the ideal, not a coverage loss).
 
 ### Performance overlay
 

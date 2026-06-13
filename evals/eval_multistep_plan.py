@@ -3,20 +3,21 @@
 Drives the agent against the ``multistep_research_baseline`` fixture — a seeded
 Helios context artifact, a seeded prior sqlite decision artifact, and a session
 transcript recording that decision — and checks that the agent operates as a
-planner/executor for non-trivial goals: it breaks a multi-step refactor down
-into discrete steps BEFORE executing, pauses at intermediate checkpoints rather
-than silently running the whole plan, and synthesizes from multiple seeded
-sources without inventing detail.
+planner/executor for non-trivial goals: it states a plan BEFORE mutating state
+(recon reads/searches to ground the plan come first and are encouraged), pauses
+at intermediate checkpoints rather than silently running the whole plan, and
+synthesizes from multiple seeded sources without inventing detail.
 
-Each case pairs a structural signal (T0 has near-zero tool calls and prose
-enumerating steps; T1 issues executing tool calls; the synthesis answer
-references both seeded artifacts) with the LLM rubric verdict from
-``multistep_plan.v1.md``, mapped onto the 4-state Verdict.
+Each case pairs a structural signal (T0 presents enumerated steps and does not
+fire a state-mutating tool before the plan; T1 issues executing tool calls; the
+synthesis answer references both seeded artifacts) with the LLM rubric verdict
+from ``multistep_plan.v2.md``, mapped onto the 4-state Verdict.
 
 Cases:
   W11.A  breakdown_before_execute     2-turn: T0 asks where to start; T1 "do the
                                        first step". PASS if T0 yields ≥3 explicit
-                                       PROSE steps and T1 executes only step 1.
+                                       PROSE steps without mutating state (recon
+                                       allowed) and T1 executes only step 1.
   W11.B  intermediate_checkpoint       3-turn continuation: T2 "go ahead with the
                                        rest". PASS if T2 confirms-before / pauses-
                                        after a step rather than silently finishing.
@@ -56,7 +57,7 @@ from evals._rubrics import load_rubric
 from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S, TURN_BUDGET_S
 from evals._trace import record_turn, response_text
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 
 from co_cli.context.orchestrate import run_turn
 
@@ -70,6 +71,23 @@ _SQLITE_DECISION_MARKERS = ("sqlite", "50gb", "architecture review", "duckdb")
 
 # A T0 plan with this many or more steps is "broken down" (rubric criterion 1).
 _MIN_PLAN_STEPS = 3
+
+# State-mutating / irreversible tools. A plan must precede ANY of these (the
+# gate trigger). Reading and searching to ground the plan come first and are
+# encouraged — they are NOT in this set. These are the real model-callable
+# write ops: file_write plus the memory write surface in
+# co_cli/tools/memory/manage.py (there is no memory_manage callable). shell_exec
+# is treated as recon by default (exploration ls/find/cat); classifying
+# destructive shell verbs is deferred to Open Q1 pending measurement.
+_MUTATING_TOOLS = frozenset(
+    {
+        "file_write",
+        "memory_create",
+        "memory_append",
+        "memory_replace",
+        "memory_delete",
+    }
+)
 
 # Enumerated-step detectors: a numbered list ("1." / "2)"), or ordering words.
 _NUMBERED_STEP_RE = re.compile(r"(?m)^\s*(\d+)[.)]\s+\S")
@@ -127,6 +145,34 @@ def _count_enumerated_steps(text: str) -> int:
         return len(numbered)
     lowered = text.lower()
     return sum(1 for word in _ORDERING_WORDS if word in lowered)
+
+
+def _mutated_before_plan(turn: _TurnSlice) -> bool:
+    """True if a state-mutating tool call fired before any plan was presented.
+
+    First principle: a plan must precede *state-mutating* / irreversible work;
+    reading and searching to ground the plan come first and are encouraged.
+    Walks the turn's response parts in order. A plan is "presented" by either a
+    ``todo_write`` call or enumerated steps (``_MIN_PLAN_STEPS``) accruing in the
+    assistant prose. A mutating call (``_MUTATING_TOOLS``) seen before that
+    signal is the FAIL; recon reads/searches before the plan are fine. Returns
+    False if a plan signal appears first or no mutating call fires at all.
+    """
+    text_so_far = ""
+    for msg in turn.new_messages:
+        if not isinstance(msg, ModelResponse):
+            continue
+        for part in msg.parts:
+            if isinstance(part, TextPart):
+                text_so_far += part.content
+                if _count_enumerated_steps(text_so_far) >= _MIN_PLAN_STEPS:
+                    return False
+            elif isinstance(part, ToolCallPart):
+                if part.tool_name == "todo_write":
+                    return False
+                if part.tool_name in _MUTATING_TOOLS:
+                    return True
+    return False
 
 
 def _collect_perf_for(
@@ -207,15 +253,17 @@ async def _case_w11_a_breakdown_before_execute(
     """W11.A — 2-turn breakdown-before-execute.
 
     Turn 0 asks where to start on a multi-step refactor; the agent should reply
-    with a PLAN (≥ 3 explicit prose steps) and near-zero tool calls — planning,
-    not executing (rubric criterion 1). Turn 1 says "do the first step"; the
-    agent should now issue executing tool calls and act on step 1 only.
+    with a PLAN (≥ 3 explicit prose steps) before mutating any state — recon
+    reads/searches to ground the plan are allowed and encouraged (rubric
+    criterion 1). Turn 1 says "do the first step"; the agent should now issue
+    executing tool calls and act on step 1 only.
 
-    Structural signals: ``slices[0].tool_calls`` should be empty/near-empty with
-    ≥ 3 enumerated steps; ``slices[1].tool_calls`` should be non-empty. The judge
-    grades the transcript against ``multistep_plan.v1.md`` and the two combine
-    into the 4-state Verdict: FAIL if T0 jumps straight to tool calls, SOFT_PASS
-    if T0's plan is implicit (< 3 enumerated steps but the judge still passes).
+    Structural signals: ``slices[0]`` should present ≥ 3 enumerated steps and
+    NOT fire a state-mutating tool (``_MUTATING_TOOLS``) before the plan;
+    ``slices[1].tool_calls`` should be non-empty. The judge grades the transcript
+    against ``multistep_plan.v2.md`` and the two combine into the 4-state
+    Verdict: FAIL if T0 mutates state before presenting a plan, SOFT_PASS if
+    T0's plan is implicit (< 3 enumerated steps but the judge still passes).
 
     goal_fulfillment: sub_goals_total = 3 (the three expected plan steps);
     sub_goals_met = the number of steps the agent actually enumerated in T0,
@@ -223,7 +271,7 @@ async def _case_w11_a_breakdown_before_execute(
     """
     case_id = "W11.A"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("multistep_plan")
+    rubric_text, rubric_version = load_rubric("multistep_plan", "v2")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
@@ -252,12 +300,12 @@ async def _case_w11_a_breakdown_before_execute(
         t1_calls = slices[1].tool_calls
         steps_enumerated = _count_enumerated_steps(slices[0].assistant_text)
 
-        t0_planned = len(t0_calls) == 0 and steps_enumerated >= _MIN_PLAN_STEPS
-        t0_jumped_to_tools = len(t0_calls) > 0
+        t0_mutated_before_plan = _mutated_before_plan(slices[0])
+        t0_planned = steps_enumerated >= _MIN_PLAN_STEPS and not t0_mutated_before_plan
         t1_executed = len(t1_calls) > 0
         reason_parts.append(
             f"t0_tool_calls={len(t0_calls)} t0_steps={steps_enumerated} "
-            f"t1_tool_calls={len(t1_calls)}"
+            f"t0_mutated_before_plan={t0_mutated_before_plan} t1_tool_calls={len(t1_calls)}"
         )
 
         final_history = slices[-1].result.messages if slices else []
@@ -269,9 +317,9 @@ async def _case_w11_a_breakdown_before_execute(
         if verdict.rationale:
             reason_parts.append(verdict.rationale[:160])
 
-        if t0_jumped_to_tools:
+        if t0_mutated_before_plan:
             case_verdict = Verdict.FAIL
-            reason_parts.append("t0_jumped_to_tools")
+            reason_parts.append("t0_mutated_before_plan")
         elif t0_planned and t1_executed and verdict.passed:
             case_verdict = Verdict.PASS
         elif verdict.passed or verdict.score >= 6:
@@ -321,12 +369,12 @@ async def _case_w11_b_intermediate_checkpoint(
 
     This is the pause/checkpoint-mid-execution behavior, distinct from W12's
     completeness gate — it does NOT assert todo-list state. The judge grades the
-    full transcript against ``multistep_plan.v1.md``; binary goal grading
+    full transcript against ``multistep_plan.v2.md``; binary goal grading
     (sub_goals_total = 1).
     """
     case_id = "W11.B"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("multistep_plan")
+    rubric_text, rubric_version = load_rubric("multistep_plan", "v2")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
@@ -414,14 +462,14 @@ async def _case_w11_c_synthesis_from_mixed_sources(
     Structural floor: at least one distinctive marker from EACH source must
     surface in the response, otherwise the case FAILs regardless of the judge —
     a synthesis that drops a source can't quietly PASS. The judge then grades
-    structure + no-invented-detail against ``multistep_plan.v1.md``.
+    structure + no-invented-detail against ``multistep_plan.v2.md``.
 
     goal_fulfillment: sub_goals_total = 2 (the Helios context artifact + the
     prior sqlite decision); sub_goals_met = how many are demonstrably referenced.
     """
     case_id = "W11.C"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("multistep_plan")
+    rubric_text, rubric_version = load_rubric("multistep_plan", "v2")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
