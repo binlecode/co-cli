@@ -4,6 +4,8 @@ Approval-gated subprocess with env-sanitized execution.
 """
 
 import asyncio
+import os
+import pty
 
 from co_cli.tools.shell_env import build_subprocess_env, kill_process_tree
 
@@ -22,6 +24,7 @@ class ShellBackend:
         timeout: int = 120,
         cwd: str | None = None,
         extra_env: dict[str, str] | None = None,
+        pty: bool = False,
     ) -> tuple[int, str]:
         """Execute a command as a subprocess with sanitized environment.
 
@@ -33,7 +36,14 @@ class ShellBackend:
         allowlist (PATH, HOME, etc.) are refused to keep the security
         boundary intact — a model-authored skill must not be able to
         redirect PATH or HOME.
+
+        When ``pty=True`` the child's std fds are wired to a pseudo-terminal
+        slave, so ``isatty()`` reports True and programs emit ANSI / line-buffer
+        as on a real terminal. Output fidelity only — there is no stdin channel,
+        so it does not interactively drive a program. Raw ANSI is preserved.
         """
+        if pty:
+            return await self._run_command_pty(cmd, timeout, cwd, extra_env)
         env = build_subprocess_env(extra_env=extra_env)
         proc = await asyncio.create_subprocess_exec(
             "sh",
@@ -62,6 +72,77 @@ class ShellBackend:
                 msg += f"\nPartial output:\n{partial_str}"
             raise RuntimeError(msg) from None
         decoded = stdout.decode("utf-8")
+        return proc.returncode, decoded or "(no output)"
+
+    async def _run_command_pty(
+        self,
+        cmd: str,
+        timeout: int,
+        cwd: str | None,
+        extra_env: dict[str, str] | None,
+    ) -> tuple[int, str]:
+        """PTY-backed variant of run_command — output fidelity, no stdin drive.
+
+        The child's std fds are the pty slave, so ``proc.stdout`` is None and
+        ``communicate()`` is unusable. The raw master fd is drained via
+        ``loop.add_reader`` into a buffer; an EOF event bounds the drain under
+        ``asyncio.wait_for``. Raw ANSI is preserved (not stripped).
+        """
+        env = build_subprocess_env(extra_env=extra_env)
+        master, slave = pty.openpty()
+        # master is closed in the outer finally on every path; slave is closed
+        # the instant the spawn returns or raises. A spawn failure (e.g. a
+        # non-existent cwd) would otherwise leak both fds, which the non-pty
+        # path cannot do since it pre-opens nothing.
+        try:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "sh",
+                    "-c",
+                    cmd,
+                    cwd=cwd,
+                    env=env,
+                    start_new_session=True,
+                    stdin=slave,
+                    stdout=slave,
+                    stderr=slave,
+                )
+            finally:
+                os.close(slave)
+            loop = asyncio.get_running_loop()
+            buffer = bytearray()
+            eof = asyncio.Event()
+
+            def _on_readable() -> None:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    # macOS (Darwin) raises OSError(EIO) on a master read after
+                    # the child exits; Linux returns b"". Both mean clean EOF.
+                    eof.set()
+                    return
+                if not chunk:
+                    eof.set()
+                    return
+                buffer.extend(chunk)
+
+            loop.add_reader(master, _on_readable)
+            try:
+                try:
+                    await asyncio.wait_for(eof.wait(), timeout=timeout)
+                except TimeoutError:
+                    await kill_process_tree(proc)
+                    partial_str = bytes(buffer).decode("utf-8", errors="replace").strip()
+                    msg = f"Command timed out after {timeout}s: {cmd}"
+                    if partial_str:
+                        msg += f"\nPartial output:\n{partial_str}"
+                    raise RuntimeError(msg) from None
+                await proc.wait()
+            finally:
+                loop.remove_reader(master)
+        finally:
+            os.close(master)
+        decoded = bytes(buffer).decode("utf-8", errors="replace")
         return proc.returncode, decoded or "(no output)"
 
     def cleanup(self) -> None:

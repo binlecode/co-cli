@@ -45,6 +45,10 @@ class BackgroundTaskState:
     _monitor_task: asyncio.Task | None = field(default=None, repr=False)
 
 
+class TaskInputError(RuntimeError):
+    """Raised when writing to a task's stdin fails — task not running or pipe closed."""
+
+
 def make_task_id() -> str:
     return uuid.uuid4().hex[:12]
 
@@ -77,6 +81,7 @@ async def spawn_task(
         logs_dir.mkdir(parents=True, exist_ok=True)
         proc = await asyncio.create_subprocess_shell(
             state.command,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=state.cwd,
@@ -119,6 +124,34 @@ async def _monitor(task_id: str, session: CoSessionState) -> None:
     state.process = None
 
 
+async def write_to_task(state: BackgroundTaskState, data: str, newline: bool) -> None:
+    """Write UTF-8 text to a running task's stdin and drain.
+
+    Both the buffered write and the drain are wrapped in one try because a
+    BrokenPipe surfaces on drain (the write only buffers), not on the write
+    call. Raises TaskInputError when the task is not running or its stdin has
+    been closed by the child (EOF / exit).
+    """
+    proc = state.process
+    if state.status != "running" or proc is None or proc.stdin is None:
+        raise TaskInputError(f"task {state.task_id} is not running — cannot write to stdin")
+    payload = (data + "\n") if newline else data
+    try:
+        proc.stdin.write(payload.encode())
+        await proc.stdin.drain()
+    except (BrokenPipeError, ConnectionResetError) as e:
+        raise TaskInputError(
+            f"task {state.task_id} is no longer accepting input (stdin closed)"
+        ) from e
+
+
+async def close_task_stdin(state: BackgroundTaskState) -> None:
+    """Close a task's stdin to signal EOF. No-op if already closed or no process."""
+    proc = state.process
+    if proc is not None and proc.stdin is not None and not proc.stdin.is_closing():
+        proc.stdin.close()
+
+
 def tail_log(path: Path | None, n: int) -> list[str]:
     """Return the last n lines of a log file, or [] if path is None or missing.
 
@@ -159,6 +192,15 @@ async def kill_task(state: BackgroundTaskState) -> None:
     proc: asyncio.subprocess.Process | None = None
     if state.process is not None:
         proc = state.process
+        # Defensive: close stdin (EOF) before the kill so a child blocked on a
+        # read of its never-closed input pipe can unwind. Cosmetic — the
+        # process-group teardown below is what guarantees death, so a BrokenPipe
+        # here must never abort the kill path.
+        if proc.stdin is not None and not proc.stdin.is_closing():
+            try:
+                proc.stdin.close()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         # kill_process_tree handles the process group so shell children do not
         # outlive the tracked background task.
         await kill_process_tree(proc)

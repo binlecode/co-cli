@@ -32,10 +32,19 @@ from co_cli.personality.prompts.loader import load_soul_critique
 # session_view, skill_edit, skill_patch flipped ALWAYS → DEFERRED, dropping the bucket
 # 20,581 → 17,224. Re-pinned with ~400-char headroom. (Prior: 20,581 after tool-view-load-by-name;
 # 19,800 after defer-skill-write-tools; 20,988 pre-defer; 22,589 pre-trim.)
+# 2026-06-13: interactive-terminal plan added shell_exec's `pty` param → bucket 17,224 → 17,674.
+# Ceiling held at 17,700 (still passes, headroom now ~26) — the principled cap is deliberately NOT
+# loosened for a single param; the next ALWAYS growth must defer something or re-pin consciously.
 ALWAYS_BUCKET_CEILING = 17_700
-# Measured max ALWAYS tool: file_search = 2,111 chars (child 3's, already trimmed),
-# shell_exec = 1,966 (untouched canonical routing home). +headroom.
-PER_ALWAYS_TOOL_CEILING = 2_300
+# Per-tool tripwire against UNINTENDED docstring bloat — pinned just above the
+# largest ALWAYS tool, not a first-principle budget (the principled cap is the
+# cumulative ALWAYS_BUCKET_CEILING: every ALWAYS schema ships in every turn's
+# uncompactable prefix). Re-pin on an INTENTIONAL surface change, per this file's
+# header. Measured max ALWAYS tool: shell_exec = 2,420 chars after the interactive-
+# terminal plan added the `pty` param + a task_write-loop pointer (was 1,966 — the
+# `pty` param is a permanent, non-deferrable cost of a real capability on an ALWAYS
+# tool; its pre-existing routing/diagnosis guidance was kept intact). +headroom.
+PER_ALWAYS_TOOL_CEILING = 2_500
 # Registry is 35 (native; 5 of them DEFERRED Google tools). Floor is a drop guard,
 # deliberately well below current — not a pin of the exact count.
 MIN_TOOL_COUNT = 27

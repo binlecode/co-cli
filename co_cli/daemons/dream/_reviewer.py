@@ -38,12 +38,34 @@ logger = logging.getLogger(__name__)
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
-def _memory_review_instructions(_deps: CoDeps) -> str:
-    return (_PROMPTS_DIR / "memory_review.md").read_text(encoding="utf-8")
+def _with_curation_lens(base: str, deps: CoDeps) -> str:
+    """Append the active soul's curation lens to a review prompt.
+
+    The lens scopes the character's retention judgment (what counts as durable
+    signal, how aggressively to merge) into curation — without importing voice
+    or the full personality prompt. Gated on deps.config.personality, mirroring
+    the orchestrator's critique gate; degrades to the bare base prompt when
+    personality is disabled or the role ships no curation.md.
+    """
+    role = deps.config.personality
+    if not role:
+        return base
+    from co_cli.personality.prompts.loader import load_soul_curation
+
+    lens = load_soul_curation(role)
+    if not lens:
+        return base
+    return f"{base}\n\n{lens}"
 
 
-def _skill_review_instructions(_deps: CoDeps) -> str:
-    return (_PROMPTS_DIR / "skill_review.md").read_text(encoding="utf-8")
+def _memory_review_instructions(deps: CoDeps) -> str:
+    base = (_PROMPTS_DIR / "memory_review.md").read_text(encoding="utf-8")
+    return _with_curation_lens(base, deps)
+
+
+def _skill_review_instructions(deps: CoDeps) -> str:
+    base = (_PROMPTS_DIR / "skill_review.md").read_text(encoding="utf-8")
+    return _with_curation_lens(base, deps)
 
 
 MEMORY_REVIEW_SPEC = TaskAgentSpec(

@@ -47,9 +47,11 @@ from co_cli.tools.system.tool_view import tool_view  # noqa: F401
 from co_cli.tools.system.user_input import clarify  # noqa: F401
 from co_cli.tools.tasks.control import (  # noqa: F401
     task_cancel,
+    task_close,
     task_list,
     task_start,
     task_status,
+    task_write,
 )
 from co_cli.tools.todo.rw import todo_read, todo_write  # noqa: F401
 from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST, make_exceeded_payload

@@ -16,7 +16,11 @@ logger = logging.getLogger(__name__)
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
 async def shell_exec(
-    ctx: RunContext[CoDeps], cmd: str, timeout: int = 120, work_dir: str | None = None
+    ctx: RunContext[CoDeps],
+    cmd: str,
+    timeout: int = 120,
+    work_dir: str | None = None,
+    pty: bool = False,
 ) -> ToolReturn:
     """Execute a shell command and return combined stdout + stderr as text.
 
@@ -37,9 +41,9 @@ async def shell_exec(
     blocked. Safe-prefix commands execute directly. All others require user
     approval.
 
-    No interactive input — commands that prompt for stdin will hang and timeout.
-    Long-running commands are killed after timeout seconds (capped by
-    shell_max_timeout).
+    No interactive stdin — a prompting command hangs until timeout; for prompts,
+    launch via task_start and use the task_write loop. Long-running commands are
+    killed after timeout seconds (capped by shell_max_timeout).
 
     On failure, the tool returns the exit code and combined output as a tool
     result — read it to diagnose the failure (wrong flags, missing binary,
@@ -56,6 +60,8 @@ async def shell_exec(
         work_dir: Optional subdirectory (relative to workspace root) to run the
                  command in. Default None = the workspace root. Prevents
                  directory traversal.
+        pty: Run under a pseudo-terminal for output fidelity only (isatty,
+             ANSI colors) — not interactive drive; raw ANSI preserved.
     """
     # Policy check: DENY → error, ALLOW → execute, REQUIRE_APPROVAL → defer for user approval
     policy = evaluate_shell_command(cmd, ctx.deps.config.shell.safe_commands)
@@ -88,7 +94,7 @@ async def shell_exec(
     skill_env = ctx.deps.runtime.active_skill_env or None
     try:
         exit_code, output = await ctx.deps.shell.run_command(
-            cmd, timeout=effective, cwd=resolved_cwd, extra_env=skill_env
+            cmd, timeout=effective, cwd=resolved_cwd, extra_env=skill_env, pty=pty
         )
         if exit_code == 0:
             return tool_output(output, ctx=ctx)

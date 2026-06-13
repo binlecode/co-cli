@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.352]
+
+### Feature: interactive terminal — `shell_exec(pty=True)` + `task_write`/`task_close` stdin drive; dream curation lens
+
+- **Interactive command-line capability (`toolgap-interactive-terminal`).** Two deliberately-separated surfaces: output *fidelity* on the one-shot path, input *drive* on the background path.
+  - `shell_exec(pty=True)`: runs the one-shot command under a stdlib `pty.openpty()` pseudo-terminal so the child sees a TTY (`isatty()` true, ANSI colors, line-buffering). Stays blocking/one-shot — same timeout, `work_dir`, policy gate, `kill_process_tree`-on-timeout. No stdin channel; raw ANSI preserved; never interactive drive. `pty=False` (default) is the unchanged `proc.communicate()` path. Stdlib only — no `ptyprocess`/`pywinpty`; master-fd read treats Linux `b""` and macOS `OSError`/EIO alike as clean EOF, and both pty fds close on every path (incl. spawn failure).
+  - `task_write(task_id, input, newline=True)` / `task_close(task_id)`: `task_start` now spawns with `stdin=PIPE`; `task_write` answers a running task's prompt (newline = submit), `task_close` signals EOF. Both DEFERRED (ALWAYS floor unchanged). Writing to a finished task or closed pipe surfaces a clean `tool_error` (`TaskInputError`). Approval gate stays at `task_start` (the command), not per-write.
+  - `/write <id> <input>` slash command — human symmetry with `/background`; first token is the task id, remainder passed to stdin verbatim (never `shlex`-split).
+  - Docstrings steer the model to prefer a non-interactive flag (`--yes`, `--no-input`, `gh auth login --with-token`, `git ... --no-edit`) first and reach for the write loop only when none exists. `PER_ALWAYS_TOOL_CEILING` re-pinned 2300→2500 for the `pty` param (bucket held at 17,700).
+- **Dream curation lens.** The active soul's `souls/{role}/curation.md` is now appended to the dream daemon's memory/skill review prompts via `load_soul_curation`, scoping retention judgment (durable-signal threshold, merge disposition) into curation without importing voice. Gated on `deps.config.personality`, degrades to the bare base prompt when absent. Ships curation lenses for `finch`, `jeff`, `tars`.
+
 ## [0.8.350]
 
 ### Refactor: agentic-loop eval realignment to first principles (W11/W12 → v2 rubrics)

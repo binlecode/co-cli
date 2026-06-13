@@ -67,6 +67,7 @@ souls/{role}/
   seed.md          # required — identity anchor
   examples.md      # optional — trigger→response patterns
   critique.md      # optional — self-assessment lens
+  curation.md      # optional — retention lens for the dream daemon (not the orchestrator)
   memories/        # optional — *.md narrative backstory files
   mindsets/        # strongly expected — task-type behavior files:
     technical.md
@@ -80,6 +81,14 @@ souls/{role}/
 All files use YAML frontmatter + markdown body. Character memory files support frontmatter
 parsed by `parse_frontmatter()`. `_profiles/{role}.md` files document character narrative
 for human reference — they are not loaded into the agent.
+
+`curation.md` is a third injection path, distinct from both static priming and canon: it is
+not part of the orchestrator's static prompt and never reaches an interactive turn. The dream
+daemon's domain reviewers append it to their review instructions (`load_soul_curation`), so the
+active character's retention judgment — what counts as durable signal, how aggressively to
+merge — scopes memory and skill curation. It is deliberately voice-free: the dreamer has no
+audience, so the lens carries threshold and disposition, not tone. Absent file or disabled
+personality falls back to the bare review prompt.
 
 ### Static Prompt Assembly
 
@@ -114,6 +123,11 @@ block; they are emitted by per-turn `agent.instructions()` callbacks
 Character canon (`memories/*.md`) is NOT included in the static prompt. It is indexed at
 bootstrap into the shared FTS index under `source='canon'` for personality-system use
 only — there is no model-callable read path. See §2.5 below.
+
+The curation lens (`curation.md`) is NOT included in the static prompt either. It is loaded
+only by the dream daemon's reviewers (`load_soul_curation`), never by `build_orchestrator`,
+so it shapes background curation but never the interactive agent's behavior. See the Soul
+File Layout note above.
 
 **Placement rationale:** Soul seed is first because early context has the strongest influence
 on the model's operating space. Review lens is last so it frames all operational guidance
@@ -186,6 +200,7 @@ for missing mindset files.
 | `load_soul_seed(role) -> str` | `co_cli/personality/prompts/loader.py` | Returns the role's `seed.md` body; required for every personality |
 | `load_soul_mindsets(role) -> str` | `co_cli/personality/prompts/loader.py` | Returns joined `## Mindsets` block from `mindsets/*.md`; empty string when no mindsets |
 | `load_soul_critique(role) -> str` | `co_cli/personality/prompts/loader.py` | Returns optional `## Review lens` body; empty string when no `critique.md` |
+| `load_soul_curation(role) -> str` | `co_cli/personality/prompts/loader.py` | Returns optional `## Curation Lens` body for the dream daemon; empty string when no `curation.md` |
 
 ### Personality discovery and validation
 

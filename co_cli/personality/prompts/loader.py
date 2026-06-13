@@ -7,6 +7,10 @@ Personality is assembled from these sources in this order:
 - ``souls/{role}/mindsets/{task_type}.md``     — task-specific behavioral guidance (static)
 - ``rules/01..05_*.md``                       — behavioral rules (assembled by build_base_instructions)
 
+The optional ``souls/{role}/curation.md`` is loaded separately by the dream
+daemon (not the orchestrator) — it scopes the active character's retention
+judgment into the memory/skill reviewers. See ``load_soul_curation``.
+
 Canon scenes (``souls/{role}/canon/*.md``) are NOT loaded here. They are
 indexed at bootstrap into the shared FTS pipeline under source='canon' and
 surfaced via personality auto-injection (never returned by any model-callable tool).
@@ -18,6 +22,7 @@ Callers:
   co_cli.context.assembly  — uses load_soul_seed, load_soul_mindsets inside
                              build_base_instructions(), called by ORCHESTRATOR_SPEC
   co_cli.agent.orchestrator — uses load_soul_critique to append critique after toolset guidance
+  co_cli.daemons.dream._reviewer — uses load_soul_curation to scope the review prompts
 """
 
 from pathlib import Path
@@ -66,6 +71,28 @@ def load_soul_critique(role: str) -> str:
     if not critique_file.exists():
         return ""
     return critique_file.read_text(encoding="utf-8").strip()
+
+
+def load_soul_curation(role: str) -> str:
+    """Load the optional curation lens for a role.
+
+    The curation lens is the character's threshold for durable signal and its
+    merge/precision disposition — scoped to retention judgment, deliberately
+    free of voice. It is NOT part of the orchestrator's static prompt; the dream
+    daemon's domain reviewers append it to their review instructions so memory
+    and skill curation reflect the active character's sense of what is worth
+    keeping (see ``co_cli/daemons/dream/_reviewer.py``).
+
+    Args:
+        role: Personality role name (e.g., "finch", "jeff").
+
+    Returns:
+        Curation text from ``souls/{role}/curation.md``, or empty string if absent.
+    """
+    curation_file = _SOULS_DIR / role / "curation.md"
+    if not curation_file.exists():
+        return ""
+    return curation_file.read_text(encoding="utf-8").strip()
 
 
 def load_soul_mindsets(role: str) -> str:

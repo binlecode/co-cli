@@ -19,11 +19,14 @@ from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.background import (
     BackgroundCleanupError,
     BackgroundTaskState,
+    TaskInputError,
     TaskStatus,
+    close_task_stdin,
     kill_task,
     make_task_id,
     spawn_task,
     tail_log,
+    write_to_task,
 )
 from co_cli.tools.files.fs_guards import enforce_write_boundary
 from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
@@ -50,9 +53,11 @@ async def task_start(
     command's output — background tasks add overhead and delay for short commands.
 
     The command runs in a subprocess with stdout+stderr streamed to a per-task
-    log file under ~/.co-cli/logs/ for the duration of the session. No
-    interactive input is possible — commands that prompt for stdin will stall;
-    always use foreground execution for interactive commands.
+    log file under ~/.co-cli/logs/ for the duration of the session. A task that
+    prompts for stdin can be answered: prefer a non-interactive flag first
+    (`--yes`/`-y`, `--no-input`, `gh auth login --with-token`, `git ...
+    --no-edit`), but when none exists, drive the prompt with the task_write loop
+    (task_write to answer, task_status to read the response, task_close for EOF).
 
     Args:
         command: Shell command to run (e.g. "uv run pytest", "grep -r foo src/").
@@ -257,3 +262,82 @@ async def task_list(
         display = "\n".join(lines)
 
     return tool_output(display, ctx=ctx, tasks=rows, count=len(rows))
+
+
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
+async def task_write(
+    ctx: RunContext[CoDeps],
+    task_id: str,
+    input: str,
+    newline: bool = True,
+) -> ToolReturn:
+    """Write a line to a running background task's stdin to answer a prompt.
+
+    Use this only for genuinely interactive programs — a REPL, a `Continue?
+    [y/N]` confirmation, an `input()` prompt — where no non-interactive flag
+    exists. Always prefer a non-interactive flag first (`--yes`/`-y`,
+    `--no-input`, `gh auth login --with-token`, `git ... --no-edit`); reach for
+    this write loop only when the program offers no such escape.
+
+    The loop is manual and you drive it: task_start → task_status (read the
+    prompt) → task_write (answer) → task_status (read the response) → … . The
+    child's output is drained asynchronously, so its response is NOT guaranteed
+    to be in the log the instant this returns — poll task_status until new
+    output appears before deciding the next write. There is no synchronous
+    request-response wait.
+
+    Security: the approval gate is at task_start (the command), not on each
+    write — driving an already-approved interactive process via stdin can reach
+    execution the launch approval did not explicitly enumerate (e.g. typing code
+    into an approved `python` REPL). This is accepted because the risk is bounded
+    by what task_start already permits.
+
+    Args:
+        task_id: The task ID returned by task_start.
+        input: Verbatim UTF-8 text to write to stdin (sent exactly as given).
+        newline: Append a trailing newline (default True) — the "submit" case
+                 that most line-reading prompts expect. Set False to write a
+                 partial line without submitting.
+    """
+    state = ctx.deps.session.background_tasks.get(task_id)
+    if state is None:
+        return tool_error(f"Task not found: {task_id}", ctx=ctx)
+    try:
+        await write_to_task(state, input, newline)
+    except TaskInputError as e:
+        return tool_error(str(e), ctx=ctx)
+    return tool_output(
+        f"Wrote to task {task_id}. Poll task_status to read the response.",
+        ctx=ctx,
+        task_id=task_id,
+        status=state.status,
+    )
+
+
+@agent_tool(visibility=VisibilityPolicyEnum.DEFERRED, is_concurrent_safe=True)
+async def task_close(
+    ctx: RunContext[CoDeps],
+    task_id: str,
+) -> ToolReturn:
+    """Close a running background task's stdin to signal end-of-input (EOF).
+
+    Use when a program reads all of stdin before producing output (e.g. a
+    filter waiting on EOF) or when an interactive session is finished and should
+    be allowed to exit cleanly rather than cancelled. After this, no further
+    task_write is possible — the input channel is closed.
+
+    Args:
+        task_id: The task ID returned by task_start.
+    """
+    state = ctx.deps.session.background_tasks.get(task_id)
+    if state is None:
+        return tool_error(f"Task not found: {task_id}", ctx=ctx)
+    if state.status != "running":
+        return tool_error(f"task {task_id} is not running — nothing to close", ctx=ctx)
+    await close_task_stdin(state)
+    return tool_output(
+        f"Closed stdin for task {task_id} (EOF).",
+        ctx=ctx,
+        task_id=task_id,
+        status=state.status,
+    )

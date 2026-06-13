@@ -20,17 +20,30 @@ from tests._timeouts import (
     BG_TASK_TEARDOWN_TIMEOUT_SECS,
 )
 
+from co_cli.commands.core import dispatch
+from co_cli.commands.types import CommandContext
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.display.headless import HeadlessFrontend
 from co_cli.tools.background import (
     BackgroundTaskState,
+    TaskInputError,
+    close_task_stdin,
     kill_task,
     make_task_id,
     spawn_task,
     tail_log,
+    write_to_task,
 )
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.shell_env import SAFE_ENV_VARS, build_subprocess_env
-from co_cli.tools.tasks.control import task_cancel, task_list, task_start, task_status
+from co_cli.tools.tasks.control import (
+    task_cancel,
+    task_close,
+    task_list,
+    task_start,
+    task_status,
+    task_write,
+)
 
 
 def _make_task_ctx(tmp_path: Path) -> RunContext[CoDeps]:
@@ -41,6 +54,19 @@ def _make_task_ctx(tmp_path: Path) -> RunContext[CoDeps]:
         tool_results_dir=tmp_path / "tool-results",
     )
     return RunContext(deps=deps, model=None, usage=RunUsage(), tool_name="task_start")
+
+
+def _make_tool_deps(tmp_path: Path) -> CoDeps:
+    return CoDeps(
+        shell=ShellBackend(),
+        config=SETTINGS,
+        workspace_dir=tmp_path,
+        tool_results_dir=tmp_path / "tool-results",
+    )
+
+
+def _tool_ctx(deps: CoDeps, tool_name: str) -> RunContext[CoDeps]:
+    return RunContext(deps=deps, model=None, usage=RunUsage(), tool_name=tool_name)
 
 
 def _is_error(result) -> bool:
@@ -156,6 +182,188 @@ async def test_spawn_failure_sets_spawn_error_and_no_log_file(tmp_path: Path) ->
     assert "spawn failed" in state.spawn_error
     assert state.log_path is None
     assert not logs_dir.exists() or not any(logs_dir.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# write_to_task / close_task_stdin — interactive stdin drive (Phase 2 helpers)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_write_to_task_drives_stdin_reading_command(tmp_path: Path) -> None:
+    """A stdin-reading command advances when fed input via write_to_task."""
+    logs_dir = tmp_path / "logs"
+    session = CoSessionState()
+    task_id = make_task_id()
+    state = _make_state(
+        task_id,
+        "python3 -u -c \"print('got:', input())\"",
+        str(tmp_path),
+    )
+    session.background_tasks[task_id] = state
+
+    await spawn_task(state, session, logs_dir=logs_dir)
+    await write_to_task(state, "hello-stdin", newline=True)
+
+    assert state._monitor_task is not None
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+        await state._monitor_task
+
+    assert state.status == "completed"
+    assert state.exit_code == 0
+    contents = state.log_path.read_text().splitlines()
+    assert contents == ["got: hello-stdin"]
+
+
+@pytest.mark.asyncio
+async def test_close_task_stdin_lets_eof_reader_complete(tmp_path: Path) -> None:
+    """Closing stdin signals EOF so a stdin-draining reader exits cleanly."""
+    logs_dir = tmp_path / "logs"
+    session = CoSessionState()
+    task_id = make_task_id()
+    state = _make_state(
+        task_id,
+        "python3 -u -c \"import sys; data = sys.stdin.read(); print('read', len(data), 'bytes')\"",
+        str(tmp_path),
+    )
+    session.background_tasks[task_id] = state
+
+    await spawn_task(state, session, logs_dir=logs_dir)
+    await write_to_task(state, "abc", newline=False)
+    await close_task_stdin(state)
+
+    assert state._monitor_task is not None
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+        await state._monitor_task
+
+    assert state.status == "completed"
+    assert state.exit_code == 0
+    assert state.log_path.read_text().splitlines() == ["read 3 bytes"]
+
+
+@pytest.mark.asyncio
+async def test_write_to_completed_task_raises_typed_error(tmp_path: Path) -> None:
+    """Writing to a finished task raises TaskInputError, not a crash."""
+    logs_dir = tmp_path / "logs"
+    session = CoSessionState()
+    task_id = make_task_id()
+    state = _make_state(task_id, "echo done", str(tmp_path))
+    session.background_tasks[task_id] = state
+
+    await spawn_task(state, session, logs_dir=logs_dir)
+    assert state._monitor_task is not None
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+        await state._monitor_task
+    assert state.status == "completed"
+
+    with pytest.raises(TaskInputError):
+        await write_to_task(state, "too late", newline=True)
+
+
+# ---------------------------------------------------------------------------
+# task_write / task_close tools + /write command (Phase 2 tool surface)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_task_write_advances_interactive_prompt(tmp_path: Path) -> None:
+    """task_write answers a [y/N] prompt; task_status then shows the post-prompt output."""
+    deps = _make_tool_deps(tmp_path)
+    cmd = "python3 -u -c \"ans = input('Continue? [y/N] '); print('answer:', ans)\""
+    start = await task_start(_tool_ctx(deps, "task_start"), command=cmd, description="prompt")
+    assert not _is_error(start)
+    task_id = start.metadata["task_id"]
+    state = deps.session.background_tasks[task_id]
+
+    write = await task_write(_tool_ctx(deps, "task_write"), task_id=task_id, input="y")
+    assert not _is_error(write)
+
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+        await state._monitor_task
+
+    status = await task_status(_tool_ctx(deps, "task_status"), task_id=task_id)
+    output_lines = status.metadata.get("output_lines", [])
+    assert any("answer: y" in line for line in output_lines)
+
+
+@pytest.mark.asyncio
+async def test_task_close_lets_eof_reader_exit(tmp_path: Path) -> None:
+    """task_close signals EOF so a stdin-draining reader completes with exit 0."""
+    deps = _make_tool_deps(tmp_path)
+    cmd = "python3 -u -c \"import sys; d = sys.stdin.read(); print('read', len(d))\""
+    start = await task_start(_tool_ctx(deps, "task_start"), command=cmd, description="eof")
+    task_id = start.metadata["task_id"]
+    state = deps.session.background_tasks[task_id]
+
+    await task_write(_tool_ctx(deps, "task_write"), task_id=task_id, input="abcde", newline=False)
+    close = await task_close(_tool_ctx(deps, "task_close"), task_id=task_id)
+    assert not _is_error(close)
+
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+        await state._monitor_task
+
+    assert state.status == "completed"
+    assert state.exit_code == 0
+    assert state.log_path.read_text().splitlines() == ["read 5"]
+
+
+@pytest.mark.asyncio
+async def test_task_write_and_close_clean_error_on_not_found(tmp_path: Path) -> None:
+    """Both tools return a clean tool_error for an unknown task id, not a crash."""
+    deps = _make_tool_deps(tmp_path)
+    write = await task_write(_tool_ctx(deps, "task_write"), task_id="nope-xyz", input="x")
+    close = await task_close(_tool_ctx(deps, "task_close"), task_id="nope-xyz")
+    assert _is_error(write)
+    assert _is_error(close)
+
+
+@pytest.mark.asyncio
+async def test_write_after_reader_exits_is_clean_error(tmp_path: Path) -> None:
+    """Writing (or closing) after the reader has exited yields a clean tool_error.
+
+    The reader consumes one line and exits; once it is gone the task is no longer
+    running, so a further write/close surfaces as tool_error rather than raising.
+    """
+    deps = _make_tool_deps(tmp_path)
+    cmd = "python3 -u -c \"input(); print('done')\""
+    start = await task_start(_tool_ctx(deps, "task_start"), command=cmd, description="oneshot")
+    task_id = start.metadata["task_id"]
+    state = deps.session.background_tasks[task_id]
+
+    first = await task_write(_tool_ctx(deps, "task_write"), task_id=task_id, input="y")
+    assert not _is_error(first)
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+        await state._monitor_task
+    assert state.status == "completed"
+
+    again = await task_write(_tool_ctx(deps, "task_write"), task_id=task_id, input="more")
+    closed = await task_close(_tool_ctx(deps, "task_close"), task_id=task_id)
+    assert _is_error(again)
+    assert _is_error(closed)
+
+
+@pytest.mark.asyncio
+async def test_write_slash_command_passes_input_verbatim(tmp_path: Path) -> None:
+    """/write <id> <input> sends the remainder of the line verbatim (spaces preserved)."""
+    deps = _make_tool_deps(tmp_path)
+    logs_dir = tmp_path / "logs"
+    task_id = make_task_id()
+    state = _make_state(task_id, "python3 -u -c \"print('echo:', input())\"", str(tmp_path))
+    deps.session.background_tasks[task_id] = state
+    await spawn_task(state, deps.session, logs_dir=logs_dir)
+
+    ctx = CommandContext(
+        message_history=[],
+        deps=deps,
+        agent=None,  # type: ignore[arg-type]
+        frontend=HeadlessFrontend(),
+    )
+    await dispatch(f"/write {task_id} hello   world", ctx)
+
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+        await state._monitor_task
+
+    assert state.log_path.read_text().splitlines() == ["echo: hello   world"]
 
 
 # ---------------------------------------------------------------------------

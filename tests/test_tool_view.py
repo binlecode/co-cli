@@ -152,6 +152,30 @@ async def test_deferred_tool_hidden_until_loaded_by_name(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_task_write_and_close_are_deferred(tmp_path) -> None:
+    """task_write/task_close are hidden until tool_view reveals them.
+
+    The ALWAYS floor (tool_view, shell_exec) stays visible with no reveal, proving
+    the two new interactive-drive tools join the DEFERRED tier and do not widen the
+    always-present prefill.
+    """
+    native_toolset, tool_catalog = build_native_toolset()
+    toolset = assemble_routing_toolset(native_toolset, [])
+    deps = _make_deps(tmp_path, tool_catalog)
+    ctx = _ctx(deps)
+
+    before = await _visible_tool_names(toolset, ctx)
+    assert "tool_view" in before
+    assert "shell_exec" in before
+    assert "task_write" not in before
+    assert "task_close" not in before
+
+    deps.runtime.revealed_tools.update({"task_write", "task_close"})
+    after = await _visible_tool_names(toolset, ctx)
+    assert {"task_write", "task_close"} <= after
+
+
+@pytest.mark.asyncio
 async def test_visibility_independent_of_message_history(tmp_path) -> None:
     """Reveal state lives in runtime, not history — so it survives compaction.
 

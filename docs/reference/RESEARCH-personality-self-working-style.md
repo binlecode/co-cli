@@ -1,5 +1,4 @@
 # RESEARCH: self-model and working-style quality
-_Date: 2026-05-27 (co v0.8.258)_
 
 Handoff-quality design review for a TL and implementation team — gap framing, target
 architecture, and phased goals. Not a TODO breakdown.
@@ -17,7 +16,7 @@ Thesis:
 
 ---
 
-# 1. Current co Shape (v0.8.258)
+# 1. Current co Shape
 
 The base abstraction is already right: one instance, one selected role, one working relationship.
 A future team setting is separate `finch` / `jeff` / `tars` instances, each with its own self
@@ -31,33 +30,40 @@ model and memory — teamwork between instances, not inside one blended prompt.
 **Soul assets** — `co_cli/personality/prompts/souls/{role}/`:
 - `seed.md` — identity anchor (required)
 - `mindsets/*.md` — six task-shape files (`technical`, `exploration`, `debugging`, `teaching`,
-  `emotional`, `memory`); all required, validated non-blocking in `prompts/validator.py`
-- `critique.md` — review lens (optional)
+  `emotional`, `memory`); validated non-blocking in `prompts/validator.py`
+- `critique.md` — review lens (optional); injected by the orchestrator
+- `curation.md` — retention/merge disposition (optional); loaded by the dream daemon, not the orchestrator
 - `canon/*.md` — character base: decay-protected scenes, speech patterns, behavioral observations
 
 **Loaders** — `co_cli/personality/prompts/loader.py`: `load_soul_seed`, `load_soul_mindsets`,
-`load_soul_critique`. Called at agent construction, not per-turn.
+`load_soul_critique`, `load_soul_curation`. Seed and mindsets load at agent construction;
+critique and curation load lazily in their respective consumers.
 
-**Static assembly** — `co_cli/context/assembly.py` → `build_static_instructions(config)`,
-assembled once per session in strict order:
+**Static assembly** — `co_cli/context/assembly.py` → `build_base_instructions(config)`, one of
+three static-instruction builders the orchestrator joins into the cached prefix (alongside
+`_toolset_guidance_provider` and `_personality_critique_provider`). It assembles, in strict order:
 1. Soul seed
 2. Mindsets (all six joined into one block)
 3. Behavioral rules — numbered `01_identity` … `07_memory_protocol` (identity, safety, reasoning,
    tool_protocol, workflow, skill_protocol, memory_protocol)
 
-Canon and critique are **not** in this assembly.
+Canon, critique, and curation are **not** in this assembly.
 
-**Critique injection** — `co_cli/agent/orchestrator.py`: a static instruction provider loads
+**Critique injection** — `co_cli/agent/orchestrator.py`: `_personality_critique_provider` loads
 `critique.md` and appends it as a `## Review lens` section after operational guidance. Skipped if
 absent.
 
+**Curation injection** — `co_cli/daemons/dream/_reviewer.py`: `_with_curation_lens()` appends
+`curation.md` to the memory and skill review prompts, scoping the active character's retention
+judgment (what counts as durable signal, how aggressively to merge) into curation — deliberately
+free of voice. Skipped if personality is disabled or the role ships no `curation.md`.
+
 **Per-turn instructions** — only structural safety guardrails and ephemeral date/time grounding.
-**No per-turn style injection** exists; all personality content is in the static (cached) block.
+**No per-turn style injection** exists; all static personality content is in the cached block.
 
 **Canon** — indexed at bootstrap under `source='canon'` into the shared FTS5 index (BM25),
 alongside user memory. Recalled for personality auto-injection only; **never returned by any
-model-callable tool**. (There is no longer a bespoke `canon_recall.py` / `search_canon()` /
-token-overlap scorer — removed when canon merged into FTS5.)
+model-callable tool**.
 
 **User preferences** — `co_cli/memory/item.py`: `MemoryItem` with `MemoryKindEnum`
 (`USER`, `RULE`, `ARTICLE`, `NOTE`, `CANON`). Flat, domain-agnostic schema. User communication and
@@ -66,45 +72,81 @@ feedback style live as `USER`-kind items. No typed subtypes, scope, strength, or
 ## 1.2 Strengths
 
 - **Clear static identity anchor** — seed + mindsets + rules assembled with a defined order contract
-- **Layered asset separation** — identity, policy, task guidance, character memory in distinct
-  files with distinct load paths
+- **Layered asset separation** — identity, policy, task guidance, character memory, and retention
+  disposition in distinct files with distinct load paths
 - **Maintainer legibility** — behavior is plain markdown, not Python branches
 
 This beats systems that stuff "be helpful, concise, warm" into one prompt blob. But it remains a
 **prompt-composition system**, not yet a self-model system: the behavior contract is distributed
-across prose rather than represented as explicit dimensions with stable semantics.
+across prose rather than represented as explicit dimensions with stable semantics. None of the §4
+proposals are built — there is no `style.yaml`, `ResolvedStyle`, `resolve_working_style()`, typed
+preference schema, or `/style` command.
 
-> None of the proposals below have been built. There is no `style.yaml`, `ResolvedStyle`,
-> `resolve_working_style()`, typed preference schema, or `/style` command in the codebase.
+The one piece of §4 that has materialized in another form is the voice/behavior split (§4.4):
+`curation.md` is an explicit behavioral disposition kept deliberately free of voice, scoped to the
+dream daemon's curation domain. It is a precedent the broader split can follow, not the resolver.
 
 ## 1.3 Peer / frontier grounding
 
-Gaps below are cross-checked against the repo's `RESEARCH-personality-peer-survey.md` (opencode,
-codex, ElizaOS, SillyTavern, Soul.md + the Anthropic functional-emotions paper). Honest verdict:
+Cross-checked against the repo's `RESEARCH-personality-peer-survey.md` (opencode, codex, ElizaOS,
+SillyTavern, Soul.md, Letta/Mem0, the Anthropic functional-emotions paper). Honest verdict:
 
-- **Directly peer-backed:** §2.5 (precedence / conflict resolution). The peer survey's §7c.6 says co
+- **Directly peer-backed:** §2.5 (precedence / conflict resolution). The survey's §7c.6 says co
   "should formalize priority and conflict resolution rather than relying on implicit ordering."
-- **Directional only:** §2.2. SillyTavern's Character's Note (runtime depth injection), Soul.md
-  interaction-mode transitions, and ElizaOS per-medium `style` are more dynamic than co's static
-  load — but none has `risk_level`/`task_mode` runtime state, and the survey rates co's
-  mindset-per-task as the strongest role layer of all systems surveyed. co is ahead, not behind.
+- **Partly peer-backed:** §2.3 / §4.3 (typed preferences). Letta's `Block` schema
+  (`label` / `value` / `limit` / `description` / `read_only` / `metadata`) is a concrete peer
+  instance of typed, labeled, scope-bounded memory. Mem0 is flat text + optional metadata and does
+  **not** back the direction. So Letta supports it; the pair-as-a-whole does not.
+- **Directional only:** §2.2. SillyTavern's Character's Note (`charDepthPrompt` injected at a
+  configurable conversation depth), ElizaOS per-medium `style` arrays, and Soul.md's named modes
+  (transitions are implicit/contextual, not formally modeled) are lighter dynamic mechanisms — but
+  the survey rates co's mindset-per-task as the strongest role layer of all systems surveyed. co is
+  ahead, not behind.
 - **Frontier aspiration, not peer-demonstrated:** §2.1, §2.4, §2.6, §2.7. No surveyed peer has
-  tunable behavior dimensions, a self-governance loop, multi-instance identity isolation, or a
-  resolved-self-model inspection surface.
-- **Unsourced:** §2.3 (typed preferences). The "structured state beats prose / Letta–Mem0 typed
-  blocks" lesson has no independent memory peer survey in the repo backing it.
+  tunable behavior dimensions, a behavioral self-governance loop, multi-instance identity isolation,
+  or a resolved-self-model inspection surface.
 
 **Tension to hold honestly:** the survey's strongest empirical lesson is *context-over-command*
-("fewer rules, clearer anchors") and a warning that co's assembly may already be **over-specified**
-(§7c.6). The central proposal here — add a `style.yaml` schema + resolver — adds structure, which
-pushes against that evidence. The survey's own gap list is also largely *different* (emotion-aware
-safety monitoring, calm-as-invariant, personality-aware compaction, sycophancy↔harshness
-calibration, user-emotion modeling); it overlaps this doc on exactly one item (§2.5). Treat
-structuring as a hypothesis to validate with evals, not a settled win.
+("fewer rules, clearer anchors") plus a warning that co's assembly may already be **over-specified**
+(§7c.6). The central proposal here — a `style.yaml` schema + resolver — adds structure, which pushes
+against that evidence. Treat structuring as a hypothesis to validate with evals, not a settled win.
 
 ---
 
 # 2. Gap Analysis
+
+Gaps §2.1–§2.7 are additive — each names something co lacks and should build. §2.0 is the
+exception and the precondition: it is subtractive, and it is the gap the peer survey backs most
+strongly (§1.3, §7c.6: context-over-command). Read the rest through it.
+
+## 2.0 The static block is over-specified
+
+The cached static prompt for one role carries, every turn, regardless of task (word counts, `tars`):
+
+| Section | Words | Notes |
+|---|---|---|
+| seed | 357 | identity anchor — invariant |
+| six mindsets | 768 | joined, all always-on |
+| seven rules | 2,608 | `01_identity` 84, `02_safety` 142, `03_reasoning` 491, `04_tool_protocol` 511, `05_workflow` 371, `06_skill_protocol` 454, `07_memory_protocol` 555 |
+| critique | 28 | `## Review lens` |
+
+≈ **3,760 words / ~5k tokens**, assembled once and carried on every turn. Two structural wastes:
+
+- **Off-task mindsets.** Five of six mindsets (~640 words) never apply on a given turn but are
+  always present (§2.2).
+- **Always-on procedure.** The bulk is rules (2,608 words), dominated by *episodic* procedural
+  protocols — tool (511), skill (454), memory (555), reasoning (491) — not invariants. The memory
+  protocol is dead weight on a turn with no memory operation; the skill protocol is dead weight when
+  no skill is in play.
+
+Consequence: the prompt is **heavy and flat**. Heavy works against the one empirical lesson the
+survey confirms; flat means the model gets no signal about which of ~3,700 words matter this turn.
+And it compounds the doc's central tension — bolting a style schema (§4.1) and resolver (§4.2) onto
+an already-over-weight block makes the wrong direction worse unless the block is thinned first.
+
+Caveat: "shorter prompt" is not the goal — *removing content that doesn't change behavior* is. Some
+of those 2,600 rule-words are load-bearing. The gap is that nothing today distinguishes load-bearing
+from inertial, and there is no measurement to tell them apart.
 
 ## 2.1 Self model is mostly implicit
 
@@ -126,13 +168,12 @@ block (`load_soul_mindsets`). Each is a clearly labeled subsection (`## Debuggin
 …), so the model self-selects which applies — there is no system-level gating, no runtime concept
 like `task_mode=debugging`, `risk_level=elevated`, or `response_contract=brief_direct`.
 
-The selection is not even nudged at the prompt level. The mindsets block ships with no preamble:
-`load_soul_mindsets` emits `## Mindsets` followed by the six joined files and nothing else. No rule
-instructs a classify-then-focus step — `03_reasoning.md` covers verification and when-to-ask, never
-task-shape selection — and neither seed nor critique references mindsets. The only structuring
-signal is the heading labels themselves. So co relies on emergent attention to labeled sections: the
-model *may* weight the relevant heading by relevance, but nothing prompts it to, and on a
-non-reasoning model no explicit selection step need happen at all.
+The selection is not even nudged at the prompt level. `load_soul_mindsets` emits `## Mindsets`
+followed by the six joined files and nothing else — no preamble, no classify-then-focus rule
+(`03_reasoning.md` covers verification and when-to-ask, never task-shape selection), no seed or
+critique reference to the mindsets. The only structuring signal is the heading labels. So co relies
+on emergent attention to labeled sections: the model *may* weight the relevant heading, but nothing
+prompts it to, and on a non-reasoning model no explicit selection step need happen at all.
 
 Consequence: mindset selection is the model's inference, not a system decision. No mechanism exists
 to deliberately activate the right stance when stakes rise, suppress the other five, or verify the
@@ -157,15 +198,22 @@ this applies only in coding tasks; this is soft not mandatory; this correction s
 ones; this must never override safety.
 
 Consequence: preferences can be remembered without being applied with nuance; prompt-level style
-and memory-level preferences can conflict with no arbitration rule. (No repo peer survey backs the
-typed-preference direction — treat as unsourced until validated.)
+and memory-level preferences can conflict with no arbitration rule. Letta's typed memory blocks
+(§1.3) are a concrete peer precedent for the structured direction; Mem0 is not.
 
-## 2.4 Critique exists, but self-governance is thin
+## 2.4 Critique exists; self-governance is partial
 
-`critique.md` gives an always-on review lens — prose, not a self-governance loop. Missing: explicit
-style failure categories, lightweight self-checks tied to task/risk level, persistent signals about
-where behavior repeatedly misses. co can be asked to critique itself but accumulates no reliable
-model of its behavioral weaknesses.
+Two governance-adjacent layers exist today, both scoped narrowly:
+
+- `critique.md` — an always-on `## Review lens`, prose not a loop.
+- `curation.md` — a character-scoped retention/merge disposition feeding the dream daemon's memory
+  and skill reviewers. This is a real self-governance layer, but bounded to *what to keep*, not to
+  *how the agent behaves*.
+
+Still missing for the behavioral domain: explicit style failure categories, lightweight self-checks
+tied to task/risk level, persistent signals about where behavior repeatedly misses. co can be asked
+to critique itself but accumulates no reliable model of its behavioral weaknesses. The curation lens
+shows the pattern works; the gap is extending it from retention judgment to behavioral judgment.
 
 ## 2.5 No clean separation between identity, policy, and learned style
 
@@ -218,7 +266,65 @@ one role; multi-character teamwork orchestrates several agents, each with its ow
 | Learned style preferences | user-specific communication preferences | typed memory items with scope/strength |
 | Resolved style contract | compact final state injected per turn | generated from the layers above |
 
-The identity layer's character base (canon) already exists — proposed work builds on it.
+The identity layer's character base (canon) already exists, and `curation.md` already demonstrates a
+voice-free behavioral layer (§1.1) — proposed work builds on both.
+
+## 4.0 Thin the static block first (subtractive baseline)
+
+Before any additive layer, reduce the static block to its load-bearing core and make the rest
+conditional. This is a **precondition** for §4.1–4.2, not an alternative: you cannot measure a style
+schema's value against an over-weight, unmeasured baseline. Five moves, ordered by ROI and ascending
+risk.
+
+**Step 1 — Instrument the assembled block.** Emit a per-section word/token count from
+`build_base_instructions` (debug-only, behind the existing trace/inspection path). No knob exists
+today to see that the static prompt is ~5k tokens or how it splits. This is the baseline every later
+step is measured against. Cheap, zero behavioral risk.
+
+**Step 2 — Gate the mindsets.** Stop loading all six. `load_soul_mindsets(role)` grows a
+`selected: list[str] | None` parameter; when set, it emits only those headings. The selection
+signal:
+- *Bridge (no full resolver):* a cheap task-shape classifier — heuristic on the user turn, or one
+  short classify call — picks 1–2 mindsets. Ships before the §4.1 schema.
+- *Target:* the §4.2 resolver owns the pick. The two converge — the bridge is the resolver's first
+  responsibility, extractable early.
+
+Saves ~640 words/turn and gives the model the relevance signal it lacks today. Risk: a
+misclassification drops a needed mindset — mitigate by defaulting to all-six on low classifier
+confidence, and eval-gating the change.
+
+**Step 3 — Make procedural rules capability-gated.** This is where the real weight is (2,608 words).
+Split `rules/` into two tiers:
+- *Invariants* (always static): `01_identity`, `02_safety`, and the always-true core of
+  `03_reasoning`. Unconditional; stay in `build_base_instructions`.
+- *Procedure* (conditional): `04_tool_protocol`, `06_skill_protocol`, `07_memory_protocol`, and the
+  procedural tail of `05_workflow`. These move to capability-gated `@agent.instructions` providers in
+  the orchestrator, emitted only when the relevant capability is active for the session. The signal
+  already exists — `deps.capabilities` (`CoCapabilityState`, tools + skills set at bootstrap). Gate
+  `06_skill_protocol` on skills being present, `07_memory_protocol` on memory tools being enabled,
+  `04_tool_protocol` content on the toolset actually carrying those tools. This mirrors the existing
+  DEFERRED-tool pattern (schemas fetched just-in-time, not prefilled): apply the same just-in-time
+  discipline to the *instructions about* a capability, not only its tool schema.
+
+Caveat: capability-gating is **session-scoped, not turn-scoped**. If memory tools are enabled for the
+session, the memory protocol is present all session — correct, because the protocol must be in
+context *before* the model decides to use the tool, so turn-level gating would arrive too late. The
+win is cross-session (a session with skills disabled never carries the 454-word skill protocol), not
+per-turn.
+
+**Step 4 — Anchor over instruction (editorial).** Per context-over-command, convert the densest
+imperative rule lists into fewer, sharper anchors *where Step 1's measurement plus evals show the
+verbose form isn't carrying its weight*. Human-reviewed, one rule file at a time, never automated.
+Slowest and highest-judgment move — do it last.
+
+**Step 5 — Eval-gate every subtraction.** Each removal/gating ships only if behavioral evals show no
+regression in the behavior the content was protecting. This is §6's discipline ("tie dimensions to
+observable behavior; validate with evals") applied subtractively: keep exactly the content that
+changes behavior, drop what doesn't.
+
+Precedence with the additive layers: Steps 1–3 are mechanical and should land **before** §4.1/§4.2,
+so the resolver is built against a thinned, measured baseline. Step 2's classifier is literally the
+resolver's first slice. Step 4 is ongoing and independent.
 
 ## 4.1 Working-style schema
 
@@ -265,15 +371,17 @@ becomes an explicit control surface rather than incidental recall:
 - `do_not_override`: optional bounded flag
 
 Update `memory_create` / `memory_modify` to accept these; emit structured preference records when a
-signal is clearly a stable style preference.
+signal is clearly a stable style preference. Letta's `Block` schema (§1.3) is the closest peer model.
 
 ## 4.4 Separate voice from behavior
 
 - **voice** (seed, canon, mindsets) — wording flavor, rhythm, relationship feel; prose-first, unchanged
 - **behavior** (schema + resolver) — how much it challenges, explains, asks, warns, acts; reviewable and testable
 
-Lets users keep the same usefulness with different tone, and lets maintainers tune task behavior
-without destroying identity (or compensate voice per model without touching the behavior contract).
+`curation.md` already realizes this split for the curation domain (a voice-free behavioral
+disposition); §4.1–4.2 generalize it to the agent's turn-level behavior. The split lets users keep
+the same usefulness with different tone, and lets maintainers tune task behavior without destroying
+identity (or compensate voice per model without touching the behavior contract).
 
 ## 4.5 Structured critique categories
 
@@ -300,6 +408,20 @@ resolver compete and the system gets harder to reason about.
 ---
 
 # 5. Phased Goals
+
+## P0 — thin and measure the static block (subtractive precondition)
+
+Land §4.0 Steps 1–3 before any additive layer, so P1 is built against a measured, thinned baseline.
+
+- per-section token/word instrumentation on `build_base_instructions` (Step 1)
+- mindset gating via `load_soul_mindsets(selected=...)` + a bridge task-shape classifier (Step 2)
+- procedural rules (`04`/`06`/`07`, tail of `05`) moved to capability-gated instruction providers
+  keyed on `deps.capabilities` (Step 3)
+- every subtraction eval-gated for no behavioral regression (Step 5)
+
+Outcome: the prompt carries only what is invariant plus what this session's capabilities and this
+turn's task shape make relevant; the over-specification the survey warns about is measured and
+reduced before more structure is added.
 
 ## P1 — make the self model explicit for one instance
 
@@ -348,13 +470,14 @@ boundaries.
 # 7. Bottom Line
 
 co's personality system is thoughtful and better than generic prompt styling: personality lives in
-its own package, assembly is centralized, and rules/mindsets/critique/canon are clearly separated.
-Its remaining limitation is that it is a **well-authored prompt stack**, not yet a **first-class
-self model**.
+its own package, assembly is centralized, and seed/mindsets/critique/curation/canon are clearly
+separated. Its remaining limitation is that it is a **well-authored prompt stack**, not yet a
+**first-class self model**.
 
 The gap is not charm. It is: explicit behavior dimensions (`style.yaml`), structured style
 preferences (typed, scoped, precedence), resolved per-turn working-style state (resolver), and
 inspection/quality loops (`/style`, critique categories). Of these, only precedence/conflict
-resolution (§2.5) is directly peer-backed; the rest are frontier aspirations to validate, not
-settled wins. The move is not "more personality-driven" — it is working style that is **more
-explicit, more bounded, more inspectable, and easier to improve without destabilizing trust**.
+resolution (§2.5) is directly peer-backed; typed preferences (§2.3/§4.3) are partly backed by
+Letta; the rest are frontier aspirations to validate. The move is not "more personality-driven" —
+it is working style that is **more explicit, more bounded, more inspectable, and easier to improve
+without destabilizing trust**.

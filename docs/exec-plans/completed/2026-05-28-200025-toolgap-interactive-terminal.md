@@ -6,7 +6,7 @@ Task type: code
 
 Two related steps toward driving interactive command-line programs, sourced from
 the cross-review against hermes-agent
-(`docs/reference/RESEARCH-tools-gaps-co-vs-hermes.md` §1.5, §5). They are
+(`docs/reference/RESEARCH-tools-peers-tiers.md` §5.1, §5.4). They are
 sequenced as phases of one plan because they are the two halves of the same
 capability — making the child process *believe* it has a terminal, then giving
 co a channel to *talk back* to it:
@@ -52,7 +52,8 @@ CLI" capability hermes exposes via `terminal(pty=True)` + `process(write/close)`
 > `task_write`/`task_close`/`commands/write.py` do not exist (this plan adds them). **One
 > correction:** the `shell_exec` param is `work_dir` (not `workdir`) — signature is
 > `shell_exec(ctx, cmd, timeout=120, work_dir=None)` (`shell/execute.py:18`). Native tool
-> count is **36** today; `task_write` + `task_close` (both DEFERRED) → 38 (pty adds no tool).
+> count is **37** today (was 36 at v0.8.323; `image_view` landed via the vision plan @
+> v0.8.342); `task_write` + `task_close` (both DEFERRED) → 39 (pty adds no tool).
 
 **Phase 1 (pty):**
 - `shell_exec` (`co_cli/tools/shell/execute.py:17`) → `ctx.deps.shell.run_command`
@@ -146,9 +147,17 @@ silently degrade output rather than failing outright.)
    No stdin write path is added on `shell_exec`.
 
 **Phase 2:**
-3. **`stdin=PIPE` must not change non-interactive behavior.** Existing background
-   tasks that never read stdin behave byte-for-byte as today; an unused pipe is
-   inert. (Existing 6 `test_flow_background_tasks.py` tests pass unchanged.)
+3. **`stdin=PIPE` must not regress non-interactive behavior.** Tasks that never
+   read stdin behave byte-for-byte as today; an unused pipe is inert. **Precision
+   on the edge:** `spawn_task` currently omits `stdin`, so by asyncio default
+   (`None` = inherit) a background task inherits co's *own* stdin fd today — a
+   stdin-reading task (e.g. `cat`/`sort` with no arg) currently races the REPL for
+   the terminal. With `stdin=PIPE` such a task instead reads an empty,
+   never-closed pipe and blocks until `task_close`/kill. This is a **strict
+   improvement** (no terminal contention), but it *is* a change for stdin-reading
+   tasks — not literally "byte-for-byte" for them. (All existing
+   `test_flow_background_tasks.py` tests — 19 at v0.8.350 — pass unchanged; none
+   exercise a stdin-reading task, which is why the blanket claim held before.)
 4. **Write/close to a dead task is a clean `tool_error`, not a crash.**
    `status != "running"` or `process is None` → typed error caught at the tool
    layer.
@@ -227,29 +236,30 @@ The interactive loop: `task_start` → `task_status` (see prompt) → `task_writ
 
 ## Tasks
 
-### TASK-1 — `shell_exec` `pty=True` (output fidelity)
+### ✓ DONE TASK-1 — `shell_exec` `pty=True` (output fidelity)
 - **files:** `co_cli/tools/shell/execute.py`, `co_cli/tools/shell_backend.py`
 - **prerequisites:** none
-- **done_when:** `tests/test_flow_shell.py` asserts (real subprocess, no mocks) that `shell_exec("python3 -c 'import sys;print(sys.stdout.isatty())'", pty=True)` returns `True` and `pty=False` returns `False`, and that `shell_exec("echo hi")` (pty off) still returns exit 0 + `"hi\n"`; the new pty code lives entirely inside an `if pty:` branch with the existing `proc.communicate()` body kept verbatim as the `else` (structural guarantee of the byte-for-byte-unchanged invariant); the master fd is drained via `loop.add_reader` and closed in a `finally`; a timeout under `pty=True` still kills the process group and surfaces partial output; no `ptyprocess`/`pywinpty` import is added (stdlib `pty` only).
+- **done_when:** `tests/test_flow_shell.py` asserts (real subprocess, no mocks) that `shell_exec("python3 -c 'import sys;print(sys.stdout.isatty())'", pty=True)` returns `True` and `pty=False` returns `False`, and that `shell_exec("echo hi")` (pty off) still returns exit 0 + `"hi\n"`; the new pty code lives entirely inside an `if pty:` branch with the existing `proc.communicate()` body kept verbatim as the `else` (structural guarantee of the byte-for-byte-unchanged invariant); the master fd is drained via `loop.add_reader` and closed in a `finally`; **the master-read EOF is handled cross-platform — on Linux the read returns `b""`, but on macOS (Darwin, the dev box) a pty master read after child exit raises `OSError` (errno `EIO`); both must be caught and treated as clean EOF so trailing buffered bytes are surfaced and the tool does not throw. A test asserts the pty path completes without raising on this platform (not just that add_reader drained on Linux CI);** a timeout under `pty=True` still kills the process group and surfaces the buffer accumulated so far as partial output; no `ptyprocess`/`pywinpty` import is added (stdlib `pty` only).
 - **success_signal:** A TTY-gated CLI run via `shell_exec(pty=True)` emits its full (e.g. colored/interactive-mode) output instead of the degraded non-TTY form.
 
-### TASK-2 — stdin pipe on spawn + write/close helpers
+### ✓ DONE TASK-2 — stdin pipe on spawn + write/close helpers
 - **files:** `co_cli/tools/background.py`
 - **prerequisites:** none (independent of TASK-1)
 - **done_when:** `tests/test_flow_background_tasks.py` (extended, real subprocess) shows a stdin-reading command driven via `write_to_task` produces the expected log output, and a write to a completed/cancelled task raises a typed error; the existing background-task tests pass unchanged (the unused pipe is inert for non-interactive tasks). `write_to_task` wraps both `proc.stdin.write` and `await proc.stdin.drain()` in one try (BrokenPipe surfaces on drain, not write). `kill_task`'s defensive stdin-close runs *before* `kill_process_tree`, swallows `BrokenPipeError`, and never aborts the kill path (cosmetic — the process-group teardown is what guarantees death).
 - **success_signal:** N/A (helper plumbing; observable only via TASK-3 tools).
 
-### TASK-3 — `task_write` + `task_close` tools + `/write` command
+### ✓ DONE TASK-3 — `task_write` + `task_close` tools + `/write` command
 - **files:** `co_cli/tools/tasks/control.py`, `co_cli/agent/toolset.py` (add the two new tools to the registry-walk import block alongside the existing `task_*` imports), `co_cli/commands/write.py` (new), `co_cli/commands/core.py`
 - **prerequisites:** TASK-2
-- **done_when:** an end-to-end test drives a real interactive subprocess — `task_write(id, "y")` on a `Continue? [y/N]` prompt advances it and `task_status` shows the post-prompt output; `task_close(id)` lets an EOF-reader exit 0; both tools clean-error (`tool_error`) on not-found / not-running; the BrokenPipe case is exercised by first letting the reader exit (or `task_close`) and *then* writing, so the broken pipe is reliable (not racy); `/write <id> <input>` works from the REPL; a toolset-build assertion confirms `task_write` and `task_close` resolve via `tool_view` (DEFERRED; the ALWAYS floor is unchanged).
+- **done_when:** an end-to-end test drives a real interactive subprocess — `task_write(id, "y")` on a `Continue? [y/N]` prompt advances it and `task_status` shows the post-prompt output; `task_close(id)` lets an EOF-reader exit 0; both tools clean-error (`tool_error`) on not-found / not-running; the BrokenPipe case is exercised by first letting the reader exit (or `task_close`) and *then* writing, so the broken pipe is reliable (not racy); `/write <id> <input>` works from the REPL — **its parser takes the first token as `id` and passes the remainder of the line verbatim as input (spaces, quotes, and punctuation preserved); it must not `shlex`-split or otherwise tokenize the input** (Open Q4: input is verbatim UTF-8); a toolset-build assertion confirms `task_write` and `task_close` resolve via `tool_view` (DEFERRED; the ALWAYS floor is unchanged). **The `task_write` docstring instructs the model to poll `task_status` until new output appears after a write — `_monitor` drains stdout asynchronously, so the child's response is not guaranteed visible the instant `task_write` returns; there is no synchronous request-response framing in v1 (deferred).**
 - **success_signal:** The agent can complete an interactive command (e.g. answer a REPL or a `[y/N]` prompt) start-to-finish without the task hanging to timeout.
 - **note:** `/write` is the least mission-central item; if TASK-3 runs long it is the first thing to drop (the model-facing `task_write`/`task_close` are the actual capability).
+- **note (read-after-write timing):** the loop `task_write → task_status → task_write` has an inherent async gap — the child may not have emitted, or `_monitor` not flushed, by the time `task_status` reads the log (`buffering=1` flushes per line, but child timing is unknown). v1 handles this by docstring-guided polling, not a blocking read; do not add a synchronous wait-for-output primitive here (deferred).
 
-### TASK-4 — docstrings + full-suite gate
+### ✓ DONE TASK-4 — docstrings + full-suite gate
 - **files:** `co_cli/tools/tasks/control.py` (`task_start` docstring), `co_cli/tools/shell/execute.py` (`shell_exec` docstring)
 - **prerequisites:** TASK-1, TASK-3
-- **done_when:** the `task_start` and `shell_exec` docstrings point interactive needs at the write channel (no longer claim interactive input is impossible) and document the `pty` fidelity-only caveat; `scripts/quality-gate.sh full` clean. (Spec — `docs/specs/tools.md` for `pty`, `task_write`, `task_close` — is applied by `sync-doc` post-delivery, not in this plan's `files:`. sync-doc must update **both** the "Total: 36 native tools / 17 DEFERRED" count line *and* the "4 `task_*`" enumeration → 38 / 19 / "6 `task_*`".)
+- **done_when:** the `task_start` and `shell_exec` docstrings point interactive needs at the write channel (no longer claim interactive input is impossible) and document the `pty` fidelity-only caveat; **the docstrings steer the model to prefer a non-interactive flag first (`--yes`/`-y`, `--no-input`, `gh auth login --with-token`, `git ... --no-edit`) and reach for the `task_write` loop only when no such flag exists — the write loop is the fallback for genuinely-interactive programs, not the default path**; **the `task_write` docstring states the one-sentence security posture — the approval gate is at `task_start` (the command), not on each write, so driving an approved interactive process (e.g. a `python` REPL) via stdin can reach execution the launch approval did not explicitly cover; this is accepted because the risk is bounded by what `task_start` already permits (the model could equally write-and-run a script through other approved paths)**; `scripts/quality-gate.sh full` clean. (Spec — `docs/specs/tools.md` for `pty`, `task_write`, `task_close` — is applied by `sync-doc` post-delivery, not in this plan's `files:`. sync-doc must update **both** the "Total: 37 native tools — 19 ALWAYS · 18 DEFERRED" count line *and* the "4 `task_*`" enumeration → 39 native / 20 DEFERRED / "6 `task_*`". The two new tools are DEFERRED, so the 19 ALWAYS floor is unchanged.)
 - **success_signal:** N/A (docstrings + gate).
 
 ## Testing
@@ -271,6 +281,12 @@ None — all resolved at C1:
 3. **Approval on `task_write` — RESOLVED: no approval.** `task_start` gates the command
    (the risk surface) at launch; `task_write`/`task_close` match the unapproved DEFERRED
    peers (`task_cancel`/`task_status`/`task_list`). Gating keystrokes adds nothing.
+   **Acknowledged escalation surface:** the `task_start` gate approves the *command*, not the
+   bytes typed into it — driving an approved interactive process (e.g. a `python` REPL) via
+   `task_write` can reach execution the launch approval did not explicitly cover. Accepted, not
+   gated, because the risk is **bounded** by what `task_start` already permits (the model could
+   equally write-and-run a script through other approved paths). Recorded in the `task_write`
+   docstring (TASK-4) rather than enforced with a per-write prompt.
 4. **Encoding — RESOLVED.** v1 is UTF-8 text + optional newline; binary stdin out of scope
    (`input: str` only).
 
@@ -290,6 +306,61 @@ process is a dead end today): TASK-2 (spawn + helpers) → TASK-3 (tools + comma
 closes none of the Failure-cost scenarios, so if effort is constrained Phase 2 ships first
 and Phase 1 follows. TASK-4 (docs + gate) lands whatever shipped. Independent of the
 `documents` and `vision-input` plans.
+
+## Delivery Summary — 2026-06-12
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | `pty=True` isatty True / `pty=False` False; `echo hi` exit 0 `"hi\n"`; pty branch isolated in `if pty:` with `communicate()` else kept verbatim; master fd drained via `add_reader` + closed in `finally`; macOS EIO + Linux `b""` both treated as clean EOF; timeout kills group + surfaces partial; stdlib `pty` only | ✓ pass |
+| TASK-2 | stdin-reading command driven via `write_to_task` produces expected log; write to completed/cancelled task raises typed error; existing tests pass unchanged; write+drain in one try; `kill_task` defensive stdin-close before `kill_process_tree`, swallows BrokenPipe, never aborts kill | ✓ pass |
+| TASK-3 | e2e drives a real interactive subprocess (`task_write` answers `[y/N]`, `task_status` shows post-prompt output); `task_close` lets EOF-reader exit 0; both clean-error on not-found/not-running; write-after-reader-exit reliable clean error; `/write` passes input verbatim (first token id, remainder untokenized); both tools resolve DEFERRED, ALWAYS floor unchanged | ✓ pass |
+| TASK-4 | `task_start`/`shell_exec` docstrings point interactive needs at the write loop + prefer-non-interactive-flag steering + pty fidelity caveat; `task_write` docstring carries the security posture + read-after-write polling guidance; `scripts/quality-gate.sh full` clean | ✓ pass |
+
+**Tests:** full suite — 704 passed, 0 failed (`.pytest-logs/20260612-232448-full-gate2.log`). New: `tests/test_flow_shell.py` (6), `tests/test_flow_background_tasks.py` (+8), `tests/test_tool_view.py` (+1 deferral). All real subprocesses, no mocks; assertions are functional/behavioral only (observable output, exit codes, clean `tool_error`, hidden-until-revealed via the real visibility gate).
+
+**Doc Sync:** fixed — `tools.md` (tool count 37→39, DEFERRED 18→20, `task_*` 4→6, new `pty`/`task_write`/`task_close` surface + "Interactive command-line drive" subsection, ALWAYS char-count 17,224→17,468); `tui.md` (`/write` command row). system.md index clean.
+
+**Schema-budget note:** the new `pty` param grew the ALWAYS-tier `shell_exec` schema past the per-tool ceiling (2,719 > 2,300). Root-caused the two ceilings: `ALWAYS_BUCKET_CEILING` (17,700) is principled — every ALWAYS schema ships in every turn's uncompactable prefix on a fixed ~64k window — whereas `PER_ALWAYS_TOOL_CEILING` (2,300) is an empirical tripwire pinned just above the largest tool *at the time* (calibrated when `shell_exec` was 1,966, pre-`pty`), meant to catch *unintended* bloat. With my verbose additions terse-ified but **all pre-existing routing/diagnosis guidance retained**, the bucket lands at 17,674 (under 17,700 — the principled cap passes), and only the empirical per-tool tripwire was exceeded (shell_exec 2,420). Per the guard's own header ("re-pin on intentional surface change"), re-pinned `PER_ALWAYS_TOOL_CEILING` 2,300 → 2,500 rather than degrade model-facing guidance for a stale tripwire; the bucket ceiling was deliberately **not** loosened (held at 17,700, ~26 headroom) so the next ALWAYS growth must defer or re-pin consciously. Net runtime floor cost of the `pty` param: +450 chars (~115 tokens/turn), the unavoidable cost of a real capability on an ALWAYS tool.
+
+**Overall: DELIVERED**
+All four tasks pass `done_when`; lint clean; full suite green (704); docs synced. Phase 1 (pty) and Phase 2 (interactive drive) both landed.
+
+**Next step:** `/review-impl toolgap-interactive-terminal` — full suite + evidence scan + behavioral verification → verdict appended to plan.
+
+## Implementation Review — 2026-06-13
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | `pty=True` isatty True / off False; `echo hi` exit 0 `"hi\n"`; pty isolated, non-pty body verbatim; master drained via `add_reader`, closed in `finally`; macOS EIO + Linux `b""` both clean EOF; timeout kills group + partial; stdlib `pty` only | ✓ pass | `shell/execute.py:23` (`pty` param) → `:96` passthrough; `shell_backend.py:45-46` early-return guard, non-pty body `:47-75` **byte-for-byte identical to HEAD** (diff-confirmed); EOF both-platform `shell_backend.py:117-124`; timeout kill+partial `:131-137`; no `ptyprocess`/`pywinpty` (repo grep clean); `tests/test_flow_shell.py` 6 passed, real subprocess, no mocks |
+| TASK-2 | stdin-reading cmd driven via `write_to_task`; write to dead task → typed error; existing tests pass; write+drain in one try; `kill_task` stdin-close before kill, swallows BrokenPipe | ✓ pass | `background.py:84` `stdin=PIPE`; `write_to_task` guard `:136`, single-try write+drain `:139-141`, BrokenPipe→`TaskInputError` `:142-145`; `close_task_stdin` `:148-152`; `kill_task` stdin-close `:199-203` **before** `kill_process_tree` `:206`; tool layer maps `TaskInputError`→`tool_error` `control.py:307-308`; unused-pipe-inert verified (`_monitor` never touches stdin) |
+| TASK-3 | e2e drives real interactive subprocess (`task_write` answers `[y/N]`, `task_status` shows output); `task_close` EOF-reader exit 0; clean-error not-found/not-running; reliable BrokenPipe; `/write` verbatim remainder; both DEFERRED, ALWAYS floor unchanged | ✓ pass | `task_write` `control.py:267-273`, `task_close` `:317-321`, both `@agent_tool(DEFERRED)`; registered `toolset.py:48-55`; `/write` parser `write.py:17` `args.split(maxsplit=1)` (no shlex, verbatim remainder), registered `core.py:81-83`; DEFERRED resolution `test_tool_view.py:155`; real-subprocess e2e tests pass, no mocks |
+| TASK-4 | docstrings point interactive→write loop + prefer-non-interactive-flag steering + pty fidelity caveat; `task_write` security posture; `quality-gate full` clean | ✓ pass | `task_start` docstring `control.py:55-60` (flags `--yes`/`--no-input`/`--with-token`/`--no-edit`, write loop as fallback); `shell_exec` pty fidelity-only `execute.py:44-45,63-64`; `task_write` security posture `control.py:289-293`; pre-existing routing guidance preserved (diff-confirmed); schema re-pin principled (below) |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| FD leak: `pty.openpty()` opens master+slave before `create_subprocess_exec`; a spawn failure (e.g. non-existent `work_dir`, which flows from `shell_exec(work_dir=)`) leaked both fds — `os.close(slave)` and the master `finally` both sat *after* the spawn await. A regression the non-pty path can't have (it pre-opens no fds). | `shell_backend.py:91-136` | blocking | Fixed — wrapped spawn in inner `try/finally: os.close(slave)` and moved master close into an outer `finally` covering every path. 6 pty tests + full suite re-verified green. |
+| Name shadow: `pty: bool` param shadows `import pty` within `run_command` scope | `shell_backend.py:8,27` | minor (false-pos) | Not fixed — `run_command` never calls the `pty` module (delegates); `pty.openpty()` lives in `_run_command_pty` (no param). Renaming the documented `shell_exec(pty=True)` public API for a harmless local shadow would be over-engineering. |
+| Schema-budget re-pin `PER_ALWAYS_TOOL_CEILING` 2300→2500 | `test_orchestrator_schema_budget.py:47` | accepted | Principled: `shell_exec`=2,420 chars (`pty` param is a non-deferrable cost of a real capability on an ALWAYS tool; routing/diagnosis guidance kept intact); per-tool tripwire re-pinned per the file's own header; `ALWAYS_BUCKET_CEILING` held at 17,700 (bucket=17,674, ~26 headroom — the principled cap deliberately not loosened). |
+
+### Scope notes (carry to /ship — staged-file hygiene)
+- ⚠ **Separate effort in the working tree — exclude from this plan's ship.** `co_cli/daemons/dream/_reviewer.py`, `co_cli/personality/prompts/loader.py` (`load_soul_curation`), `co_cli/personality/prompts/souls/{finch,jeff,tars}/curation.md`, `tests/daemons/dream/test_curation_lens.py`, and the personality/dream specs+research (`docs/specs/{dream,personality}.md`, `docs/reference/RESEARCH-personality-*`, `RESEARCH-tui-architecture-seam-*`) are a **curation-lens feature unrelated to this plan**. They are NOT in any task's `files:`. Stage only this plan's files when shipping.
+- ⚠ `tests/test_orchestrator_schema_budget.py` is undeclared in any task's `files:` but legitimately belongs to TASK-4 (the `pty` schema re-pin documented in the Delivery Summary). Acceptable.
+
+### Tests
+- Command: `uv run pytest -p no:randomly -q`
+- Result: **704 passed, 0 failed** (142s; all calls sub-second, no slow LLM calls)
+- Log: `.pytest-logs/20260613-003043-review-impl.log` (fix-verify: `20260613-*-fix-verify.log`)
+
+### Behavioral Verification
+- `co status`: N/A — no such command in this project (commands: `chat`/`tail`/`trace`/`dream`/`google`).
+- Surface boot check: `/write` registered ✓; `task_write`/`task_close` resolve in the real `TOOL_REGISTRY` ✓.
+- `success_signal` TASK-1 (TTY output fidelity): verified — `test_pty_true_makes_stdout_a_tty` asserts real-pty `isatty()==True` vs `False` off.
+- `success_signal` TASK-3 (agent completes an interactive command start-to-finish): verified — `test_task_write_advances_interactive_prompt` drives a real `python3` `Continue? [y/N]` prompt to completion and reads post-prompt output (no hang-to-timeout).
+
+### Overall: PASS
+All four tasks satisfy `done_when` with file:line evidence; the one blocking finding (pty spawn-failure fd leak) was fixed and re-verified; full suite green (704); lint clean. **Ship caveat:** stage only this plan's files — the unrelated curation-lens changes in the working tree must not ride along.
 
 ## Final — Team Lead
 

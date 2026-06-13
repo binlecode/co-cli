@@ -34,6 +34,7 @@ from co_cli.commands.types import (
     SlashOutcome,
 )
 from co_cli.commands.usage import _cmd_usage
+from co_cli.commands.write import _cmd_write
 from co_cli.display.core import console
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,9 @@ BUILTIN_COMMANDS["tasks"] = SlashCommand(
 )
 BUILTIN_COMMANDS["cancel"] = SlashCommand(
     "cancel", "Cancel a running background task", _cmd_cancel
+)
+BUILTIN_COMMANDS["write"] = SlashCommand(
+    "write", "Write input to a running background task's stdin: /write <id> <input>", _cmd_write
 )
 BUILTIN_COMMANDS["queue"] = SlashCommand(
     "queue",
