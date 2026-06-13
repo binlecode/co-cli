@@ -9,7 +9,7 @@ description: Keep the suite focused on functional behavior verification. Purge d
 
 **Mission:** every surviving test must catch a real regression in co-cli's system functionality or agent behavior. The target: tool contracts, agent loop mechanics, approval logic, memory/session operations, config loading, security boundaries, CLI command behavior, compaction, and skill management. Delete anything that doesn't — structural checks, library/SDK verification, trivial passthroughs, and mocked behavior are all noise. Two axes decide a test's fate: **noise** (rules 1–10, auto-removed) and **criticality** (the Criticality gate — is the guarded regression worth gating on?). A genuine, unique behavioral test can still be cut if the failure it guards is too trivial for a critical-path suite.
 
-**Default stance:** violations exist. PASS is earned, not assumed.
+**Default stance:** violations likely exist. PASS is earned, not assumed. (A mature suite can genuinely have zero Blocking violations — when so, do not manufacture deletions; the Criticality stratification becomes the primary output.)
 
 **Non-negotiable:** Pass 1 requires reading every test file with the Read tool and annotating every `def test_*` function. Grep patterns are supplementary triage only. For every batch, the private-call inventory must complete before any annotation row is written — skipping it is a protocol violation even if all verdicts would be KEEP.
 
@@ -36,7 +36,7 @@ BROKEN file → every test in it is Rule 4. Fix the import or delete the file ou
 ### 0b — Bad patterns
 
 ```bash
-grep -rl --include="test_*.py" "monkeypatch\|unittest\.mock\|from unittest import mock\|patch\b" tests/
+grep -rn --include="test_*.py" "monkeypatch\.\(setattr\|setenv\|delenv\|setitem\|delitem\|chdir\)\|unittest\.mock\|MagicMock\|Mock(\|\.patch(" tests/
 grep -rl --include="test_*.py" "assert True\b\|assert result\b\|assert result\." tests/
 grep -rl --include="test_*.py" "from.*_legacy\|from.*_compat\|from.*_old\b" tests/
 grep -rl --include="test_*.py" "inspect\.signature\|hasattr(" tests/
@@ -45,6 +45,8 @@ grep -rl --include="test_*.py" "assert.*\" in prompt\|assert.*\" in result\b" te
 ```
 
 Pre-tag files `SUSPECT_MOCK`, `SUSPECT_STRUCTURAL`, or `SUSPECT_LIB`. Does not replace reading.
+
+The mock/patch grep matches **call-sites** (`monkeypatch.setattr(`, `.patch(`, `MagicMock`), not the bare word `monkeypatch` — co-cli test docstrings routinely say *"Real CoDeps, no monkeypatching"*, and a bare-word match floods the suspect list with files that explicitly *avoid* mocking (one run: 24 flagged, 21 were such docstrings, 3 real). `-rn` surfaces the line so a stray prose match is obvious at a glance.
 
 **SUSPECT_LIB trigger**: grep for calls to third-party library functions that co-cli only thinly wraps — trafilatura, markdownify, httpx, google.oauth2. If the test's assertions would still pass if you deleted our wrapper and called the library directly → rule 10. (`inspect.signature` / `hasattr` usage is a structural assertion about our own code, not library behavior → SUSPECT_STRUCTURAL / rule 4.)
 
@@ -183,7 +185,7 @@ Fix only when: (a) unique coverage AND (b) the fix is rerouting through a public
 | 1 | **Mock/patch** — `monkeypatch`, `unittest.mock`, hand-rolled fakes replacing production behavior. Input literals are fine; fake return values are not. | Delete |
 | 2 | **Vacuous assertion** — no meaningful assertion present: no assertion at all (drives code but never fails), truthy-only (`assert True`, `assert result`, `assert result.flag`), or always-true by Python semantics (`assert x == x`). | Delete |
 | 3 | **Stale signature** — calls function with args that don't exist in current source. | Fix or delete |
-| 4 | **Structural-only / weak-assertion** — asserts existence/shape/presence rather than the behavioral value, or passes when the feature silently returns nothing. Passes regardless of what the production code actually computes. Sub-cases: dataclass field defaults, key or attribute existence (`assert "key" in attrs`, `"session_id" in results[0]`), schema shape (`len(result) == N`), presence-only (`x is not None` where the value is knowable → assert the value), bound-only that passes on empty (`len(hits) <= cap`, `id not in returned` → assert the exact outcome or add a non-empty guard), exclusion-only (`1 not in lines` → also assert the inclusion), internal-seam testing (drives a private store/helper when the agent-facing tool/CLI is the surface the user calls), importability, CLI `--help` option presence, string-in-assembled-prompt, trivial passthrough (`assert x.mode == mode` where mode is the direct input), object identity after simple assignment. Litmus: replace the production function with `return []`/`return None` — if the test still passes, it belongs here. (Full checklist + behavioral replacements: `.agent_docs/testing.md` → *Assertion strength*.) | Delete or strengthen |
+| 4 | **Structural-only / weak-assertion** — asserts existence/shape/presence rather than the behavioral value, or passes when the feature silently returns nothing. Passes regardless of what the production code actually computes. Sub-cases: dataclass field defaults, key or attribute existence (`assert "key" in attrs`, `"session_id" in results[0]`), schema shape (`len(result) == N`), presence-only (`x is not None` where the value is knowable → assert the value), bound-only that passes on empty (`len(hits) <= cap`, `id not in returned` → assert the exact outcome or add a non-empty guard), exclusion-only (`1 not in lines` → also assert the inclusion), internal-seam testing (drives a private store/helper when the agent-facing tool/CLI is the surface the user calls), importability, CLI `--help` option presence, string-in-assembled-prompt, trivial passthrough (`assert x.mode == mode` where mode is the direct input), object identity after simple assignment. Litmus: replace the production function with `return []`/`return None` — if the test still passes, it belongs here. **Two litmus exceptions — pass the stub-litmus but KEEP:** (a) *defensive crash-guard* whose correct output on a degenerate input genuinely IS empty/None — a stubbed `return ""`/`None` masks the very crash-regression the test catches (e.g. None-snapshot → `""`, zero-divisor → None); the test fails by *raising* if the guard is removed. (b) *exclusion-only test whose inclusion half lives in a sibling test* (`assert "ctx" not in result` here, `assert "ctx 47%" in result` in `..._all_fields`) — the inclusion+exclusion pair is the correct shape; delete the exclusion half only when the guarded regression is Low-criticality AND the gate is trivial. (Full checklist + behavioral replacements: `.agent_docs/testing.md` → *Assertion strength*.) | Delete or strengthen |
 | 5 | **Subsumed coverage (cross-layer)** — a test in a *different* file/layer already reaches the same branch + observable; this test adds no unique failure mode. Two patterns — confirm via Same-branch proof before deciding: **(a) Private helper**: calls `_private()` while a public-entry test covers the same branch — FIX by rerouting through the public entry; delete if no unique observable survives. **(b) Pipeline-internal**: drives a non-terminal pipeline step while a terminal test covers the same failure mode — keep only if that input cannot reach the terminal; delete otherwise. (Same-*file* redundancy → rule 6.) | Fix (5a) or delete |
 | 6 | **Same-file redundancy** — another test *in the same file* already catches this regression: either an exact near-duplicate (same function, same branch, same observable) or a narrower subset (this test asserts a property the broader test already asserts on the same function). Read both bodies before deciding. | Delete the weaker/narrower |
 | 7 | **Backward-compat shim** — imports from `*_legacy`/`*_compat`/`*_old`; docstring mentions `deprecated`/`legacy`. | (a) Update import. (b) Rerun; update expected value if still fails. (c) Delete if verifying an alias with no non-test callers. |
@@ -238,6 +240,8 @@ Fix only when: (a) unique coverage AND (b) the fix is rerouting through a public
 
    Verify the deletions themselves by **name-absence** (`grep -rn "def <name>" tests/` returns 0) and the removed-`def test_` diff list — not by collected-count arithmetic, which is unreliable when the working tree carries concurrent changes.
 
+   **Two different counts — never substitute one for the other.** The `def test_` count (what name-absence/diff verifies) is NOT the collected count: parametrized tests (`@pytest.mark.parametrize`, `[2]`/`[3]` ids) expand one `def` into many collected cases. Use the def-count delta to verify *deletions*; use `pytest --collect-only -q | tail -1` for the *headline total*. A suite of 690 `def`s can collect 700+.
+
 3. **Lint**:
 
    ```bash
@@ -273,7 +277,8 @@ Broken files fixed/deleted: N — [list]
 Duplicate files merged: N — [pairs: source → target]
 Rule-failed files deleted: N — [list]
 
-Tests audited: N  ← must equal total collected; no sampling
+Tests audited: N def_test functions (every one annotated; no sampling)
+Collected total: N before → N after  ← from `pytest --collect-only` (≥ def-count due to parametrization)
 Tests deleted: N total
   Mock/patch (rule 1):          N
   Vacuous assertion (rule 2):   N

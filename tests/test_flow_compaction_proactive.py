@@ -9,8 +9,6 @@ Tests 4-8: _summarization_gate_open circuit breaker cadence (counts 0-2, 3-12, 1
 """
 
 import asyncio
-import json
-import logging
 from pathlib import Path
 
 import pytest
@@ -35,7 +33,6 @@ from co_cli.context.compaction import (
     STATIC_MARKER_PREFIX,
     SUMMARY_MARKER_PREFIX,
     TODO_SNAPSHOT_PREFIX,
-    CompactionFallbackReason,
     _partition_dropped,
     _record_proactive_outcome,
     _resolve_proactive_focus,
@@ -54,7 +51,6 @@ from co_cli.context.summarization import (
 )
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
-from co_cli.observability import tracing
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
@@ -858,70 +854,3 @@ async def test_prior_summary_partitioned_into_dedicated_slot() -> None:
         for m in result
         for p in getattr(m, "parts", [])
     )
-
-
-@pytest.fixture
-def isolated_spans_log(tmp_path: Path):
-    """Isolated spans log with clean state; restores logger state on teardown."""
-    logger = logging.getLogger("co_cli.observability.spans")
-    saved_handlers = list(logger.handlers)
-    saved_patterns = list(tracing._COMPILED_PATTERNS)
-    for h in saved_handlers:
-        logger.removeHandler(h)
-    tracing._SPAN_STACK.set(())
-
-    log = tmp_path / "spans.jsonl"
-    tracing.setup_log(log)
-    yield log
-
-    for h in list(logger.handlers):
-        logger.removeHandler(h)
-        h.close()
-    for h in saved_handlers:
-        logger.addHandler(h)
-    tracing._COMPILED_PATTERNS = saved_patterns
-
-
-def _fallback_reasons(log: Path) -> list[str]:
-    """Reason values of every compaction_fallback event on the proactive span."""
-    records = [json.loads(line) for line in log.read_text().splitlines() if line.strip()]
-    span = next(r for r in records if r["name"] == "compaction.proactive_check")
-    return [
-        e["attributes"]["reason"] for e in span["events"] if e["name"] == "compaction_fallback"
-    ]
-
-
-def test_circuit_breaker_fallback_emits_event(isolated_spans_log: Path) -> None:
-    """A tripped circuit breaker emits a compaction_fallback event carrying the
-    distinct circuit_breaker_open reason on the active compaction span."""
-    ctx, _ = _gate_ctx(_COMPACTION_BREAKER_TRIP)
-    tracing.push_span("compaction.proactive_check")
-    try:
-        gate_open, _ = _summarization_gate_open(ctx)
-    finally:
-        tracing.pop_span()
-
-    assert gate_open is False
-    assert _fallback_reasons(isolated_spans_log) == [
-        CompactionFallbackReason.CIRCUIT_BREAKER_OPEN.value
-    ]
-
-
-def test_model_absent_fallback_emits_event(isolated_spans_log: Path) -> None:
-    """Model-absent degradation emits a compaction_fallback event carrying the
-    distinct model_absent reason — separable from the breaker reason at triage."""
-    deps = CoDeps(
-        shell=ShellBackend(),
-        model=None,
-        config=SETTINGS_NO_MCP,
-        session=CoSessionState(),
-    )
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage())
-    tracing.push_span("compaction.proactive_check")
-    try:
-        gate_open, _ = _summarization_gate_open(ctx)
-    finally:
-        tracing.pop_span()
-
-    assert gate_open is False
-    assert _fallback_reasons(isolated_spans_log) == [CompactionFallbackReason.MODEL_ABSENT.value]

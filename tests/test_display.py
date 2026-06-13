@@ -163,48 +163,6 @@ def test_render_footer_toolbar_all_fields():
     assert " · " in result
 
 
-def test_render_footer_toolbar_omits_ctx_when_none():
-    frontend = TerminalFrontend()
-    frontend.update_status(
-        StatusSnapshot(
-            session_label="a1b2c3d4",
-            mode="idle",
-            context_pct=None,
-            background_task_count=0,
-            approval_count=0,
-        )
-    )
-    assert "ctx" not in frontend.render_footer_toolbar()
-
-
-def test_render_footer_toolbar_omits_bg_when_zero():
-    frontend = TerminalFrontend()
-    frontend.update_status(
-        StatusSnapshot(
-            session_label="a1b2c3d4",
-            mode="idle",
-            context_pct=0.5,
-            background_task_count=0,
-            approval_count=0,
-        )
-    )
-    assert " bg" not in frontend.render_footer_toolbar()
-
-
-def test_render_footer_toolbar_omits_approval_when_zero():
-    frontend = TerminalFrontend()
-    frontend.update_status(
-        StatusSnapshot(
-            session_label="a1b2c3d4",
-            mode="idle",
-            context_pct=None,
-            background_task_count=0,
-            approval_count=0,
-        )
-    )
-    assert "approval" not in frontend.render_footer_toolbar()
-
-
 def test_render_footer_toolbar_plural_approvals():
     frontend = TerminalFrontend()
     frontend.update_status(
@@ -235,21 +193,6 @@ def test_status_toolbar_renders_queue_depth():
     result = frontend.render_footer_toolbar()
     assert '3 queued: "fix the parser bug"' in result
     assert result.index("active") < result.index("3 queued") < result.index("ctx")
-
-
-def test_status_toolbar_omits_queue_depth_when_zero():
-    frontend = TerminalFrontend()
-    frontend.update_status(
-        StatusSnapshot(
-            session_label="a1b2c3d4",
-            mode="idle",
-            context_pct=None,
-            background_task_count=0,
-            approval_count=0,
-            queue_depth=0,
-        )
-    )
-    assert "queued" not in frontend.render_footer_toolbar()
 
 
 def test_update_status_invalidates():

@@ -55,37 +55,6 @@ def test_nested_parent_child_linkage(tmp_path: Path) -> None:
     assert by_name["child"]["trace_id"] == by_name["parent"]["trace_id"]
 
 
-def test_current_span_set_attribute_lands_on_active_span(tmp_path: Path) -> None:
-    log = tmp_path / "spans.jsonl"
-    tracing.setup_log(log)
-
-    @tracing.trace("attr_test")
-    def f() -> None:
-        tracing.current_span().set_attribute("foo", "bar")
-        tracing.current_span().set_attribute("count", 42)
-
-    f()
-    rec = _read_records(log)[0]
-    assert rec["attributes"] == {"foo": "bar", "count": 42}
-
-
-def test_current_span_add_event_appends(tmp_path: Path) -> None:
-    log = tmp_path / "spans.jsonl"
-    tracing.setup_log(log)
-
-    @tracing.trace("event_test")
-    def f() -> None:
-        tracing.current_span().add_event("step_one", {"n": 1})
-        tracing.current_span().add_event("step_two", {"n": 2})
-
-    f()
-    rec = _read_records(log)[0]
-    assert len(rec["events"]) == 2
-    assert rec["events"][0]["name"] == "step_one"
-    assert rec["events"][0]["attributes"] == {"n": 1}
-    assert rec["events"][1]["name"] == "step_two"
-
-
 def test_exception_emits_error_record_and_reraises(tmp_path: Path) -> None:
     log = tmp_path / "spans.jsonl"
     tracing.setup_log(log)

@@ -1,8 +1,6 @@
 """Tests for memory_search — ranked FTS over memory artifacts."""
 
 import asyncio
-import json
-import logging
 from pathlib import Path
 
 import pytest
@@ -15,7 +13,6 @@ from co_cli.deps import CoDeps, CoSessionState
 from co_cli.index.store import IndexStore
 from co_cli.memory.service import reindex, save_memory_item
 from co_cli.memory.store import _USER_PRIORITY_CAP, MemoryStore
-from co_cli.observability import tracing
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -48,28 +45,6 @@ def _make_deps(tmp_path: Path, index: IndexStore, memory: MemoryStore) -> CoDeps
 
 def _ctx(deps: CoDeps) -> RunContext[CoDeps]:
     return RunContext(deps=deps, model=None, usage=RunUsage())
-
-
-@pytest.fixture
-def isolated_spans_log(tmp_path: Path):
-    """Isolated spans log with clean state; restores logger state on teardown."""
-    logger = logging.getLogger("co_cli.observability.spans")
-    saved_handlers = list(logger.handlers)
-    saved_patterns = list(tracing._COMPILED_PATTERNS)
-    for h in saved_handlers:
-        logger.removeHandler(h)
-    tracing._SPAN_STACK.set(())
-
-    log = tmp_path / "spans.jsonl"
-    tracing.setup_log(log)
-    yield log
-
-    for h in list(logger.handlers):
-        logger.removeHandler(h)
-        h.close()
-    for h in saved_handlers:
-        logger.addHandler(h)
-    tracing._COMPILED_PATTERNS = saved_patterns
 
 
 def _seed(
@@ -273,33 +248,3 @@ async def test_memory_search_disk_scan_fallback_when_no_store(tmp_path: Path) ->
         assert "kind" in r
         assert "path" in r
         assert "filename_stem" in r
-
-
-@pytest.mark.asyncio
-async def test_index_search_emits_retrieval_span(isolated_spans_log: Path, tmp_path: Path) -> None:
-    """IndexStore.search emits exactly one index.search span whose co.index.hits
-    equals the result count returned by that invocation."""
-    index, _memory = _make_stores(tmp_path)
-    try:
-        _seed(
-            tmp_path / "memory",
-            index,
-            content="retrievalspanmarker content about indexing",
-            kind="note",
-            title="retrieval span test",
-        )
-        results = index.search("retrievalspanmarker", limit=5)
-    finally:
-        index.close()
-
-    logger = logging.getLogger("co_cli.observability.spans")
-    for h in logger.handlers:
-        h.flush()
-    records = [
-        json.loads(line) for line in isolated_spans_log.read_text().splitlines() if line.strip()
-    ]
-    search_records = [r for r in records if r["name"] == "index.search"]
-    assert len(search_records) == 1, (
-        f"expected exactly one index.search span, got {len(search_records)}"
-    )
-    assert search_records[0]["attributes"]["co.index.hits"] == len(results)
