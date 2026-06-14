@@ -157,28 +157,31 @@ applied on restart — there is no runtime switch.
 
 ### 2.5 Canon doctrine
 
-Canon scenes (`souls/{role}/memories/*.md`) are the source-material grounding for the active
+Canon scenes (`souls/{role}/canon/*.md`) are the source-material grounding for the active
 character. They are read-only at runtime, package-shipped, and **not** part of the memory
 surface — there is no canon search tool and no `canon_manage` tool. Canon is
 identity; treating it as mutable would compromise the personality contract.
 
-**Indexing.** At bootstrap, `_sync_canon_store(store, config, frontend)` calls
-`MemoryStore.sync_dir(source='canon', directory=canon_dir, glob='*.md', no_chunk=True)` so
-each scene becomes a single chunk. The `'canon'` source coexists with `'knowledge'` and
-`'session'` in `chunks_fts` but is owned exclusively by the personality system. No
-model-callable tool returns canon hits.
+**Indexing.** At bootstrap, `_sync_canon_store(index_store, config, on_status)`
+(`bootstrap/core.py`) delegates to `_sync_canon_dir`, which globs `canon/*.md` and upserts each
+file as a **single chunk** (`index=0`) under `source='canon'`, `kind='canon'` via
+`index_store.transaction()`, skipping unchanged files with a content-hash `needs_reindex` guard.
+Canon has its own bespoke indexer — it does **not** go through `MemoryStore.sync_dir`. The
+`'canon'` source coexists with `'knowledge'` and `'session'` in `chunks_fts` but is owned
+exclusively by the personality system. No model-callable tool returns canon hits.
 
-**Sourcing.** `canon_dir = souls_dir / config.personality / "memories"`. If `config.personality`
-is unset, no canon is indexed.
+**Sourcing.** `canon_dir = souls_dir / config.personality / "canon"`. If `config.personality`
+is unset or disabled, no canon is indexed.
 
-**Body access.** Internal personality code reads canon bodies via
-`MemoryStore.get_chunk_content('canon', path, 0)`. Scenes are small (<1KB) and returned
-whole — chunking would fragment them.
+**Status — indexed, not yet consumed.** As of HEAD nothing reads the canon index: no runtime
+code queries `source='canon'`, and `IndexStore.get_chunk_content` (the read primitive) has no
+canon caller. The auto-injection-at-agent-construction the design intends is **not wired up** —
+canon is currently FTS-indexed infrastructure with no consumer. Intended design: relevance-
+selected injection of matching scenes (each <1KB, returned whole so chunking can't fragment them).
 
-**Removal from memory surface.** The previous design surfaced canon as `kind='canon'` in
-the artifacts channel of the unified recall tool. That was the wrong tier — canon is doctrine, not
-accumulated state. The canon priority pass was removed; canon is not queryable via any
-model-callable tool — it is auto-injected by the personality system at agent construction.
+**No model surface.** A previous design surfaced canon as `kind='canon'` in the artifacts channel
+of the unified recall tool. That was the wrong tier — canon is doctrine, not accumulated state.
+The canon priority pass was removed; canon is not queryable via any model-callable tool.
 
 ---
 

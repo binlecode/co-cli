@@ -93,8 +93,9 @@ def build_base_instructions(config: Settings) -> str:
     3. Behavioral rules (numbered, strict order)
 
     Canon and critique are NOT injected here — canon is indexed at bootstrap under
-    ``source='canon'`` for personality-system auto-injection only (no model-callable
-    read path); critique is appended in ``core.py`` after operational guidance.
+    ``source='canon'`` for personality-system use only (no model-callable read path,
+    no runtime consumer wired up yet); critique is appended in ``core.py`` after
+    operational guidance.
 
     Returns the fully assembled base instructions string.
     """

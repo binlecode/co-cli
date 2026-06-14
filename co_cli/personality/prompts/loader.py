@@ -12,8 +12,8 @@ daemon (not the orchestrator) — it scopes the active character's retention
 judgment into the memory/skill reviewers. See ``load_soul_curation``.
 
 Canon scenes (``souls/{role}/canon/*.md``) are NOT loaded here. They are
-indexed at bootstrap into the shared FTS pipeline under source='canon' and
-surfaced via personality auto-injection (never returned by any model-callable tool).
+indexed at bootstrap into the shared FTS pipeline under source='canon' for
+personality-system use only (never returned by any model-callable tool).
 
 Each role is fully self-contained under ``souls/{role}/``. Adding a role requires
 only a new directory with the required files — no Python changes.
