@@ -28,7 +28,7 @@ build_orchestrator(ORCHESTRATOR_SPEC, deps)
     [safety_prompt, current_time_prompt, deferred_tool_awareness_prompt, skill_manifest_prompt]
     → each emitted as InstructionPart(dynamic=True), evaluated fresh per request
 
-Character canon (souls/{role}/memories/*.md) is indexed at bootstrap by `_sync_canon_store()`
+Character canon (souls/{role}/canon/*.md) is indexed at bootstrap by `_sync_canon_store()`
 for personality-system consumption only — it is never returned by any model-callable tool.
 See §2 "Canon doctrine" below.
 ```
@@ -45,7 +45,7 @@ and package-shipped, but they differ in *what they are* and *how they should be 
 
 | Asset | Relation to canon | Nature |
 |---|---|---|
-| Memories (`memories/*.md`) | **Canon** — directly source-grounded scenes, observations, dialogue | Observational ("character did X in scene Y") |
+| Canon scenes (`canon/*.md`) | **Canon** — directly source-grounded scenes, observations, dialogue | Observational ("character did X in scene Y") |
 | Mindsets (`mindsets/{task_type}.md`) | **Distillation of canon** — interpretation abstracted into task-typed prescriptions | Prescriptive ("when coding, be terse and load-bearing") |
 | Seed (`seed.md`) | **Synthesis of canon** — distilled identity declaration | Declarative ("you are X, you do Y, never Z") |
 | Examples (`examples.md`) | **Pattern extraction from canon** — how the character speaks/responds | Few-shot |
@@ -120,7 +120,7 @@ block; they are emitted by per-turn `agent.instructions()` callbacks
 (`skill_manifest_prompt`, `deferred_tool_awareness_prompt`) so that `skill_catalog` /
 `tool_catalog` mutations do not invalidate the cached prefix. See [prompt-assembly.md](prompt-assembly.md) §2.2–2.3.
 
-Character canon (`memories/*.md`) is NOT included in the static prompt. It is indexed at
+Character canon (`canon/*.md`) is NOT included in the static prompt. It is indexed at
 bootstrap into the shared FTS index under `source='canon'` for personality-system use
 only — there is no model-callable read path. See §2.5 below.
 
@@ -173,15 +173,19 @@ exclusively by the personality system. No model-callable tool returns canon hits
 **Sourcing.** `canon_dir = souls_dir / config.personality / "canon"`. If `config.personality`
 is unset or disabled, no canon is indexed.
 
-**Status — indexed, not yet consumed.** As of HEAD nothing reads the canon index: no runtime
-code queries `source='canon'`, and `IndexStore.get_chunk_content` (the read primitive) has no
-canon caller. The auto-injection-at-agent-construction the design intends is **not wired up** —
-canon is currently FTS-indexed infrastructure with no consumer. Intended design: relevance-
-selected injection of matching scenes (each <1KB, returned whole so chunking can't fragment them).
+**No model surface (by design).** Canon is system-owned doctrine, not an agent-facing tier: the
+memory write tool rejects `kind='canon'` (`tools/memory/manage.py`) and agent recall searches only
+the memory source (`memory/store.py`), so the model can neither write nor read canon. A previous
+design surfaced canon as `kind='canon'` in the unified recall tool's artifacts channel; that was
+removed as the wrong tier (canon is doctrine, not accumulated state). The model never queries
+canon — per §1 it is **not statically injected** but surfaced by the personality system on
+relevance ("a scene either matches the moment or doesn't").
 
-**No model surface.** A previous design surfaced canon as `kind='canon'` in the artifacts channel
-of the unified recall tool. That was the wrong tier — canon is doctrine, not accumulated state.
-The canon priority pass was removed; canon is not queryable via any model-callable tool.
+**Implementation status.** Built: the bootstrap indexer (`_sync_canon_dir`). Not yet built: the
+personality-system search + inject step — no code queries `source='canon'` and
+`IndexStore.get_chunk_content` (the read primitive, `index/store.py`) has no caller. So canon is
+currently indexed but not yet surfaced; the relevance-selected injection the design calls for is
+pending. Scenes are each <1KB and indexed whole, so the future injector can return complete scenes.
 
 ---
 
@@ -225,7 +229,7 @@ for missing mindset files.
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `_sync_canon_store(store, config, frontend)` | `co_cli/bootstrap/core.py` | Indexes `souls/{role}/memories/*.md` into `chunks_fts` under `source='canon'`; package-private — no model-callable read path |
+| `_sync_canon_store(index_store, config, on_status)` | `co_cli/bootstrap/core.py` | Indexes `souls/{role}/canon/*.md` into `chunks_fts` under `source='canon'`; package-private — no model-callable read path |
 
 ---
 
@@ -236,7 +240,7 @@ for missing mindset files.
 | `co_cli/context/assembly.py` | `build_base_instructions()` — static prompt assembly (soul + mindsets + rules + recency advisory) |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — `<available_skills>` block; emitted per-turn via `skill_manifest_prompt` |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` |
-| `co_cli/personality/prompts/souls/{role}/memories/*.md` | Canon scene files (package-shipped) |
+| `co_cli/personality/prompts/souls/{role}/canon/*.md` | Canon scene files (package-shipped) |
 | `co_cli/bootstrap/core.py:_sync_canon_store` | Bootstrap hook indexing canon under `source='canon'` (personality-load-only path) |
 | `co_cli/bootstrap/core.py:_sync_canon_dir` | Single-chunk-per-file canon indexing helper (one `Chunk` per file, `index=0`) called by `_sync_canon_store` |
 | `co_cli/personality/prompts/validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |

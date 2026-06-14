@@ -49,8 +49,8 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 │  ├─ _discover_memory_backend(config, frontend, degradations)
 │  ├─ _sync_memory_store(store, config, frontend, knowledge_dir)
 │  │      indexes every .md in knowledge_dir under source="memory"; on failure closes store and aborts startup
-│  ├─ _sync_canon_store(store, config, frontend)
-│  │      indexes souls/{role}/memories/*.md under source="canon" (no_chunk=True); no-op when store=None or personality empty
+│  ├─ _sync_canon_store(index_store, config, on_status)
+│  │      indexes souls/{role}/canon/*.md under source="canon" (no_chunk=True); no-op when store=None or personality empty
 │  └─ return CoDeps(...)
 │
 ├─ deps.session.reasoning_display = CLI-selected mode
@@ -155,7 +155,7 @@ If a `MemoryStore` exists, bootstrap syncs every `.md` file under `knowledge_dir
 
 ### Step 9b. Sync canon scenes
 
-If a `MemoryStore` and a `config.personality` exist, bootstrap calls `_sync_canon_store()` to index the active role's character memory files (`souls/{role}/memories/*.md`) into the FTS pipeline under `source='canon'`. Each file is stored as a single unchunked chunk (full body) so recall can return complete scenes. Hash-skip prevents re-indexing unchanged files. This step no-ops when `store is None` or `config.personality` is empty.
+If a `MemoryStore` and a `config.personality` exist, bootstrap calls `_sync_canon_store()` to index the active role's character memory files (`souls/{role}/canon/*.md`) into the FTS pipeline under `source='canon'`. Each file is stored as a single unchunked chunk (full body) so recall can return complete scenes. Hash-skip prevents re-indexing unchanged files. This step no-ops when `store is None` or `config.personality` is empty.
 
 ### Step 10. Assemble `CoDeps`
 
