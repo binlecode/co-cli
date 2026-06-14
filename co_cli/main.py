@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 import typer
@@ -14,7 +15,7 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
 from pydantic_ai import Agent, DeferredToolRequests
-from pydantic_ai.messages import ModelMessage
+from pydantic_ai.messages import BinaryContent, ModelMessage
 
 from co_cli.agent.build import build_orchestrator
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
@@ -54,6 +55,11 @@ from co_cli.session.persistence import persist_session_history
 from co_cli.session.usage import ORIGIN_SESSION, append_turn
 from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans
+from co_cli.tools.vision.intake import (
+    ImageRejection,
+    detect_lone_image_path,
+    read_image,
+)
 
 _VERSION = project_info().version
 
@@ -147,7 +153,7 @@ async def _run_foreground_turn(
     *,
     message_history: list[ModelMessage],
     agent: Agent[CoDeps, str | DeferredToolRequests],
-    user_input: str,
+    user_input: str | list[str | BinaryContent],
     saved_env: dict[str, str | None],
     deps: CoDeps,
     frontend: Frontend,
@@ -320,6 +326,30 @@ class _IterationState:
     should_exit: bool = False
 
 
+def _attach_user_image(
+    user_input: str, path: Path, deps: CoDeps
+) -> str | list[str | BinaryContent]:
+    """Build the turn input for a user-dragged lone image path.
+
+    The path is already known to be a lone image gesture (detect_lone_image_path matched).
+    When the agent model can see, read the pixels and return ``[text, BinaryContent]`` so the
+    agent answers about it on this turn — the text (including the path) is retained verbatim.
+    A blind model, or an unreadable/oversize image, gets exactly one honest notice and the
+    turn runs text-only.
+    """
+    if not deps.agent_vision_capable:
+        console.print(
+            "[dim]You referenced an image, but the current model can't see it — "
+            "proceeding text-only.[/dim]"
+        )
+        return user_input
+    image = read_image(path)
+    if isinstance(image, ImageRejection):
+        console.print(f"[dim]Could not attach image: {image.message}[/dim]")
+        return user_input
+    return [user_input, image]
+
+
 async def _handle_one_input(
     user_input: str | None,
     eof: bool,
@@ -370,6 +400,28 @@ async def _handle_one_input(
         return _IterationState(
             message_history=state.message_history,
             last_interrupt_time=state.last_interrupt_time,
+            should_exit=False,
+        )
+
+    # A lone image path the user dragged in is a "look at this" gesture, not a command —
+    # detect it BEFORE slash dispatch so a bare absolute path (which starts with "/") is
+    # honored rather than rejected as an unknown command. Collision-free: no slash command
+    # ends in an image suffix, so this only fires when the whole input is an existing image.
+    image_path = detect_lone_image_path(user_input, deps.workspace_dir)
+    if image_path is not None:
+        turn_input = _attach_user_image(user_input, image_path, deps)
+        updated_history = await _run_foreground_turn(
+            message_history=state.message_history,
+            agent=agent,
+            user_input=turn_input,
+            saved_env={},
+            deps=deps,
+            frontend=frontend,
+        )
+        frontend.update_status(_build_status_snapshot(deps, "idle", queue))
+        return _IterationState(
+            message_history=updated_history,
+            last_interrupt_time=0.0,
             should_exit=False,
         )
 

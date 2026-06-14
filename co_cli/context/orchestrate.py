@@ -31,6 +31,7 @@ from pydantic_ai.usage import UsageLimits
 ToolApprovalDecisions = DeferredToolResults
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
 from pydantic_ai.messages import (
+    BinaryContent,
     FinalResultEvent,
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -141,7 +142,9 @@ class _TurnState:
     """
 
     # pre-turn
-    current_input: str | None
+    # A list carries a multimodal user prompt (text + BinaryContent parts), e.g. a
+    # user-dragged image spliced in by the REPL preprocessor; None for approval-resume.
+    current_input: str | list[str | BinaryContent] | None
     current_history: list[ModelMessage]
     # Tool-call reformulation budget (HTTP 400 only — app logic, not transport retry).
     # Independent of SDK transport retries (429/5xx handled by OpenAI SDK).
@@ -733,11 +736,22 @@ async def _attempt_overflow_recovery(
 # ---------------------------------------------------------------------------
 
 
+def _prompt_char_count(user_input: str | list[str | BinaryContent]) -> int:
+    """Text length of a user prompt, counting only str parts of a multimodal list.
+
+    A multimodal prompt is a list of parts; len() on the list would record the part count,
+    not the user's text length — so a list sums the lengths of its str parts only.
+    """
+    if isinstance(user_input, str):
+        return len(user_input)
+    return sum(len(part) for part in user_input if isinstance(part, str))
+
+
 @trace("co.turn", new_trace=True)
 async def run_turn(
     *,
     agent: SessionAgent,
-    user_input: str,
+    user_input: str | list[str | BinaryContent],
     deps: CoDeps,
     message_history: list[ModelMessage],
     model_settings: ModelSettings | None = None,
@@ -764,7 +778,7 @@ async def run_turn(
     )
 
     span = current_span()
-    span.set_attribute("co.user_prompt.chars", len(user_input or ""))
+    span.set_attribute("co.user_prompt.chars", _prompt_char_count(user_input))
     try:
         active_settings: ModelSettings | None = model_settings
         while True:

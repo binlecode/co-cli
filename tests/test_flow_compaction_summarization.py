@@ -5,6 +5,7 @@ import re
 
 import pytest
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelRequest,
     ModelResponse,
     TextPart,
@@ -198,6 +199,33 @@ def test_estimate_message_tokens_grows_with_content():
 def test_estimate_message_tokens_empty_list():
     """Token estimate for an empty message list must be zero."""
     assert estimate_message_tokens([]) == 0
+
+
+def test_estimate_message_tokens_handles_binary_content():
+    """A UserPromptPart carrying [text, BinaryContent] must estimate without raising,
+    and the image must contribute a small bounded amount — never its byte length.
+
+    A 5MB image counted by serialized bytes would be ~1.3M+ tokens, spuriously
+    tripping compaction. Also covers image_view's native [prompt, BinaryContent]
+    content shape (a pre-existing latent json.dumps crash fixed here).
+    """
+    image_bytes = b"\x89PNG" + b"\x00" * (5 * 1024 * 1024)
+    with_image = [
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=["some text", BinaryContent(data=image_bytes, media_type="image/png")]
+                )
+            ]
+        )
+    ]
+    text_only = [ModelRequest(parts=[UserPromptPart(content=["some text"])])]
+
+    with_image_estimate = estimate_message_tokens(with_image)
+    text_only_estimate = estimate_message_tokens(text_only)
+
+    assert isinstance(with_image_estimate, int)
+    assert with_image_estimate - text_only_estimate < 5_000
 
 
 def test_effective_request_tokens_adds_static_floor():

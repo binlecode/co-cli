@@ -106,7 +106,13 @@ the iteration state, and the input `queue` (`collections.deque[str]`) — has on
 head-item preview surface in the bottom toolbar (`{n} queued: "…"`, omitted at depth 0).
 `/queue [list|clear|pop [n]]` inspects or prunes pending items; mid-turn it bypasses the queue and
 runs via `runtime.schedule_control(...)` (it is a buffer op, not a turn). `exit`/`quit` and empty
-input are handled inside `_handle_one_input`.
+input are handled inside `_handle_one_input`. A submission whose **entire** text resolves to
+an existing image file (`detect_lone_image_path`, `co_cli/tools/vision/intake.py`) — the
+drag-an-image-into-the-terminal gesture — is detected **before** slash dispatch (so a bare
+absolute path, which starts with `/`, is honored rather than rejected as an unknown command;
+collision-free because no slash command ends in an image suffix) and, for a vision-capable
+model, the pixels are spliced into the user turn as `BinaryContent`; a blind model gets one
+notice and runs text-only.
 
 Interrupt handling (via key bindings):
 - `Esc` while a turn is running: cancels the active turn task; its done-callback drains the next

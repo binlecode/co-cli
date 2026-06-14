@@ -17,6 +17,7 @@ import json
 import math
 
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelMessage,
     TextPart,
     ToolCallPart,
@@ -35,6 +36,13 @@ from co_cli.observability.tracing import current_span
 # ---------------------------------------------------------------------------
 # Token estimation
 # ---------------------------------------------------------------------------
+
+# Flat per-image token estimate. Image tokens do NOT scale with the base64 byte
+# length — a 5MB image is still a small, bounded number of vision tokens, so
+# counting the serialized bytes (~1.7M "tokens" for 5MB) would spuriously trigger
+# compaction / overflow-recovery. Held in tokens and re-inflated to chars below so
+# it survives the final `// CHARS_PER_TOKEN` division.
+_IMAGE_TOKEN_ESTIMATE = 1_000
 
 
 def estimate_message_tokens(messages: list[ModelMessage]) -> int:
@@ -56,7 +64,15 @@ def estimate_message_tokens(messages: list[ModelMessage]) -> int:
             content = getattr(part, "content", None)
             if isinstance(content, str):
                 total_chars += len(content)
-            elif isinstance(content, (dict, list)):
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, str):
+                        total_chars += len(item)
+                    elif isinstance(item, BinaryContent):
+                        total_chars += _IMAGE_TOKEN_ESTIMATE * CHARS_PER_TOKEN
+                    else:
+                        total_chars += len(json.dumps(item, ensure_ascii=False))
+            elif isinstance(content, dict):
                 total_chars += len(json.dumps(content, ensure_ascii=False))
             if isinstance(part, ToolCallPart):
                 args = part.args_as_dict()

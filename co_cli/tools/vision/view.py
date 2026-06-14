@@ -16,28 +16,13 @@ and no describe-fallback — vision is the agent model's own capability or nothi
 from pathlib import Path
 
 from pydantic_ai import RunContext
-from pydantic_ai.messages import BinaryContent, ToolReturn
+from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.files.fs_guards import enforce_read_boundary
 from co_cli.tools.tool_io import tool_error
-
-# Cap at ~20 MB — image_view reads a path the agent chose (a bounded, deliberate read),
-# so an oversize image is rejected with a clear error rather than downscaled. See the
-# plan's "oversize = reject" decision (no image-processing dependency on the tool path).
-_MAX_IMAGE_BYTES = 20 * 1024 * 1024
-
-# Accepted image media types, keyed by file suffix. PDFs are out of scope — they route
-# to the documents skill (text) or the scanned-PDF tier-2 path (which renders pages to
-# PNGs and feeds them back through this tool).
-_MEDIA_TYPES: dict[str, str] = {
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".webp": "image/webp",
-    ".gif": "image/gif",
-}
+from co_cli.tools.vision.intake import ImageRejection, read_image
 
 
 def _vision_available(deps: CoDeps) -> bool:
@@ -78,35 +63,15 @@ async def image_view(
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 
-    if not resolved.exists():
-        return tool_error(f"Image not found: {path}", ctx=ctx)
-    if resolved.is_dir():
-        return tool_error(f"Path is a directory: {path}", ctx=ctx)
-
-    media_type = _MEDIA_TYPES.get(resolved.suffix.lower())
-    if media_type is None:
-        accepted = ", ".join(sorted(_MEDIA_TYPES))
-        return tool_error(
-            f"Unsupported image type: {resolved.suffix or '(no suffix)'}. "
-            f"image_view accepts {accepted}. For a PDF, use the documents skill.",
-            ctx=ctx,
-        )
-
-    size = resolved.stat().st_size
-    if size > _MAX_IMAGE_BYTES:
-        return tool_error(
-            f"Image too large ({size / (1024 * 1024):.1f} MB; cap is "
-            f"{_MAX_IMAGE_BYTES // (1024 * 1024)} MB). Resize it and retry.",
-            ctx=ctx,
-        )
-
-    data = resolved.read_bytes()
+    image = read_image(resolved)
+    if isinstance(image, ImageRejection):
+        return tool_error(image.message, ctx=ctx)
 
     # Attach real pixels via ToolReturn.content. tool_output() has no content param, so
     # construct a raw ToolReturn directly. return_value is a short note — the pixels ride
     # content as a separate UserPromptPart the agent model reads next turn.
     return ToolReturn(
         return_value=f"Image attached ({resolved.name}); answer using vision.",
-        content=[prompt, BinaryContent(data=data, media_type=media_type)],
-        metadata={"path": str(resolved), "media_type": media_type},
+        content=[prompt, image],
+        metadata={"path": str(resolved), "media_type": image.media_type},
     )

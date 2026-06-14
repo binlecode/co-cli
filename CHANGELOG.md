@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.354]
+
+### Feature: user image intake — lone path-reference → `image_view` routing (`user-image-intake`)
+
+- **Drag-and-send images now work.** When a user's submitted turn is, in its entirety, a single supported image path (the canonical drag-an-image-into-the-terminal gesture), the turn layer reads the pixels through `image_view`'s shared read core and splices them into the user prompt as `BinaryContent` — deterministically, before the LLM call (hermes parity). A vision-capable agent answers about the image on the same turn instead of the gesture silently no-opping.
+- **Lone-path trigger only.** Detection requires the *entire* trimmed input (after quote-strip, `file://` + `%20` decode, `\<space>` unescape, `~` expansion, relative-resolve against `workspace_dir`) to be one path with a supported image suffix that exists. Any trailing text, question, or mid-sentence mention is ignored — talking about a file is not handing it over. At most one image per turn.
+- **User-gesture read allowance.** A lone user-supplied path is read even when it resolves outside `file_search_roots` (e.g. a screenshot dragged from `~/Desktop`). Strictly scoped: preprocessor-only, read-only, one named file, still gated on `agent_vision_capable`. `image_view`'s agent-initiated path keeps the full `enforce_read_boundary` check unchanged.
+- **Honest vision gate.** A blind model is never handed pixels — the preprocessor consults `agent_vision_capable` and, when the model can't see, emits exactly one notice and runs text-only.
+- **Shared read core (refactor).** Byte-read + validation (exists/dir/MIME/size/`read_bytes`) factored into `read_image` in `co_cli/tools/vision/intake.py`; `image_view` and the new `detect_lone_image_path` both consume it (single source for the MIME set and 20 MB cap). Boundary resolution stays caller-side.
+- **`BinaryContent`-aware token estimate (prereq).** `estimate_message_tokens` now counts a `BinaryContent` as a bounded flat image-token constant instead of `json.dumps`-ing the raw bytes — fixes a latent `TypeError` crash on the spill processor, `/compact`, and summary-budget calc, and prevents a multi-MB image from spuriously triggering compaction.
+- **Multimodal prompt threading.** `run_turn` accepts `str | list[str | BinaryContent]`; the `co.user_prompt.chars` span sums string-part lengths only.
+
 ## [0.8.353]
 
 ### Bugfix: dream queue/review path — three logical defects (`dream-queue-review-fixes`)
