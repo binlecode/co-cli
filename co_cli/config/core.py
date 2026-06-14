@@ -76,8 +76,10 @@ def _ensure_dirs() -> None:
     TOOL_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _validate_personality(personality: str) -> list[str]:
-    """Return startup warnings for missing personality files."""
+def _validate_personality(personality: str | None) -> list[str]:
+    """Return startup warnings for missing personality files (none when disabled)."""
+    if not personality:
+        return []
     from co_cli.personality.prompts.validator import validate_personality_files
 
     return validate_personality_files(personality)
@@ -110,7 +112,7 @@ class Settings(BaseModel):
     # Flat — behavior
     theme: str = Field(default=DEFAULT_THEME)
     reasoning_display: Literal["off", "summary", "full"] = Field(default=DEFAULT_REASONING_DISPLAY)
-    personality: str = Field(default=DEFAULT_PERSONALITY)
+    personality: str | None = Field(default=DEFAULT_PERSONALITY)
     tool_retries: int = Field(default=DEFAULT_TOOL_RETRIES)
 
     # Flat — safety
@@ -124,11 +126,15 @@ class Settings(BaseModel):
 
     @field_validator("personality")
     @classmethod
-    def _validate_personality_name(cls, v: str) -> str:
+    def _validate_personality_name(cls, v: str | None) -> str | None:
         from co_cli.personality.prompts.validator import VALID_PERSONALITIES
 
+        if v is None or v == "none":
+            return None
         if v not in VALID_PERSONALITIES:
-            raise ValueError(f"personality must be one of {VALID_PERSONALITIES}, got: {v}")
+            raise ValueError(
+                f"personality must be one of {VALID_PERSONALITIES} or null/none (disabled), got: {v}"
+            )
         return v
 
     @model_validator(mode="before")

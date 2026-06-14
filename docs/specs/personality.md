@@ -146,6 +146,15 @@ be numbered contiguously starting at `01` and unique. Current rules: `01_identit
 `validate_personality_files(role)` checks for the 6 required mindset files and returns
 non-blocking warning strings. Startup prints any warnings but does not abort.
 
+**Disabled mode.** `personality` is `str | None`; `None` disables the personality layer.
+Set it via JSON `null` in `settings.json` or `CO_PERSONALITY=none` (the env-transport spelling
+of `None`, normalized by the field validator). When disabled, `build_base_instructions` skips
+the seed and mindsets, the critique provider returns nothing, and canon is not synced —
+yielding a rules-only neutral agent. The behavioral rules (`context/rules/`, including
+`02_safety` and the tool protocol) load unconditionally, so disabling personality never
+disables guardrails. Like role selection, this is session-static: resolved once at config load,
+applied on restart — there is no runtime switch.
+
 ### 2.5 Canon doctrine
 
 Canon scenes (`souls/{role}/memories/*.md`) are the source-material grounding for the active

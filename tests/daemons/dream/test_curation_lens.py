@@ -48,6 +48,6 @@ def test_lens_is_role_specific() -> None:
 
 def test_no_personality_falls_back_to_base() -> None:
     deps = _deps_for("tars")
-    deps.config.personality = ""
+    deps.config.personality = None
     instructions = _memory_review_instructions(deps)
     assert load_soul_curation("tars") not in instructions
