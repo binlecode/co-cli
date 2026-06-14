@@ -22,7 +22,8 @@ The broader persistent cognition model lives in [memory.md](memory.md). Startup 
                   ┌───────────────────────────────────────────────┐
                   │  $CO_HOME — sole cross-process bridge         │
                   │    daemons/dream/queue/<ts>-<uuid>.json       │
-                  │    daemons/dream/{done,failed}/               │
+                  │    daemons/dream/queue/{done,failed}/         │
+                  │    daemons/dream/snapshots/<id>-<ts>.jsonl    │
                   │    daemons/dream.pid, dream.lock              │
                   │    sessions/<id>.jsonl                        │
                   │    memory/*.md     skills/<name>/SKILL.usage.json │
@@ -64,7 +65,7 @@ _maybe_kick_memory_review(deps)
 _maybe_kick_skill_review(deps)
 ```
 
-Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, resets the counter to 0, and calls `_send_review_kick(deps, domain=..., persisted_message_count=...)`.
+Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, resets the counter to 0, and calls `write_review_kick(domain=..., session_id=..., persisted_message_count=...)` (the shared producer in `co_cli/daemons/dream/kick.py`).
 
 **Inline tool-write resets** (domain-scoped):
 
@@ -77,7 +78,7 @@ Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, 
 
 **Session-end always-fire** in `_drain_and_cleanup`: both KICKs (memory + skill) fire regardless of counter state at REPL shutdown.
 
-**`_send_review_kick`** is fire-and-forget against the filesystem: atomic-write a KICK JSON file to `$CO_HOME/daemons/dream/queue/<ts>-<uuid>.json` (write to `<name>.tmp` sibling → fsync → `os.replace` into `<name>.json`) so the daemon never observes a torn file. The producer never touches the daemon's address space — daemon picks the file up on its next polling iteration (default 5 s).
+**`write_review_kick`** (`co_cli/daemons/dream/kick.py`, the single producer shared by both the REPL and compaction) is fire-and-forget against the filesystem: atomic-write a KICK JSON file to `$CO_HOME/daemons/dream/queue/<ts>-<uuid>.json` (write to `<name>.tmp` sibling → fsync → `os.replace` into `<name>.json`) so the daemon never observes a torn file. The producer never touches the daemon's address space — daemon picks the file up on its next polling iteration (default 5 s).
 
 ### 1.3 KICK File Queue
 
@@ -87,21 +88,25 @@ Queue file payload:
 {
   "domain": "memory" | "skill",
   "session_id": "<session-stem>",
-  "persisted_message_count": 42,
+  "persisted_message_count": 42,        // null on compaction-snapshot KICKs
   "created_at": "2026-05-22T...",
-  "attempts": 0
+  "attempts": 0,
+  "transcript_override": "<path>"       // optional; present only on compaction-snapshot KICKs
 }
 ```
 
 `persisted_message_count` is a JSONL record index, not a turn count. The daemon truncates the transcript at this index to get a consistent view even while the REPL is still appending. Naming this `turn_index` would invite truncation bugs.
+
+`transcript_override` is the optional Defect-B field: when present (memory KICKs fired by compaction — see [compaction.md](compaction.md)), it names an immutable pre-compaction snapshot file the reviewer reads **uncapped** instead of the live transcript, so content compaction is about to drop is reviewed at full fidelity before the live file is rewritten in place. Absent (the normal counter/session-end KICKs), the reviewer takes the live-file first-N path. The key is omitted entirely when not set, so existing consumers are unaffected.
 
 Queue directories under `$CO_HOME/daemons/dream/`:
 
 | Path | Content |
 |---|---|
 | `queue/*.json` | Pending KICK files |
-| `queue/done/*.json` | Successfully processed (audit retention) |
-| `queue/failed/*.json` | Exhausted `max_retry_attempts`; inspect via `co dream status` |
+| `queue/done/*.json` | Successfully processed; pruned by age in housekeeping (`done_retention_days`) |
+| `queue/failed/*.json` | Exhausted `max_retry_attempts`; inspect via `co dream status` (never auto-pruned — diagnostic) |
+| `snapshots/*.jsonl` | Pre-compaction transcript snapshots referenced by `transcript_override` KICKs; deleted on the KICK's terminal transition, with an age-based orphan sweep in housekeeping |
 
 The daemon's `_queue.py` scanner skips any `*.tmp` files. Both producers — REPL writing a new KICK and the daemon updating the attempt counter in place — use tmp + `os.replace` so a crash mid-write never leaves a torn `*.json` file visible to the scanner.
 
@@ -126,7 +131,7 @@ co dream start
          cold-loads — see "Bootstrap responsiveness" below]
       if shutdown fires first → cancel bootstrap → unlink DREAM_PID_FILE → os._exit(0)
         (skips asyncio.run's join of the uncancellable embed worker thread)
-  → child runs main_loop(deps, queue_dir, state, cfg, shutdown)
+  → child runs main_loop(deps, queue_dir, done_dir, failed_dir, state, cfg, shutdown)
   → on shutdown.set(): main_loop exits; finally-block unlinks DREAM_PID_FILE
 
 co dream stop          (default: graceful)
@@ -162,13 +167,15 @@ while not shutdown.is_set():
     item = files[0]                                     # FIFO
     try:
         async with asyncio.timeout(cfg.review_timeout_seconds):
-            await _process_kick_file(deps, item, state)
-        move_to_done(item)
+            await _process_kick_file(deps, item, payload, state)
+        move_to_done(item, done_dir)
+        _cleanup_override(payload)                       # unlink snapshot on terminal move
     except Exception as exc:
         payload["attempts"] += 1
         write_queue_item(item, payload)                 # persist counter across restarts
         if attempts >= cfg.max_retry_attempts:
-            move_to_failed(item, last_error=str(exc))
+            move_to_failed(item, failed_dir, last_error=str(exc))
+            _cleanup_override(payload)                   # snapshot survives retries; freed only here
         else:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(shutdown.wait(),
@@ -202,7 +209,7 @@ Both specs route through `run_standalone(SPEC, child_deps, prompt)` which uses `
 
 **Deps bootstrap is shared with the REPL.** `_run_foreground` calls `create_deps(on_status=logger.info, stack=None)` — the same bootstrap path used by `co chat`. The two daemon-specific differences are: status messages route to the daemon log instead of a terminal, and no MCP servers are connected (reviewer tools are all native). All stores (`index_store`, `memory_store`, `session_store`, `skill_catalog`) are built identically to the REPL.
 
-**Transcript loading:** `load_transcript(path, max_message_count=N)` truncates the JSONL at record index N — consistent view even while REPL appends. Default `max_message_count=None` returns the full list unchanged (existing callers unaffected).
+**Transcript loading:** `load_transcript(path, max_message_count=N)` truncates the JSONL at record index N — consistent view even while REPL appends. Default `max_message_count=None` returns the full list unchanged (existing callers unaffected). When a KICK carries `transcript_override`, `process_review` reads that snapshot path **uncapped** (no `max_message_count`) instead of the live session file — the snapshot is immutable, so the first-N truncation is unnecessary and would clip the pre-compaction content the snapshot exists to preserve.
 
 ### 1.6 Recall Metrics
 
@@ -279,7 +286,7 @@ Current default: `dream.enabled = false`. Opt-in via `CO_DREAM_ENABLED=true` or 
 
 ## 2. Clock-Driven Housekeeping
 
-Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay against the full memory corpus AND the user skill library. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream run`). It reads the memory item store, the per-skill recall sidecars, and skill markdown bodies — never transcripts (that is the reviewer's job).
+Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay → retention-prune against the full memory corpus AND the user skill library. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream run`). It reads the memory item store, the per-skill recall sidecars, and skill markdown bodies — never transcripts (that is the reviewer's job). The final retention-prune phase (`prune_done_and_snapshots`) deletes `queue/done/` files and orphaned `snapshots/` files older than `dream.done_retention_days` (default 7), keeping those audit bins bounded; `queue/failed/` is left intact.
 
 ```mermaid
 flowchart TD
@@ -293,7 +300,8 @@ flowchart TD
         SkillMerge["Phase 1b: Skill merge\ntoken-Jaccard clusters of user-skill bodies\npinned skills excluded\ncanonical = max (len(recall_days), use_count)\n→ llm_call() consolidates body\n→ archive non-anchor originals to skills/.archive/"]
         MemDecay["Phase 2a: Memory decay\naged > decay_after_days\nAND no recall in recall_protection_days\nAND not decay_protected\n→ archive to memory/_archive/"]
         SkillDecay["Phase 2b: Skill decay\nsidecar age > skills.decay_after_days\nAND no recall in skills.recall_protection_days\nAND not pinned\n→ archive to user_skills_dir/.archive/"]
-        State["Persist HousekeepingState\n(last_housekeeping_at,\n memory_merged/decayed,\n skill_merged/decayed)"]
+        Prune["Phase 3: Retention prune\nqueue/done/ + orphaned snapshots/\nolder than done_retention_days\n(failed/ left intact)"]
+        State["Persist HousekeepingState\n(last_housekeeping_at,\n memory_merged/decayed,\n skill_merged/decayed,\n done_pruned)"]
     end
 
     Manual --> MemMerge
@@ -301,7 +309,8 @@ flowchart TD
     MemMerge --> SkillMerge
     SkillMerge --> MemDecay
     MemDecay --> SkillDecay
-    SkillDecay --> State
+    SkillDecay --> Prune
+    Prune --> State
 ```
 
 ### 2.1 Entry Points
@@ -353,6 +362,7 @@ Never-run state returns `True` so a freshly-installed daemon does a baseline pas
 | `stats.memory_decayed` | Cumulative memory items archived by decay |
 | `stats.skill_merged` | Cumulative skill-merge clusters completed |
 | `stats.skill_decayed` | Cumulative skills archived by decay |
+| `stats.done_pruned` | Cumulative `done/` + orphaned-snapshot files deleted by the retention prune |
 
 Load is forgiving: missing or corrupt state returns a fresh state object. The schema is additive — counters default to `0` so older payloads stay readable.
 
@@ -451,7 +461,7 @@ Both phases call `refresh_skills(deps)` after writes so `deps.skill_catalog` sta
 
 ### 2.6 Failure and Timeout Semantics
 
-`run_housekeeping` wraps the **merge phases** in `asyncio.timeout(cfg.max_pass_seconds)` (default 600 s). Decay phases are synchronous and bounded by `MAX_DECAY_PER_CYCLE` filesystem moves — wrapping them in the same timeout would let a slow merge starve decay, so both decay phases run unconditionally after merge regardless of whether merge completed or timed out. On merge timeout, partial merge counters are still persisted, decay still runs, and `last_housekeeping_at` is set to now — the next tick fires on schedule rather than stacking missed passes. Individual merge clusters that raise are logged and skipped without aborting the pass.
+`run_housekeeping` wraps the **merge phases** in `asyncio.timeout(cfg.max_pass_seconds)` (default 600 s). Decay phases are synchronous and bounded by `MAX_DECAY_PER_CYCLE` filesystem moves — wrapping them in the same timeout would let a slow merge starve decay, so both decay phases run unconditionally after merge regardless of whether merge completed or timed out. The retention-prune phase is likewise synchronous and runs outside the timeout, after decay. On merge timeout, partial merge counters are still persisted, decay and prune still run, and `last_housekeeping_at` is set to now — the next tick fires on schedule rather than stacking missed passes. Individual merge clusters that raise are logged and skipped without aborting the pass.
 
 ### 2.7 User Inspection and Recovery
 
@@ -514,6 +524,7 @@ The daemon wires the same observability stack as the main app via `setup_observa
 | `dream.run_interval_hours` | `CO_DREAM_RUN_INTERVAL_HOURS` | `24` | Minimum hours between housekeeping passes (range 1–720) |
 | `dream.run_at` | `CO_DREAM_RUN_AT` | `"03:00"` | Preferred local time-of-day boundary for the scheduled tick (`HH:MM`) |
 | `dream.max_pass_seconds` | `CO_DREAM_MAX_PASS_SECONDS` | `600` | Wall-clock cap on the merge phase of a housekeeping pass (≥ 60); decay runs unconditionally after merge |
+| `dream.done_retention_days` | `CO_DREAM_DONE_RETENTION_DAYS` | `7` | Age (days, ≥ 1) past which `queue/done/` and orphaned `snapshots/` files are deleted by the housekeeping retention prune; `failed/` is never pruned |
 
 ### Reviewer trigger settings (`skills.*`)
 
@@ -563,7 +574,8 @@ Internal caps (housekeeping — apply to both domains):
 | `spawn_detached(cmd, env=None) -> int` | `co_cli/daemons/dream/_process.py` | Popen with start_new_session=True (setsid). Returns child PID. Not a classic POSIX double-fork — setsid alone gives the needed detachment on modern Linux/macOS. |
 | `create_deps(*, on_status, stack=None, theme_override=None) -> CoDeps` | `co_cli/bootstrap/core.py` | Shared bootstrap for REPL and daemon; daemon passes `stack=None` to skip MCP |
 | `MEMORY_REVIEW_SPEC` / `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | Domain reviewer task specs |
-| `process_review(deps, domain, session_id, persisted_message_count)` | `co_cli/daemons/dream/_reviewer.py` | Load transcript + dispatch to domain reviewer. Raises `ValueError` on unknown domain (corrupt kick → `failed/`). Missing transcript is a benign no-op. |
+| `process_review(deps, domain, session_id, persisted_message_count, transcript_override=None)` | `co_cli/daemons/dream/_reviewer.py` | Load transcript + dispatch to domain reviewer. With `transcript_override` set, reads that snapshot uncapped; else the live file truncated at `persisted_message_count`. Raises `ValueError` on unknown domain (corrupt kick → `failed/`). Missing transcript/snapshot is a benign no-op. |
+| `write_review_kick(*, domain, session_id, persisted_message_count, transcript_override=None)` | `co_cli/daemons/dream/kick.py` | Shared KICK producer (REPL + compaction); atomic write to the queue; omits `transcript_override` from the payload when None |
 | `maybe_autospawn_dream(deps, frontend)` | `co_cli/bootstrap/core.py` | REPL auto-spawn hook |
 | `build_dream_line(deps) -> str` | `co_cli/bootstrap/banner.py` | Banner `Dream:` line builder |
 | `handle_dream_slash(ctx, args)` | `co_cli/commands/dream.py` | `/dream` slash handler |
@@ -579,7 +591,8 @@ Internal caps (housekeeping — apply to both domains):
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `run_housekeeping(deps, cfg, state) -> HousekeepingState` | `co_cli/daemons/dream/_housekeeping.py` | Async — merge under `asyncio.timeout(cfg.max_pass_seconds)`, then decay unconditionally; caller owns the `HousekeepingState` load, this function mutates + persists it |
+| `run_housekeeping(deps, cfg, state) -> HousekeepingState` | `co_cli/daemons/dream/_housekeeping.py` | Async — merge under `asyncio.timeout(cfg.max_pass_seconds)`, then decay and retention-prune unconditionally; caller owns the `HousekeepingState` load, this function mutates + persists it |
+| `prune_done_and_snapshots(cfg, state, *, done_dir, snapshots_dir) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — delete `done/` + orphaned snapshot files older than `cfg.done_retention_days`; bumps `state.stats.done_pruned`; returns count deleted |
 | `merge_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of same-kind memory clusters; articles excluded; returns clusters merged |
 | `decay_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled memory candidates; returns count archived |
 | `merge_skills(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of user-skill clusters; pinned excluded; rewrites anchor in-place, archives siblings to `user_skills_dir/.archive/`; returns clusters merged |
@@ -613,7 +626,7 @@ Internal caps (housekeeping — apply to both domains):
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review` |
 | `co_cli/daemons/dream/_process.py` | PID-file helpers, advisory flock, `spawn_detached` (Popen + setsid, POSIX-only) |
 | `co_cli/daemons/dream/_state.py` | `DaemonState` runtime struct + PID-file loader + `HousekeepingState` / `HousekeepingStats` |
-| `co_cli/daemons/dream/_housekeeping.py` | Memory + skill merge and decay phases; `run_housekeeping`, `merge_memory`, `decay_memory`, `merge_skills`, `decay_skills` |
+| `co_cli/daemons/dream/_housekeeping.py` | Memory + skill merge and decay phases + retention prune; `run_housekeeping`, `merge_memory`, `decay_memory`, `merge_skills`, `decay_skills`, `prune_done_and_snapshots` |
 | `co_cli/daemons/dream/prompts/memory_merge.md` | Same-kind memory consolidation prompt |
 | `co_cli/daemons/dream/prompts/skill_merge.md` | Cluster-scoped skill umbrella consolidation prompt |
 | `co_cli/daemons/dream/process.py` | Public surface: `start_daemon`, `stop_daemon`, `status_daemon`, `_run_foreground` |
@@ -621,9 +634,11 @@ Internal caps (housekeeping — apply to both domains):
 | `co_cli/daemons/dream/prompts/skill_review.md` | Skill reviewer instructions |
 | `co_cli/commands/dream.py` | `co dream` CLI group + `handle_dream_slash` |
 | `co_cli/config/dream.py` | `DreamSettings` Pydantic model + `DREAM_ENV_MAP` |
+| `co_cli/daemons/dream/kick.py` | `write_review_kick` — shared KICK producer (REPL + compaction) |
 | `co_cli/bootstrap/banner.py` | `build_dream_line` — `Dream:` banner row |
 | `co_cli/bootstrap/core.py` | `maybe_autospawn_dream` — REPL auto-spawn hook |
-| `co_cli/main.py` | `_send_review_kick`, `_maybe_kick_memory_review`, `_maybe_kick_skill_review`, `_fire_session_end_kicks` |
+| `co_cli/main.py` | `_maybe_kick_memory_review`, `_maybe_kick_skill_review`, `_fire_session_end_kicks` (all call `write_review_kick`) |
+| `co_cli/context/compaction.py` | `_snapshot_and_kick_review` — pre-compaction snapshot + memory KICK (Defect-B); see [compaction.md](compaction.md) |
 | `co_cli/deps.py` | `CoSessionState.turns_since_memory_review` / `model_requests_since_skill_review` |
 | `co_cli/skills/usage.py` | `bump_recall` + `recall_days` sidecar field |
 | `co_cli/memory/item.py` | `MemoryItem.recall_days` field |
@@ -653,7 +668,8 @@ Internal caps (housekeeping — apply to both domains):
 | Memory recall updates on `memory_search`; backward-compat load | `tests/tools/memory/test_recall_metrics.py` |
 | Skill recall sidecar `recall_days`; deduplication; backward-compat | `tests/skills/test_usage_recall_days.py` |
 | `.tmp` skip filter and FIFO drain order; `last_error` injection on `failed/` move | `tests/daemons/dream/test_queue.py` |
-| Polling drain: multi-item drain; between-items shutdown bound | `tests/daemons/dream/test_loop.py` |
+| Polling drain: multi-item drain; between-items shutdown bound; corrupt KICK → injected `failed_dir`, success → injected `done_dir` | `tests/daemons/dream/test_loop.py` |
+| Override-snapshot KICK read at full fidelity + snapshot unlinked on terminal move | `tests/daemons/dream/test_override_snapshot.py` |
 | Retry exhaustion → `failed/`; attempt counter persists across restarts | `tests/daemons/dream/test_timeout_retry.py` |
 | `acquire_start_lock` contention; file-based `status_daemon` (no/stale/live PID); `stop_daemon` stale-PID cleanup | `tests/daemons/dream/test_process.py` |
 | Full daemon process lifecycle: start, SIGTERM stop, singleton, stale-PID overwrite | `tests/integration/test_daemon_lifecycle.py` |
@@ -663,6 +679,8 @@ Internal caps (housekeeping — apply to both domains):
 | Multi-REPL: N + M KICKs → N + M queue files (no coalescing); UUID-distinct filenames | `tests/integration/test_multi_repl_kick.py` |
 | Crash mid-process → restart re-processes file (idempotent) | `tests/integration/test_daemon_crash_recovery.py` |
 | Per-prompt extraction quality (real model + real stores) | `evals/eval_domain_review.py` |
+
+> **Test-hygiene caveat (compaction snapshot path).** `_snapshot_and_kick_review` writes to the module-level `DREAM_SNAPSHOTS_DIR` / `DREAM_QUEUE_DIR` constants. Any test that exercises `compact_messages` with `skills.review_enabled=True` AND a non-None model AND a real `session_path` MUST monkeypatch both `co_cli.context.compaction.DREAM_SNAPSHOTS_DIR` and `co_cli.daemons.dream.kick.DREAM_QUEUE_DIR` to temp dirs (see `tests/test_flow_compaction_review_snapshot.py`) — otherwise it silently writes into the real `~/.co-cli`, and no assertion will catch the leak. Existing compaction tests are safe only because `review_enabled` defaults False and the default `session_path` (`Path(".")`, stem `""`) trips the empty-session-id guard.
 
 ### Housekeeping
 
@@ -675,6 +693,7 @@ Internal caps (housekeeping — apply to both domains):
 | Memory decay recall protection: aged but recalled within `recall_protection_days` → protect | `tests/daemons/dream/test_housekeeping.py` |
 | Memory `decay_protected` pin overrides age + recall | `tests/daemons/dream/test_housekeeping.py` |
 | Decay phases run after merge timeout (memory + skill) | `tests/daemons/dream/test_housekeeping.py` |
+| Retention prune: aged `done/` + stale snapshot deleted, fresh `done/` kept | `tests/daemons/dream/test_housekeeping.py` |
 | Skill canonical pick: highest `(len(recall_days), use_count)` wins | `tests/daemons/dream/test_skill_housekeeping.py` |
 | Skill cluster: similar bodies grouped; pinned excluded | `tests/daemons/dream/test_skill_housekeeping.py` |
 | Skill decay candidacy: aged + never-recalled → archive; recent recall protects; pinned protects; no sidecar → not eligible | `tests/daemons/dream/test_skill_housekeeping.py` |

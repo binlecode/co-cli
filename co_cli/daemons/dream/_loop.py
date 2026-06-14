@@ -95,6 +95,8 @@ async def _maybe_housekeep(deps: CoDeps, cfg: DreamSettings) -> None:
 async def main_loop(
     deps,
     queue_dir: Path,
+    done_dir: Path,
+    failed_dir: Path,
     state: DaemonState,
     cfg,
     shutdown: asyncio.Event,
@@ -122,25 +124,42 @@ async def main_loop(
             payload = read_queue_item(item_path)
         except (OSError, ValueError) as exc:
             logger.warning("Failed to read queue item %s: %s", item_path.name, exc)
-            move_to_failed(item_path, queue_dir.parent / "failed", str(exc))
+            move_to_failed(item_path, failed_dir, str(exc))
             continue
 
         try:
             async with asyncio.timeout(cfg.review_timeout_seconds):
                 await _process_kick_file(deps, item_path, payload, state)
-            move_to_done(item_path, queue_dir / "done")
+            move_to_done(item_path, done_dir)
+            _cleanup_override(payload)
             _flush_daemon_usage(deps)
         except Exception as exc:
             attempts = payload.get("attempts", 0) + 1
             payload["attempts"] = attempts
             write_queue_item(item_path, payload)
             if attempts >= cfg.max_retry_attempts:
-                move_to_failed(item_path, queue_dir / "failed", str(exc))
+                move_to_failed(item_path, failed_dir, str(exc))
+                _cleanup_override(payload)
             else:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(shutdown.wait(), timeout=cfg.retry_backoff_seconds)
 
     logger.info("Dream daemon shutting down")
+
+
+def _cleanup_override(payload: dict) -> None:
+    """Unlink a KICK's override snapshot on a terminal transition.
+
+    Snapshots must survive retries (a transient failure re-reads them), so this
+    runs only on terminal moves — success (done) or failed-after-exhaustion.
+    Operates on the in-memory payload the loop already holds; ``.get`` so
+    non-override KICKs are a no-op. The corrupt-payload failure path cannot reach
+    here (its payload is unreadable); those snapshots are reclaimed by the
+    housekeeping orphan sweep instead.
+    """
+    override = payload.get("transcript_override")
+    if override:
+        Path(override).unlink(missing_ok=True)
 
 
 async def _process_kick_file(deps, path: Path, payload: dict, state: DaemonState) -> None:
@@ -150,7 +169,10 @@ async def _process_kick_file(deps, path: Path, payload: dict, state: DaemonState
         domain = payload["domain"]
         session_id = payload["session_id"]
         persisted_message_count = payload["persisted_message_count"]
-        await _process_review(deps, domain, session_id, persisted_message_count)
+        transcript_override = payload.get("transcript_override")
+        await _process_review(
+            deps, domain, session_id, persisted_message_count, transcript_override
+        )
     finally:
         state.current_item = None
 
@@ -159,9 +181,10 @@ async def _process_review(
     deps,
     domain: str,
     session_id: str,
-    persisted_message_count: int,
+    persisted_message_count: int | None,
+    transcript_override: str | None = None,
 ) -> None:
     """Route a review job to the appropriate domain reviewer."""
     from co_cli.daemons.dream._reviewer import process_review
 
-    await process_review(deps, domain, session_id, persisted_message_count)
+    await process_review(deps, domain, session_id, persisted_message_count, transcript_override)

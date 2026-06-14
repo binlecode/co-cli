@@ -11,7 +11,7 @@ import asyncio
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -491,6 +491,46 @@ def decay_skills(deps: CoDeps, state: HousekeepingState) -> int:
     return archived
 
 
+def _prune_aged_files(directory: Path, cutoff: float) -> int:
+    """Delete files in ``directory`` whose mtime is older than ``cutoff``.
+
+    Best-effort: missing directory returns 0; per-file OSError is logged and
+    skipped so one unlinkable entry does not abort the sweep.
+    """
+    if not directory.exists():
+        return 0
+    pruned = 0
+    for path in directory.iterdir():
+        if not path.is_file():
+            continue
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                pruned += 1
+        except OSError as exc:
+            logger.warning("housekeeping.prune: cannot prune %s: %s", path, exc)
+    return pruned
+
+
+def prune_done_and_snapshots(
+    cfg: DreamSettings,
+    state: HousekeepingState,
+    *,
+    done_dir: Path,
+    snapshots_dir: Path,
+) -> int:
+    """Prune queue/done items and orphaned compaction snapshots past retention.
+
+    Deletes files in ``done_dir`` and ``snapshots_dir`` whose mtime is older
+    than ``cfg.done_retention_days``. ``failed/`` is intentionally left untouched
+    (rare, diagnostic). Increments ``state.stats.done_pruned`` by the total count.
+    """
+    cutoff = (datetime.now(UTC) - timedelta(days=cfg.done_retention_days)).timestamp()
+    pruned = _prune_aged_files(done_dir, cutoff) + _prune_aged_files(snapshots_dir, cutoff)
+    state.stats.done_pruned += pruned
+    return pruned
+
+
 @trace("co.housekeeping.pass")
 async def run_housekeeping(
     deps: CoDeps, cfg: DreamSettings, state: HousekeepingState
@@ -502,9 +542,15 @@ async def run_housekeeping(
     and always runs — wrapping it in the timeout would let a slow merge starve
     decay of its chance to archive aged candidates. On merge timeout, partial
     merge counters are persisted, decay still runs, and ``last_housekeeping_at``
-    is set to now so the next tick fires on schedule.
+    is set to now so the next tick fires on schedule. Retention pruning of
+    queue/done and orphaned snapshots is likewise synchronous and runs outside
+    the merge timeout.
     """
-    from co_cli.config.core import DREAM_DAEMON_DIR
+    from co_cli.config.core import (
+        DREAM_DAEMON_DIR,
+        DREAM_QUEUE_DONE_DIR,
+        DREAM_SNAPSHOTS_DIR,
+    )
 
     try:
         async with asyncio.timeout(cfg.max_pass_seconds):
@@ -518,6 +564,12 @@ async def run_housekeeping(
 
     decay_memory(deps, state)
     decay_skills(deps, state)
+    prune_done_and_snapshots(
+        cfg,
+        state,
+        done_dir=DREAM_QUEUE_DONE_DIR,
+        snapshots_dir=DREAM_SNAPSHOTS_DIR,
+    )
 
     state.last_housekeeping_at = datetime.now(UTC).isoformat()
     save_housekeeping_state(DREAM_DAEMON_DIR, state)

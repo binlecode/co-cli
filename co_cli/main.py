@@ -1,9 +1,7 @@
 import asyncio
-import json
 import logging
 import os
 import time
-import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
@@ -34,7 +32,6 @@ from co_cli.commands.registry import build_completer_entries
 from co_cli.commands.types import CommandContext, DelegateToAgent, ReplaceTranscript
 from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
-    DREAM_QUEUE_DIR,
     LOGS_DIR,
     REASONING_DISPLAY_FULL,
     USER_DIR,
@@ -42,6 +39,7 @@ from co_cli.config.core import (
     settings,
 )
 from co_cli.context.orchestrate import TurnResult, run_turn
+from co_cli.daemons.dream.kick import write_review_kick
 from co_cli.deps import CoDeps
 from co_cli.display._app import _ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import (
@@ -51,7 +49,6 @@ from co_cli.display.core import (
     console,
     set_theme,
 )
-from co_cli.fileio.atomic import atomic_write_text
 from co_cli.observability.setup import setup_observability
 from co_cli.session.persistence import persist_session_history
 from co_cli.session.usage import ORIGIN_SESSION, append_turn
@@ -59,25 +56,6 @@ from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans
 
 _VERSION = project_info().version
-
-
-def _send_review_kick(deps: CoDeps, *, domain: str, persisted_message_count: int) -> None:
-    """Write a kick file to the dream queue.
-
-    Fire-and-forget against the filesystem. Daemon picks up the file on its
-    next polling iteration. Producer never touches the daemon's address space.
-    """
-    session_id = deps.session.session_path.stem
-    created_at = datetime.now(UTC).isoformat()
-    ts = datetime.now(UTC).strftime("%Y-%m-%dT%H%M%S.%f")
-    kick_path = DREAM_QUEUE_DIR / f"{ts}-{uuid.uuid4()}.json"
-    payload = {
-        "domain": domain,
-        "session_id": session_id,
-        "persisted_message_count": persisted_message_count,
-        "created_at": created_at,
-    }
-    atomic_write_text(kick_path, json.dumps(payload))
 
 
 def _setup_observability() -> None:
@@ -206,8 +184,9 @@ def _fire_session_end_kicks(deps: CoDeps) -> None:
     if deps.model is None:
         return
     persisted = deps.runtime.persisted_message_count
-    _send_review_kick(deps, domain="memory", persisted_message_count=persisted)
-    _send_review_kick(deps, domain="skill", persisted_message_count=persisted)
+    session_id = deps.session.session_path.stem
+    write_review_kick(domain="memory", session_id=session_id, persisted_message_count=persisted)
+    write_review_kick(domain="skill", session_id=session_id, persisted_message_count=persisted)
 
 
 async def _drain_and_cleanup(
@@ -245,9 +224,9 @@ def _maybe_kick_memory_review(deps: CoDeps) -> None:
     skill_settings = deps.config.skills
     if deps.session.turns_since_memory_review >= skill_settings.review_memory_nudge_interval:
         deps.session.turns_since_memory_review = 0
-        _send_review_kick(
-            deps,
+        write_review_kick(
             domain="memory",
+            session_id=deps.session.session_path.stem,
             persisted_message_count=deps.runtime.persisted_message_count,
         )
 
@@ -260,9 +239,9 @@ def _maybe_kick_skill_review(deps: CoDeps) -> None:
         >= skill_settings.review_skill_nudge_interval
     ):
         deps.session.model_requests_since_skill_review = 0
-        _send_review_kick(
-            deps,
+        write_review_kick(
             domain="skill",
+            session_id=deps.session.session_path.stem,
             persisted_message_count=deps.runtime.persisted_message_count,
         )
 

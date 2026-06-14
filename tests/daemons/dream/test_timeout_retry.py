@@ -79,7 +79,9 @@ async def _run_until_failed(
         shutdown.set()
 
     await asyncio.gather(
-        _loop.main_loop(deps, queue_dir, state, cfg, shutdown),
+        _loop.main_loop(
+            deps, queue_dir, queue_dir / "done", queue_dir / "failed", state, cfg, shutdown
+        ),
         stopper(),
     )
 
@@ -234,7 +236,9 @@ async def test_main_loop_shutdown_interrupts_retry_backoff(tmp_path: Path) -> No
 
     start = time.monotonic()
     await asyncio.gather(
-        _loop.main_loop(deps, queue_dir, state, cfg, shutdown),
+        _loop.main_loop(
+            deps, queue_dir, queue_dir / "done", queue_dir / "failed", state, cfg, shutdown
+        ),
         stopper(),
     )
     elapsed = time.monotonic() - start

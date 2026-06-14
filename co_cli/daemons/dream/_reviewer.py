@@ -145,7 +145,8 @@ async def process_review(
     deps: CoDeps,
     domain: str,
     session_id: str,
-    persisted_message_count: int,
+    persisted_message_count: int | None,
+    transcript_override: str | None = None,
 ) -> None:
     """Load transcript and dispatch to the appropriate domain reviewer.
 
@@ -153,12 +154,24 @@ async def process_review(
     should land the kick in failed/, not done/. Missing transcript is treated
     as a benign no-op (graceful degrade for the race where REPL deletes the
     session before the daemon processes its kick).
+
+    When ``transcript_override`` is set, the reviewer reads that snapshot file
+    **uncapped** instead of the live session — a pre-compaction snapshot captured
+    before the live file was rewritten in place (Defect-B), so the dropped turns
+    are reviewed at full fidelity. Absent, the live-file first-N path is unchanged.
     """
-    transcript_path = deps.sessions_dir / f"{session_id}.jsonl"
-    if not transcript_path.exists():
-        logger.warning("review: session file missing %s", session_id)
-        return
-    messages = load_transcript(transcript_path, max_message_count=persisted_message_count)
+    if transcript_override is not None:
+        override_path = Path(transcript_override)
+        if not override_path.exists():
+            logger.warning("review: override snapshot missing %s", transcript_override)
+            return
+        messages = load_transcript(override_path)
+    else:
+        transcript_path = deps.sessions_dir / f"{session_id}.jsonl"
+        if not transcript_path.exists():
+            logger.warning("review: session file missing %s", session_id)
+            return
+        messages = load_transcript(transcript_path, max_message_count=persisted_message_count)
     if domain == "memory":
         await _run_memory_review(deps, messages)
     elif domain == "skill":

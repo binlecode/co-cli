@@ -225,6 +225,6 @@ async def _run_foreground(co_home: Path, origin: str, session_id: str) -> None:
         with contextlib.suppress(asyncio.CancelledError):
             await shutdown_wait
         deps = bootstrap.result()
-        await main_loop(deps, queue_dir, state, deps.config.dream, shutdown)
+        await main_loop(deps, queue_dir, done_dir, failed_dir, state, deps.config.dream, shutdown)
     finally:
         pid_file.unlink(missing_ok=True)

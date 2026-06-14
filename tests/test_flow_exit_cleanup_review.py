@@ -29,14 +29,17 @@ def _restore_co_home() -> Generator[None, None, None]:
         os.environ.pop("CO_HOME", None)
     else:
         os.environ["CO_HOME"] = original
-    # _make_deps reloads config.core and main against the temp CO_HOME; reload them back
-    # so module-level USER_DIR / DREAM_QUEUE_DIR bindings don't leak the temp dir to later tests.
+    # _make_deps reloads config.core, the kick producer, and main against the temp
+    # CO_HOME; reload them back so module-level USER_DIR / DREAM_QUEUE_DIR bindings
+    # don't leak the temp dir to later tests.
     import importlib
 
     import co_cli.config.core as core_mod
+    import co_cli.daemons.dream.kick as kick_mod
     import co_cli.main as main_mod
 
     importlib.reload(core_mod)
+    importlib.reload(kick_mod)
     importlib.reload(main_mod)
 
 
@@ -45,11 +48,14 @@ def _make_deps(tmp_path: Path, *, review_enabled: bool = True, with_model: bool 
     import importlib
 
     import co_cli.config.core as core_mod
+    import co_cli.daemons.dream.kick as kick_mod
     import co_cli.main as main_mod
 
     importlib.reload(core_mod)
-    # Reload main so its module-level DREAM_QUEUE_DIR binding is re-resolved
-    # against the updated USER_DIR (CO_HOME override).
+    # Reload the kick producer (and main) so the module-level DREAM_QUEUE_DIR
+    # binding the producer writes to is re-resolved against the updated USER_DIR
+    # (CO_HOME override). The producer now lives in daemons.dream.kick.
+    importlib.reload(kick_mod)
     importlib.reload(main_mod)
 
     from co_cli.deps import CoDeps
@@ -117,8 +123,13 @@ def test_fire_session_end_kicks_writes_memory_and_skill_kicks(tmp_path: Path) ->
 
     kicks = _kick_files(tmp_path)
     assert len(kicks) == 2
-    domains = {json.loads(k.read_text())["domain"] for k in kicks}
+    payloads = [json.loads(k.read_text()) for k in kicks]
+    domains = {p["domain"] for p in payloads}
     assert domains == {"memory", "skill"}
+    # Producer-path KICKs carry no transcript_override — the daemon must take the
+    # live-file read path, not the snapshot path. Absence (not None) is the contract.
+    for payload in payloads:
+        assert "transcript_override" not in payload
 
 
 def test_fire_session_end_kicks_disabled_writes_no_kicks(tmp_path: Path) -> None:

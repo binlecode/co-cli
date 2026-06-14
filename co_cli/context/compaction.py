@@ -15,7 +15,9 @@ Submodule map:
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from enum import StrEnum
+from uuid import uuid4
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
@@ -26,6 +28,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from co_cli.config.core import DREAM_SNAPSHOTS_DIR
 from co_cli.context._compaction_boundaries import (
     CompactionBoundaries,
     TurnGroup,
@@ -55,8 +58,10 @@ from co_cli.context.summarization import (
     resolve_compaction_budget,
     summarize_messages,
 )
+from co_cli.daemons.dream.kick import write_review_kick
 from co_cli.deps import CoDeps
 from co_cli.observability.tracing import current_span, trace
+from co_cli.session.persistence import append_messages
 
 __all__ = [
     "STATIC_MARKER_PREFIX",
@@ -282,6 +287,45 @@ async def _gated_summarize_or_none(
     return summary_text
 
 
+def _snapshot_and_kick_review(ctx: RunContext[CoDeps], messages: list[ModelMessage]) -> None:
+    """Snapshot the pre-compaction message list and fire a memory review KICK.
+
+    Defect-B fix: compaction rewrites the live transcript in place, lossily, so a
+    review that runs afterward reads co's own summary marker instead of the
+    original turns. Capturing here — at the one chokepoint where whole messages
+    are dropped — preserves the pre-drop content at full fidelity in an immutable
+    snapshot and points a memory review KICK at it (the daemon reads it uncapped).
+
+    Once per logical compaction: ``proactive_window_processor`` sets the one-shot
+    ``skip_compaction_snapshot`` flag only around its no-progress escalation call,
+    which re-enters ``compact_messages`` for the SAME logical compaction — so that
+    re-entry is suppressed while a genuinely separate later-in-turn compaction
+    (a fresh processor pass) still snapshots. Best-effort — any failure is logged
+    and never aborts the compaction it rides on.
+    """
+    deps = ctx.deps
+    if deps.runtime.skip_compaction_snapshot:
+        return
+    if not messages or not deps.config.skills.review_enabled or deps.model is None:
+        return
+    session_id = deps.session.session_path.stem if deps.session.session_path else ""
+    if not session_id:
+        return
+    try:
+        DREAM_SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(UTC).strftime("%Y-%m-%dT%H%M%S.%f")
+        snapshot_path = DREAM_SNAPSHOTS_DIR / f"{session_id}-{ts}-{uuid4()}.jsonl"
+        append_messages(snapshot_path, messages)
+        write_review_kick(
+            domain="memory",
+            session_id=session_id,
+            persisted_message_count=None,
+            transcript_override=str(snapshot_path),
+        )
+    except Exception:
+        log.warning("compaction review snapshot/kick failed", exc_info=True)
+
+
 async def compact_messages(
     ctx: RunContext[CoDeps],
     messages: list[ModelMessage],
@@ -306,8 +350,11 @@ async def compact_messages(
 
     Does NOT write runtime — the caller commits via ``commit_compaction`` as
     its last step (Task-3 invariant: any exception before commit leaves
-    runtime untouched).
+    runtime untouched). It does best-effort-snapshot the pre-drop ``messages``
+    for a memory review KICK (Defect-B; see ``_snapshot_and_kick_review``) — a
+    fire-and-forget filesystem write, not a runtime mutation.
     """
+    _snapshot_and_kick_review(ctx, messages)
     head_end, tail_start, _ = bounds
     head = messages[:head_end]
     dropped = messages[head_end:tail_start]
@@ -652,7 +699,13 @@ async def proactive_window_processor(
                 tokens_after,
             )
             span.set_attribute("compaction.no_progress_escalation", True)
-            recovered = await recover_overflow_history(ctx, messages)
+            # Suppress the snapshot for the escalation's re-entry into compact_messages:
+            # it is the SAME logical compaction the proactive pass already snapshotted.
+            ctx.deps.runtime.skip_compaction_snapshot = True
+            try:
+                recovered = await recover_overflow_history(ctx, messages)
+            finally:
+                ctx.deps.runtime.skip_compaction_snapshot = False
             return recovered if recovered is not None else messages
         return result
     except Exception:

@@ -1,14 +1,15 @@
 """Integration test: _post_turn_hook reaches nudge threshold → KICK file in DREAM_QUEUE_DIR.
 
-Verifies the end-to-end path from _post_turn_hook through _send_review_kick to
+Verifies the end-to-end path from _post_turn_hook through write_review_kick to
 atomic KICK file creation in DREAM_QUEUE_DIR. Uses real filesystem (tmp_path),
 real CoDeps with a live LLM model reference — no LLM calls are made; the model
 handle is only needed to pass the `deps.model is None` guard in _post_turn_hook.
 
 CO_HOME override + importlib.reload pattern:
-  _send_review_kick in co_cli.main uses a module-level DREAM_QUEUE_DIR binding.
-  Reloading co_cli.config.core alone only updates that module's symbols. We must
-  also reload co_cli.main so its DREAM_QUEUE_DIR re-binds to the new tmp path.
+  write_review_kick (co_cli.daemons.dream.kick) uses a module-level DREAM_QUEUE_DIR
+  binding. Reloading co_cli.config.core alone only updates that module's symbols.
+  We also reload the kick producer (and main) so the binding the producer writes
+  to re-resolves to the new tmp path.
 """
 
 from __future__ import annotations
@@ -32,19 +33,23 @@ def _restore_co_home() -> Generator[None, None, None]:
     else:
         os.environ["CO_HOME"] = original
     import co_cli.config.core as core_mod
+    import co_cli.daemons.dream.kick as kick_mod
     import co_cli.main as main_mod
 
     importlib.reload(core_mod)
+    importlib.reload(kick_mod)
     importlib.reload(main_mod)
 
 
 def _setup_co_home(tmp_path: Path) -> None:
-    """Set CO_HOME and reload both config.core and main so path constants align."""
+    """Set CO_HOME and reload config.core, the kick producer, and main so paths align."""
     os.environ["CO_HOME"] = str(tmp_path)
     import co_cli.config.core as core_mod
+    import co_cli.daemons.dream.kick as kick_mod
     import co_cli.main as main_mod
 
     importlib.reload(core_mod)
+    importlib.reload(kick_mod)
     importlib.reload(main_mod)
 
 
@@ -88,7 +93,9 @@ def test_memory_kick_file_created_when_threshold_reached(tmp_path: Path) -> None
     for _ in range(3):
         _post_turn_hook(deps, [], model_request_count=1)
 
-    queue_dir = main_mod.DREAM_QUEUE_DIR
+    import co_cli.config.core as core_mod
+
+    queue_dir = core_mod.DREAM_QUEUE_DIR
     kick_files = list(queue_dir.glob("*.json"))
     assert len(kick_files) >= 1, "Expected at least one KICK file after threshold"
 
@@ -112,7 +119,9 @@ def test_skill_kick_file_created_when_threshold_reached(tmp_path: Path) -> None:
     # Trigger skill KICK: one turn with iter_count=5
     _post_turn_hook(deps, [], model_request_count=5)
 
-    queue_dir = main_mod.DREAM_QUEUE_DIR
+    import co_cli.config.core as core_mod
+
+    queue_dir = core_mod.DREAM_QUEUE_DIR
     kick_files = list(queue_dir.glob("*.json"))
     assert len(kick_files) >= 1, "Expected at least one KICK file for skill domain"
 
@@ -135,7 +144,9 @@ def test_kick_payload_carries_runtime_persisted_message_count(tmp_path: Path) ->
     _post_turn_hook = main_mod._post_turn_hook
     _post_turn_hook(deps, [], model_request_count=1)
 
-    queue_dir = main_mod.DREAM_QUEUE_DIR
+    import co_cli.config.core as core_mod
+
+    queue_dir = core_mod.DREAM_QUEUE_DIR
     kick_files = sorted(queue_dir.glob("*.json"))
     assert kick_files, "KICK file must exist"
 
@@ -173,6 +184,8 @@ def test_no_kick_file_when_review_disabled(tmp_path: Path) -> None:
     for _ in range(5):
         _post_turn_hook(deps, [], model_request_count=5)
 
-    queue_dir = main_mod.DREAM_QUEUE_DIR
+    import co_cli.config.core as core_mod
+
+    queue_dir = core_mod.DREAM_QUEUE_DIR
     kick_files = list(queue_dir.glob("*.json")) if queue_dir.exists() else []
     assert kick_files == [], "No KICK files expected when review_enabled=False"

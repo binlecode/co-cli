@@ -255,6 +255,7 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 | `dream.run_interval_hours` | `CO_DREAM_RUN_INTERVAL_HOURS` | `24` | Minimum hours between housekeeping passes (range 1–720) |
 | `dream.run_at` | `CO_DREAM_RUN_AT` | `"03:00"` | Preferred local time-of-day boundary for the scheduled housekeeping tick |
 | `dream.max_pass_seconds` | `CO_DREAM_MAX_PASS_SECONDS` | `600` | Wall-clock cap on the merge phase of a housekeeping pass (≥ 60); decay runs unconditionally after merge |
+| `dream.done_retention_days` | `CO_DREAM_DONE_RETENTION_DAYS` | `7` | Age (days, ≥ 1) past which `queue/done/` and orphaned `snapshots/` files are pruned by housekeeping; `failed/` is never pruned |
 
 ### REPL input queue (`repl.*`)
 

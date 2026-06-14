@@ -343,3 +343,43 @@ def test_dream_run_errors_when_daemon_not_running(tmp_path: Path, monkeypatch) -
     assert result.exit_code == 1
     assert "not running" in result.stderr or "not running" in result.output
     assert not core_mod.DREAM_RUN_TAG.exists(), "sentinel must not be written when daemon down"
+
+
+# ---------------------------------------------------------------------------
+# prune_done_and_snapshots
+# ---------------------------------------------------------------------------
+
+
+def test_prune_removes_aged_done_and_snapshots_keeps_fresh(tmp_path: Path) -> None:
+    """Aged done files and stale snapshots are deleted; fresh done files survive."""
+    import os
+
+    from co_cli.daemons.dream._housekeeping import prune_done_and_snapshots
+
+    done_dir = tmp_path / "done"
+    snapshots_dir = tmp_path / "snapshots"
+    done_dir.mkdir()
+    snapshots_dir.mkdir()
+
+    old_done = done_dir / "aged.json"
+    fresh_done = done_dir / "recent.json"
+    stale_snapshot = snapshots_dir / "orphan.snap"
+    old_done.write_text("{}", encoding="utf-8")
+    fresh_done.write_text("{}", encoding="utf-8")
+    stale_snapshot.write_text("data", encoding="utf-8")
+
+    old = (datetime.now(UTC) - timedelta(days=30)).timestamp()
+    os.utime(old_done, (old, old))
+    os.utime(stale_snapshot, (old, old))
+
+    state = HousekeepingState()
+    prune_done_and_snapshots(
+        DreamSettings(done_retention_days=7),
+        state,
+        done_dir=done_dir,
+        snapshots_dir=snapshots_dir,
+    )
+
+    assert not old_done.exists()
+    assert not stale_snapshot.exists()
+    assert fresh_done.exists()

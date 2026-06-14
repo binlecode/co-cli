@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.353]
+
+### Bugfix: dream queue/review path — three logical defects (`dream-queue-review-fixes`)
+
+- **Defect A — consistent terminal-move directories.** `main_loop` now takes injected `done_dir`/`failed_dir`; all three terminal transitions (success → `done/`, corrupt-KICK → `failed/`, exhausted-retry → `failed/`) use the same canonical, pre-created, CO_HOME-safe dirs. Removes the `queue_dir.parent / "failed"` drift that misfiled corrupt KICKs to an orphan bin.
+- **Defect B — full-fidelity pre-compaction review.** At the `compact_messages` chokepoint (the one place whole messages are dropped), the full pre-drop message list is snapshotted to `daemons/dream/snapshots/` and a memory review KICK fires against it (new `transcript_override` KICK field, read uncapped by `process_review`). The reviewer now extracts durable facts from the original turns instead of re-summarizing co's own lossy compaction marker. Snapshot is unlinked on terminal KICK transition; one capture covers proactive PATH 2, overflow PATH 2, and `/compact`. A one-shot `runtime.skip_compaction_snapshot` flag suppresses only the no-progress escalation re-entry, so genuine second-in-turn compactions still snapshot.
+- **Defect C — bounded `done/` + snapshot retention.** New housekeeping prune phase deletes `done/` files and orphaned snapshots older than `done_retention_days` (default 7, `CO_DREAM_DONE_RETENTION_DAYS`); `failed/` left intact for diagnostics.
+- **Shared KICK producer.** Extracted `write_review_kick` into `co_cli/daemons/dream/kick.py` (no context→dream import cycle); `main.py`'s counter/session-end producers and `compaction.py` both call it.
+
 ## [0.8.352]
 
 ### Feature: interactive terminal — `shell_exec(pty=True)` + `task_write`/`task_close` stdin drive; dream curation lens

@@ -207,6 +207,13 @@ class CoRuntimeState:
     # True when compaction ran this turn; drives session-branching (main.py) and the
     # proactive_window_processor OTEL span attr. Cleared by reset_for_turn().
     compaction_applied_this_turn: bool = False
+    # One-shot suppression for the pre-compaction review snapshot. Set by
+    # proactive_window_processor only around its no-progress escalation call into
+    # recover_overflow_history (which re-enters compact_messages for the SAME logical
+    # compaction) so _snapshot_and_kick_review fires exactly once per logical compaction
+    # without suppressing a genuinely separate later-in-turn compaction. Set/cleared in a
+    # try/finally bounding the escalation call; reset_for_turn() is belt-and-suspenders.
+    skip_compaction_snapshot: bool = False
     # Delegation depth — incremented by fork_deps(); guards against recursive delegation.
     agent_depth: int = 0
     # Anti-thrashing counter: consecutive proactive compactions that saved less than
@@ -233,6 +240,7 @@ class CoRuntimeState:
         self.resume_tool_names = None
         self.clarify_answers = {}
         self.compaction_applied_this_turn = False
+        self.skip_compaction_snapshot = False
         self.current_request_tokens_estimate = None
         self.consecutive_tool_cap_violations = 0
         self.tool_call_limit_run_step = -1

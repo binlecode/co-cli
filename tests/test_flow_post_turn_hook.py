@@ -26,13 +26,18 @@ def _restore_co_home() -> Generator[None, None, None]:
         os.environ.pop("CO_HOME", None)
     else:
         os.environ["CO_HOME"] = original
-    # _make_deps reloads config.core against the temp CO_HOME; reload it back so the
-    # module-level USER_DIR binding does not leak the (now-deleted) temp dir to later tests.
+    # _make_deps reloads config.core, the kick producer, and main against the temp
+    # CO_HOME; reload them back so module-level USER_DIR / DREAM_QUEUE_DIR bindings
+    # don't leak the (now-deleted) temp dir to later tests.
     import importlib
 
     import co_cli.config.core as core_mod
+    import co_cli.daemons.dream.kick as kick_mod
+    import co_cli.main as main_mod
 
     importlib.reload(core_mod)
+    importlib.reload(kick_mod)
+    importlib.reload(main_mod)
 
 
 def _make_deps(
@@ -48,8 +53,15 @@ def _make_deps(
     import importlib
 
     import co_cli.config.core as core_mod
+    import co_cli.daemons.dream.kick as kick_mod
+    import co_cli.main as main_mod
 
+    # Reload the kick producer (and main) so the module-level DREAM_QUEUE_DIR the
+    # producer writes to is re-resolved against the updated USER_DIR (CO_HOME
+    # override). Without this, threshold-crossing KICKs leak to the real ~/.co-cli.
     importlib.reload(core_mod)
+    importlib.reload(kick_mod)
+    importlib.reload(main_mod)
 
     from co_cli.deps import CoDeps
     from co_cli.tools.shell_backend import ShellBackend

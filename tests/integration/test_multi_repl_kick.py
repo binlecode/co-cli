@@ -1,12 +1,12 @@
-"""Integration test: multiple _send_review_kick calls produce separate KICK files.
+"""Integration test: multiple write_review_kick calls produce separate KICK files.
 
 Verifies that two calls with different domains each write a distinct KICK file
 (no overwrite) because filenames embed a unique UUID. Also verifies that two
 calls with the same domain also each produce a separate file.
 
-CO_HOME override pattern: we reload both co_cli.config.core and co_cli.main so
-that DREAM_QUEUE_DIR in main.py re-binds to the tmp path before _send_review_kick
-is called.
+CO_HOME override pattern: we reload co_cli.config.core and the kick producer
+(co_cli.daemons.dream.kick) so that DREAM_QUEUE_DIR re-binds to the tmp path
+before write_review_kick is called.
 
 No LLM calls. Filesystem only.
 """
@@ -20,7 +20,6 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from tests._settings import SETTINGS_NO_MCP
 
 
 @pytest.fixture(autouse=True)
@@ -32,40 +31,31 @@ def _restore_co_home() -> Generator[None, None, None]:
     else:
         os.environ["CO_HOME"] = original
     import co_cli.config.core as core_mod
-    import co_cli.main as main_mod
+    import co_cli.daemons.dream.kick as kick_mod
 
     importlib.reload(core_mod)
-    importlib.reload(main_mod)
+    importlib.reload(kick_mod)
 
 
-def _setup_and_make_deps(tmp_path: Path):
-    """Set CO_HOME, reload core+main, return (deps, main_mod)."""
+def _setup(tmp_path: Path):
+    """Set CO_HOME, reload core + kick producer, return the kick module."""
     os.environ["CO_HOME"] = str(tmp_path)
     import co_cli.config.core as core_mod
-    import co_cli.main as main_mod
+    import co_cli.daemons.dream.kick as kick_mod
 
     importlib.reload(core_mod)
-    importlib.reload(main_mod)
-
-    from co_cli.deps import CoDeps
-    from co_cli.tools.shell_backend import ShellBackend
-
-    deps = CoDeps(shell=ShellBackend(), config=SETTINGS_NO_MCP)
-    session_file = tmp_path / "sessions" / "multi-kick-session.jsonl"
-    session_file.parent.mkdir(parents=True, exist_ok=True)
-    deps.session.session_path = session_file
-    return deps, main_mod
+    importlib.reload(kick_mod)
+    return kick_mod
 
 
 def test_different_domains_produce_separate_kick_files(tmp_path: Path) -> None:
-    """Two _send_review_kick calls with different domains produce two distinct files."""
-    deps, main_mod = _setup_and_make_deps(tmp_path)
-    _send_review_kick = main_mod._send_review_kick
+    """Two write_review_kick calls with different domains produce two distinct files."""
+    kick_mod = _setup(tmp_path)
 
-    _send_review_kick(deps, domain="memory", persisted_message_count=3)
-    _send_review_kick(deps, domain="skill", persisted_message_count=3)
+    kick_mod.write_review_kick(domain="memory", session_id="s", persisted_message_count=3)
+    kick_mod.write_review_kick(domain="skill", session_id="s", persisted_message_count=3)
 
-    queue_dir = main_mod.DREAM_QUEUE_DIR
+    queue_dir = kick_mod.DREAM_QUEUE_DIR
     kick_files = sorted(queue_dir.glob("*.json"))
     assert len(kick_files) == 2, f"Expected 2 KICK files, got {len(kick_files)}"
 
@@ -75,16 +65,14 @@ def test_different_domains_produce_separate_kick_files(tmp_path: Path) -> None:
 
 def test_kick_files_have_unique_names(tmp_path: Path) -> None:
     """Each KICK file has a unique filename (UUID-based) even for rapid successive calls."""
-    deps, main_mod = _setup_and_make_deps(tmp_path)
-    _send_review_kick = main_mod._send_review_kick
+    kick_mod = _setup(tmp_path)
 
     for i in range(5):
-        _send_review_kick(deps, domain="memory", persisted_message_count=i)
+        kick_mod.write_review_kick(domain="memory", session_id="s", persisted_message_count=i)
 
-    queue_dir = main_mod.DREAM_QUEUE_DIR
+    queue_dir = kick_mod.DREAM_QUEUE_DIR
     kick_files = sorted(queue_dir.glob("*.json"))
     assert len(kick_files) == 5, f"Expected 5 KICK files, got {len(kick_files)}"
 
-    # All filenames must be unique
     names = [f.name for f in kick_files]
     assert len(set(names)) == 5, "All KICK filenames must be distinct"
