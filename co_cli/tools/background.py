@@ -104,9 +104,33 @@ async def _monitor(task_id: str, session: CoSessionState) -> None:
     state = session.background_tasks.get(task_id)
     if state is None or state.process is None or state.log_path is None:
         return
+    await _drain_to_log(state, mode="w")
+
+
+async def _adopt_monitor(task_id: str, session: CoSessionState) -> None:
+    """Continue draining an adopted (handed-off) foreground process into its log.
+
+    Identical tail to `_monitor` but opens the log in append mode — the seed
+    prefix (output already consumed before yield) has already been written.
+    """
+    state = session.background_tasks.get(task_id)
+    if state is None or state.process is None or state.log_path is None:
+        return
+    await _drain_to_log(state, mode="a")
+
+
+async def _drain_to_log(state: BackgroundTaskState, mode: str) -> None:
+    """Drain proc.stdout line-by-line into the log, then finalize state on exit.
+
+    Shared tail for `_monitor` (fresh spawn, mode "w") and `_adopt_monitor`
+    (live hand-off, mode "a"). Factoring it here keeps the two monitor entry
+    points from diverging on EOF/wait/transport-close/finalize handling.
+    """
     proc = state.process
+    assert proc is not None
     assert proc.stdout is not None
-    with open(state.log_path, "w", buffering=1) as f:
+    assert state.log_path is not None
+    with open(state.log_path, mode, buffering=1) as f:
         async for line in proc.stdout:
             f.write(line.decode(errors="replace").rstrip("\n") + "\n")
         # Wait for the child exit after EOF so returncode is final before state is
@@ -122,6 +146,54 @@ async def _monitor(task_id: str, session: CoSessionState) -> None:
     state.status = "completed" if exit_code == 0 else "failed"
     state.completed_at = _now()
     state.process = None
+
+
+async def adopt_running_process(
+    proc: asyncio.subprocess.Process,
+    command: str,
+    cwd: str,
+    session: CoSessionState,
+    prefix_bytes: bytes,
+    skill_env: dict[str, str] | None = None,
+    logs_dir: Path = LOGS_DIR,
+) -> BackgroundTaskState:
+    """Register an already-running foreground process as a background task.
+
+    Used by shell_exec auto-yield: a foreground command that outlives the yield
+    window hands its *live* process here instead of being killed. The same
+    process is adopted (never re-spawned, so a non-idempotent command does not
+    double-execute). The log is seeded with `prefix_bytes` — the output already
+    consumed by the foreground read loop before yield — and `_adopt_monitor`
+    reuses the same live `proc.stdout` StreamReader to continue draining from
+    exactly where the foreground loop stopped (the foreground loop has fully
+    exited before this is called, so there is exactly one reader at a time: no
+    lost prefix, no dup, no gap).
+
+    The resulting BackgroundTaskState is interchangeable with a `task_start`
+    task — same `log_path` + `_monitor_task` fields, so `kill_task` /
+    `task_status` / `/tasks` operate on it identically.
+    """
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    task_id = make_task_id()
+    log_path = logs_dir / f"bg-{task_id}.log"
+    # Seed the log with the pre-yield output so no prefix is lost; the monitor
+    # opens in append mode and continues from the live stream. Written raw so a
+    # prefix ending mid-line joins seamlessly with the monitor's first line.
+    log_path.write_bytes(prefix_bytes)
+    state = BackgroundTaskState(
+        task_id=task_id,
+        command=command,
+        cwd=cwd,
+        description=f"auto-yielded foreground command: {command}",
+        status="running",
+        log_path=log_path,
+        process=proc,
+        started_at=_now(),
+        skill_env=skill_env or {},
+    )
+    session.background_tasks[task_id] = state
+    state._monitor_task = asyncio.create_task(_adopt_monitor(task_id, session))
+    return state
 
 
 async def write_to_task(state: BackgroundTaskState, data: str, newline: bool) -> None:

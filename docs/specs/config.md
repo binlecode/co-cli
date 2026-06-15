@@ -215,6 +215,7 @@ Shape invariant: `tail_fraction < compaction_ratio` and `spill_ratio <= compacti
 |---------|---------|---------|-------------|
 | `shell.max_timeout` | `CO_SHELL_MAX_TIMEOUT` | `300` | Max shell command timeout in seconds |
 | `shell.safe_commands` | `CO_SHELL_SAFE_COMMANDS` | see below | Comma-separated prefix list for auto-approved commands |
+| `shell.yield_window_seconds` | `CO_SHELL_YIELD_WINDOW_SECONDS` | `20` | Seconds a foreground `shell_exec` command may run before it is auto-yielded to a background task; `0` disables auto-yield. Validated below `max_timeout` |
 
 Default safe commands: `ls`, `tree`, `find`, `fd`, `cat`, `head`, `tail`, `grep`, `rg`, `ag`, `wc`, `sort`, `uniq`, `cut`, `tr`, `jq`, `echo`, `printf`, `pwd`, `whoami`, `hostname`, `uname`, `date`, `env`, `which`, `file`, `stat`, `id`, `du`, `df`, `git status`, `git diff`, `git log`, `git show`, `git branch`, `git tag`, `git blame`.
 

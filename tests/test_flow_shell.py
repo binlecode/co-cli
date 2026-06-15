@@ -19,7 +19,8 @@ from tests._settings import SETTINGS
 
 from co_cli.deps import CoDeps
 from co_cli.tools.shell.execute import shell_exec
-from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.shell_backend import ShellBackend, YieldedProcess
+from co_cli.tools.shell_env import kill_process_tree
 
 
 def _make_shell_ctx(tmp_path: Path) -> RunContext[CoDeps]:
@@ -103,6 +104,41 @@ async def test_pty_true_timeout_maps_to_model_retry(tmp_path: Path) -> None:
             await shell_exec(ctx, "sleep 5", timeout=1, pty=True)
     elapsed = time.monotonic() - start
     assert elapsed < 4, f"tool timeout path did not kill promptly (took {elapsed:.1f}s)"
+
+
+@pytest.mark.asyncio
+async def test_run_command_yields_live_process_after_window(tmp_path: Path) -> None:
+    """A command outliving the yield window hands back a live (un-killed) process."""
+    backend = ShellBackend()
+    result = await backend.run_command("echo started; sleep 5", timeout=30, yield_window=1)
+    assert isinstance(result, YieldedProcess)
+    assert result.process.returncode is None
+    assert b"started" in result.prefix_bytes
+    await kill_process_tree(result.process)
+    await result.process.wait()
+
+
+@pytest.mark.asyncio
+async def test_run_command_fast_command_returns_normally_with_yield_window(
+    tmp_path: Path,
+) -> None:
+    """A command that exits within the window returns (exit_code, output) unchanged."""
+    backend = ShellBackend()
+    result = await backend.run_command("echo hi", timeout=30, yield_window=1)
+    assert result == (0, "hi\n")
+
+
+@pytest.mark.asyncio
+async def test_yield_window_zero_runs_to_hard_timeout_no_yield(tmp_path: Path) -> None:
+    """yield_window=0 disables auto-yield: a long command times out (no hand-off)."""
+    backend = ShellBackend()
+    start = time.monotonic()
+    with pytest.raises(RuntimeError) as exc_info:
+        async with asyncio.timeout(4):
+            await backend.run_command("sleep 5", timeout=1, yield_window=0)
+    elapsed = time.monotonic() - start
+    assert elapsed < 4, f"hard-timeout path did not fire promptly (took {elapsed:.1f}s)"
+    assert "timed out after 1s" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

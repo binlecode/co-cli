@@ -6,12 +6,30 @@ Approval-gated subprocess with env-sanitized execution.
 import asyncio
 import os
 import pty
+from dataclasses import dataclass
 
+from co_cli.tools.background import _close_process_transport
 from co_cli.tools.shell_env import (
     build_subprocess_env,
     kill_process_tree,
     terminate_process_group,
 )
+
+
+@dataclass
+class YieldedProcess:
+    """A foreground command still alive after the yield window.
+
+    Handed back to shell_exec for adoption into a background task instead of
+    being killed. Carries the live process and `prefix_bytes` — the output the
+    foreground read loop already consumed before yield — to seed the background
+    log. The foreground read loop has fully stopped before this is returned, so
+    the adopter is the sole reader of `process.stdout`.
+    """
+
+    process: asyncio.subprocess.Process
+    prefix_bytes: bytes
+
 
 # Retains in-flight SIGKILL-escalation tasks scheduled on cancel so the event loop
 # does not GC them before they run; each discards itself on completion. Module-level
@@ -50,7 +68,8 @@ class ShellBackend:
         cwd: str | None = None,
         extra_env: dict[str, str] | None = None,
         pty: bool = False,
-    ) -> tuple[int, str]:
+        yield_window: int = 0,
+    ) -> tuple[int, str] | YieldedProcess:
         """Execute a command as a subprocess with sanitized environment.
 
         Uses start_new_session=True for process group killing on timeout.
@@ -66,6 +85,14 @@ class ShellBackend:
         slave, so ``isatty()`` reports True and programs emit ANSI / line-buffer
         as on a real terminal. Output fidelity only — there is no stdin channel,
         so it does not interactively drive a program. Raw ANSI is preserved.
+        ``pty=True`` is exempt from auto-yield (its master-fd drain has no
+        ``proc.stdout`` to hand off); it keeps the plain hard-timeout behaviour.
+
+        When ``yield_window`` > 0 and below ``timeout`` (non-pty only), a command
+        still alive after ``yield_window`` seconds is returned as a
+        ``YieldedProcess`` carrying the live process and the bytes already read,
+        rather than blocking the turn to the hard timeout. ``yield_window`` == 0
+        disables auto-yield.
         """
         if pty:
             return await self._run_command_pty(cmd, timeout, cwd, extra_env)
@@ -75,31 +102,53 @@ class ShellBackend:
             "-c",
             cmd,
             cwd=cwd,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             env=env,
             start_new_session=True,
         )
+        assert proc.stdout is not None
+        # Accumulate into an outer buffer so a cancelled/timed-out read still
+        # retains the bytes consumed so far (for partial output or hand-off).
+        collected = bytearray()
+
+        async def _drain_until_eof() -> None:
+            assert proc.stdout is not None
+            while True:
+                chunk = await proc.stdout.read(65536)
+                if not chunk:
+                    return
+                collected.extend(chunk)
+
+        # The first race window is the yield window when auto-yield is armed,
+        # else the full hard timeout. A yield-armed command that does not exit
+        # within the window is handed off; otherwise the window IS the timeout.
+        do_yield = 0 < yield_window < timeout
+        window = yield_window if do_yield else timeout
+        drain_task = asyncio.ensure_future(_drain_until_eof())
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            await asyncio.wait_for(drain_task, timeout=window)
         except asyncio.CancelledError:
+            # Turn aborted mid-command: wait_for has already cancelled drain_task.
             _kill_process_group_on_cancel(proc)
             raise
         except TimeoutError:
+            # wait_for cancelled drain_task, so the foreground loop is fully
+            # stopped — collected holds the consumed prefix and the StreamReader
+            # buffer is intact for the adopter (sole-reader hand-off).
+            if do_yield and proc.returncode is None:
+                return YieldedProcess(proc, bytes(collected))
             await kill_process_tree(proc)
-            # Read any buffered output before raising
-            partial = b""
-            if proc.stdout:
-                try:
-                    partial = await asyncio.wait_for(proc.stdout.read(), timeout=1.0)
-                except (TimeoutError, Exception):
-                    pass
-            partial_str = partial.decode("utf-8", errors="replace").strip()
+            partial_str = bytes(collected).decode("utf-8", errors="replace").strip()
             msg = f"Command timed out after {timeout}s: {cmd}"
             if partial_str:
                 msg += f"\nPartial output:\n{partial_str}"
             raise RuntimeError(msg) from None
-        decoded = stdout.decode("utf-8")
+        # EOF reached within the window → the process has exited.
+        await proc.wait()
+        _close_process_transport(proc)
+        decoded = bytes(collected).decode("utf-8", errors="replace")
         return proc.returncode, decoded or "(no output)"
 
     async def _run_command_pty(

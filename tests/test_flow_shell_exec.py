@@ -11,17 +11,28 @@ import pytest
 from pydantic_ai import RunContext
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS
-from tests._timeouts import FILE_DB_TIMEOUT_SECS
+from tests._timeouts import BG_TASK_TEARDOWN_TIMEOUT_SECS, FILE_DB_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.tools.background import kill_task
 from co_cli.tools.shell.execute import shell_exec
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tasks.control import task_status
 
 
-def _make_deps(workspace: Path) -> CoDeps:
+def _make_deps(workspace: Path, *, yield_window_seconds: int | None = None) -> CoDeps:
+    config = SETTINGS
+    if yield_window_seconds is not None:
+        config = SETTINGS.model_copy(
+            update={
+                "shell": SETTINGS.shell.model_copy(
+                    update={"yield_window_seconds": yield_window_seconds}
+                )
+            }
+        )
     return CoDeps(
         shell=ShellBackend(),
-        config=SETTINGS,
+        config=config,
         session=CoSessionState(),
         workspace_dir=workspace,
     )
@@ -119,6 +130,28 @@ async def test_shell_exec_diff_differs_returns_ok_not_error(tmp_path: Path) -> N
 
     assert not (result.metadata and result.metadata.get("error"))
     assert "files differ" in result.return_value
+
+
+@pytest.mark.asyncio
+async def test_shell_exec_yields_long_command_to_background_task(tmp_path: Path) -> None:
+    """A command outliving the yield window comes back as a running task handle,
+    and task_status reports the task running."""
+    deps = _make_deps(tmp_path, yield_window_seconds=1)
+    ctx = _ctx(deps, approved=True)
+
+    result = await shell_exec(ctx, cmd="echo warming-up; sleep 5", timeout=30)
+
+    assert not (result.metadata and result.metadata.get("error"))
+    task_id = result.metadata["task_id"]
+    assert result.metadata["status"] == "running"
+    assert "warming-up" in result.return_value
+
+    status = await task_status(_ctx(deps), task_id=task_id)
+    assert status.metadata["status"] == "running"
+
+    state = deps.session.background_tasks[task_id]
+    async with asyncio.timeout(BG_TASK_TEARDOWN_TIMEOUT_SECS):
+        await kill_task(state)
 
 
 @pytest.mark.asyncio

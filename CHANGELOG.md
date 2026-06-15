@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.360]
+
+### Feature: shell_exec auto-yields an unbounded command to a background task
+
+- **Turn no longer blocks on a stuck command.** A foreground `shell_exec` command still running after `shell.yield_window_seconds` (default 20s; `0` disables) is now auto-promoted to a background task instead of holding the turn open to the hard timeout. An unbounded command (`mpv <url>`, `tail -f`, a dev server) no longer makes the REPL appear frozen.
+- **Same live process, no re-spawn, no re-gate.** The non-pty `ShellBackend.run_command` drains stdout with a bounded incremental read; on yield it hands the *live* process back as a `YieldedProcess`. `shell_exec` adopts that same process via `adopt_running_process` (`background.py`) into a `BackgroundTaskState` — never killed-and-re-run (no double-execute), and not re-gated (it already cleared the approval gate before spawn).
+- **Output continuity.** Bytes read before yield seed the task log; the adopt monitor reuses the same live stream (shared `_drain_to_log` tail) — no lost prefix, dup, or gap. The result is a task handle (`task_id` + partial output) — inspect with `task_status`, stop with `task_cancel`, exactly like a `task_start` task.
+- **Config + exemption.** New `shell.yield_window_seconds` (`CO_SHELL_YIELD_WINDOW_SECONDS`), validated below `max_timeout`. `pty=True` is exempt (its master-fd drain has no `proc.stdout` to hand off) and keeps the plain hard-timeout behavior.
+
 ## [0.8.359]
 
 ### Fix: kill the shell process group when a turn is cancelled mid-command

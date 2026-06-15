@@ -6,8 +6,10 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
+from co_cli.tools.background import adopt_running_process
 from co_cli.tools.files.fs_guards import enforce_write_boundary
 from co_cli.tools.shell._exit_codes import benign_exit_note, shell_exit_meaning
+from co_cli.tools.shell_backend import YieldedProcess
 from co_cli.tools.shell_policy import ShellDecisionEnum, evaluate_shell_command
 from co_cli.tools.tool_io import tool_error, tool_output
 
@@ -42,8 +44,10 @@ async def shell_exec(
     approval.
 
     No interactive stdin — a prompting command hangs until timeout; for prompts,
-    launch via task_start and use the task_write loop. Long-running commands are
-    killed after timeout seconds (capped by shell_max_timeout).
+    launch via task_start and use the task_write loop. A command still running
+    after a short window auto-promotes to a background task and returns a task
+    handle (track with task_status, stop with task_cancel); otherwise it is
+    killed at timeout (capped by shell_max_timeout).
 
     On failure, the tool returns the exit code and combined output as a tool
     result — read it to diagnose the failure (wrong flags, missing binary,
@@ -92,10 +96,41 @@ async def shell_exec(
 
     effective = min(timeout, ctx.deps.config.shell.max_timeout)
     skill_env = ctx.deps.runtime.active_skill_env or None
+    # Auto-yield is non-pty only — the pty path has no proc.stdout to hand off.
+    yield_window = 0 if pty else ctx.deps.config.shell.yield_window_seconds
     try:
-        exit_code, output = await ctx.deps.shell.run_command(
-            cmd, timeout=effective, cwd=resolved_cwd, extra_env=skill_env, pty=pty
+        result = await ctx.deps.shell.run_command(
+            cmd,
+            timeout=effective,
+            cwd=resolved_cwd,
+            extra_env=skill_env,
+            pty=pty,
+            yield_window=yield_window,
         )
+        if isinstance(result, YieldedProcess):
+            # The command outlived the yield window. Adopt the live process into
+            # a background task and hand the model a task handle. The command
+            # already cleared the DENY/approval gate above before it spawned —
+            # adoption is a hand-off of an authorized process, not a new
+            # execution, so it does not re-gate.
+            state = await adopt_running_process(
+                result.process,
+                command=cmd,
+                cwd=resolved_cwd,
+                session=ctx.deps.session,
+                prefix_bytes=result.prefix_bytes,
+                skill_env=ctx.deps.runtime.active_skill_env or {},
+            )
+            partial = result.prefix_bytes.decode("utf-8", errors="replace").strip()
+            display = (
+                f"Command still running after {yield_window}s — promoted to "
+                f"background task [{state.task_id}]. Use task_status({state.task_id}) "
+                f"to check on it or task_cancel({state.task_id}) to stop it."
+            )
+            if partial:
+                display += f"\nPartial output so far:\n{partial}"
+            return tool_output(display, ctx=ctx, task_id=state.task_id, status="running")
+        exit_code, output = result
         if exit_code == 0:
             return tool_output(output, ctx=ctx)
         # Benign non-zero exits (grep with no matches, diff with differences)

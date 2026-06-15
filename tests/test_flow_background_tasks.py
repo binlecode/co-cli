@@ -27,6 +27,7 @@ from co_cli.display.headless import HeadlessFrontend
 from co_cli.tools.background import (
     BackgroundTaskState,
     TaskInputError,
+    adopt_running_process,
     close_task_stdin,
     kill_task,
     make_task_id,
@@ -182,6 +183,50 @@ async def test_spawn_failure_sets_spawn_error_and_no_log_file(tmp_path: Path) ->
     assert "spawn failed" in state.spawn_error
     assert state.log_path is None
     assert not logs_dir.exists() or not any(logs_dir.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# adopt_running_process — live foreground hand-off (shell_exec auto-yield)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_adopt_running_process_captures_prefix_and_live_output(tmp_path: Path) -> None:
+    """An externally-spawned live process becomes a tracked task whose log holds
+    both the seeded pre-yield prefix and output emitted after adoption, and
+    whose final state is published on child exit."""
+    logs_dir = tmp_path / "logs"
+    session = CoSessionState()
+    proc = await asyncio.create_subprocess_exec(
+        "sh",
+        "-c",
+        "sleep 0.3; echo later-line",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
+    )
+
+    state = await adopt_running_process(
+        proc,
+        command="sleep 0.3; echo later-line",
+        cwd=str(tmp_path),
+        session=session,
+        prefix_bytes=b"early-line\n",
+        logs_dir=logs_dir,
+    )
+
+    assert state.task_id in session.background_tasks
+    assert state._monitor_task is not None
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+        await state._monitor_task
+
+    assert state.status == "completed"
+    assert state.exit_code == 0
+    contents = state.log_path.read_text().splitlines()
+    assert "early-line" in contents
+    assert "later-line" in contents
+    assert contents.index("early-line") < contents.index("later-line")
 
 
 # ---------------------------------------------------------------------------

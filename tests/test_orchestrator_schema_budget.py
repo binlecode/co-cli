@@ -35,7 +35,11 @@ from co_cli.personality.prompts.loader import load_soul_critique
 # 2026-06-13: interactive-terminal plan added shell_exec's `pty` param → bucket 17,224 → 17,674.
 # Ceiling held at 17,700 (still passes, headroom now ~26) — the principled cap is deliberately NOT
 # loosened for a single param; the next ALWAYS growth must defer something or re-pin consciously.
-ALWAYS_BUCKET_CEILING = 17_700
+# 2026-06-15: shell-exec-auto-yield added a one-sentence return-contract note (a long command may
+# auto-promote to a background task and return a task handle) → bucket 17,674 → 17,808. Re-pinned
+# consciously: the model MUST know a shell_exec result can be a task handle, a permanent
+# non-deferrable cost on an ALWAYS tool (same class as the `pty` param); note kept to one sentence.
+ALWAYS_BUCKET_CEILING = 17_900
 # Per-tool tripwire against UNINTENDED docstring bloat — pinned just above the
 # largest ALWAYS tool, not a first-principle budget (the principled cap is the
 # cumulative ALWAYS_BUCKET_CEILING: every ALWAYS schema ships in every turn's
@@ -44,7 +48,9 @@ ALWAYS_BUCKET_CEILING = 17_700
 # terminal plan added the `pty` param + a task_write-loop pointer (was 1,966 — the
 # `pty` param is a permanent, non-deferrable cost of a real capability on an ALWAYS
 # tool; its pre-existing routing/diagnosis guidance was kept intact). +headroom.
-PER_ALWAYS_TOOL_CEILING = 2_500
+# 2026-06-15: auto-yield return-contract note → shell_exec 2,420 → 2,554. Re-pinned to 2,600
+# (still the largest ALWAYS tool; the note is the minimal sentence for a changed return contract).
+PER_ALWAYS_TOOL_CEILING = 2_600
 # Registry is 35 (native; 5 of them DEFERRED Google tools). Floor is a drop guard,
 # deliberately well below current — not a pin of the exact count.
 MIN_TOOL_COUNT = 27
