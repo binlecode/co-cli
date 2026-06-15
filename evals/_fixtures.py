@@ -26,9 +26,11 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,12 +42,17 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from co_cli.session.filename import session_filename
 from co_cli.session.persistence import append_messages
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
 
 _FIXTURES_DIR = Path(__file__).parent / "_fixtures"
+
+_FIXTURE_TIMESTAMP = datetime(2020, 1, 1, tzinfo=UTC)
+"""Fixed early creation time stamped into every fixture session filename so
+fixtures sort oldest and never get auto-restored as the latest session."""
 
 
 @dataclass(frozen=True)
@@ -144,11 +151,16 @@ def _build_session_jsonl(
 ) -> Path:
     """Write a session JSONL from ``(user_text, assistant_text)`` turns.
 
-    Deterministic filename: ``fixture-<fixture_name>-<index>.jsonl`` so reruns
-    overwrite in place. Truncates first to avoid append-on-rerun growth.
+    Uses the canonical session filename convention so fixtures are
+    indistinguishable from real sessions to every production path (restore,
+    /resume, search, view) — the only gate is ``.jsonl``. The name is
+    deterministic per ``(fixture_name, index)``: a fixed early timestamp (so
+    fixtures never sort as the latest session) plus a uuid8 derived from the
+    fixture identity, so reruns overwrite in place rather than accumulate.
     """
     deps.sessions_dir.mkdir(parents=True, exist_ok=True)
-    path = deps.sessions_dir / f"fixture-{fixture_name}-{index}.jsonl"
+    session_id = hashlib.sha256(f"{fixture_name}-{index}".encode()).hexdigest()[:8]
+    path = deps.sessions_dir / session_filename(_FIXTURE_TIMESTAMP, session_id)
     if path.exists():
         path.unlink()
 
