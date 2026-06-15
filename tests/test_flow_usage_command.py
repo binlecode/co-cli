@@ -19,6 +19,7 @@ from co_cli.commands.types import CommandContext, LocalOnly
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.core import console
 from co_cli.display.headless import HeadlessFrontend
+from co_cli.session.filename import session_filename
 from co_cli.session.usage import append_turn
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -27,7 +28,10 @@ _OTHER_SESSION_ID = "efgh5678"
 
 
 def _make_deps(tmp_path: Path) -> CoDeps:
-    session_path = tmp_path / "sessions" / f"2026-06-04T120000.000-{_CURRENT_SESSION_ID}.jsonl"
+    session_name = session_filename(
+        datetime(2026, 6, 4, 12, 0, 0, tzinfo=UTC), _CURRENT_SESSION_ID
+    )
+    session_path = tmp_path / "sessions" / session_name
     return CoDeps(
         shell=ShellBackend(),
         config=SETTINGS,

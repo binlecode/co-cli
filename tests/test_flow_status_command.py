@@ -11,6 +11,7 @@ import importlib
 import os
 from collections import deque
 from collections.abc import Generator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, LocalOnly
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState, SessionApprovalRule
 from co_cli.display.core import console
+from co_cli.session.filename import session_filename
 from co_cli.tools.background import BackgroundTaskState
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -27,7 +29,8 @@ _SESSION_ID = "abcd1234"
 
 
 def _make_deps(tmp_path: Path, *, dream_enabled: bool = False) -> CoDeps:
-    session_path = tmp_path / "sessions" / f"2026-06-14T120000.000-{_SESSION_ID}.jsonl"
+    session_name = session_filename(datetime(2026, 6, 14, 12, 0, 0, tzinfo=UTC), _SESSION_ID)
+    session_path = tmp_path / "sessions" / session_name
     config = SETTINGS
     if dream_enabled:
         config = SETTINGS.model_copy(
