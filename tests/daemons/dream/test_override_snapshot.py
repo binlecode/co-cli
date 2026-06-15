@@ -69,7 +69,7 @@ async def test_override_snapshot_is_read_then_cleaned_up(monkeypatch, tmp_path: 
 
     deps = _make_deps(tmp_path)
     state = DaemonState(start_time=time.time(), spawn_origin="test", spawn_session_id="s")
-    cfg = DreamSettings(poll_interval_seconds=1, review_timeout_seconds=30)
+    cfg = DreamSettings(tick_interval_seconds=1, review_timeout_seconds=30)
     shutdown = asyncio.Event()
 
     async def stopper() -> None:

@@ -76,6 +76,18 @@ def _cfg(**overrides) -> DreamSettings:
     return DreamSettings(**overrides)
 
 
+def test_interval_must_align_to_daily_grid():
+    """run_interval_hours must be a factor of 24 below 24, or a multiple of 24 above it."""
+    import pytest
+    from pydantic import ValidationError
+
+    for ok in (1, 2, 3, 4, 6, 8, 12, 24, 48, 72, 720):
+        assert DreamSettings(run_interval_hours=ok).run_interval_hours == ok
+    for bad in (5, 7, 9, 23, 25, 36, 100):
+        with pytest.raises(ValidationError):
+            DreamSettings(run_interval_hours=bad)
+
+
 def test_scheduled_tick_due_never_run_returns_true():
     """Fresh daemon with no prior pass fires immediately on the first idle tick."""
     state = HousekeepingState()
@@ -89,22 +101,24 @@ def test_scheduled_tick_due_within_interval_returns_false():
     assert scheduled_tick_due(state, _cfg(run_interval_hours=24)) is False
 
 
-def test_scheduled_tick_due_past_interval_and_past_run_at_returns_true():
-    """Past run_interval boundary AND past the next run_at clamp: due."""
+def test_scheduled_tick_due_past_interval_and_past_run_start_at_returns_true():
+    """Past run_interval boundary AND past the next run_start_at clamp: due."""
     now = datetime.now().astimezone()
     last = now - timedelta(hours=25)
     state = HousekeepingState(last_housekeeping_at=last.astimezone(UTC).isoformat())
     early_time = (now - timedelta(minutes=5)).strftime("%H:%M")
-    assert scheduled_tick_due(state, _cfg(run_interval_hours=24, run_at=early_time)) is True
+    assert scheduled_tick_due(state, _cfg(run_interval_hours=24, run_start_at=early_time)) is True
 
 
-def test_scheduled_tick_due_past_interval_before_run_at_returns_false():
-    """Just past run_interval but the next run_at clamp is still ahead: not due."""
+def test_scheduled_tick_due_past_interval_before_run_start_at_returns_false():
+    """Just past run_interval but the next run_start_at clamp is still ahead: not due."""
     now = datetime.now().astimezone()
     last = now - timedelta(hours=25)
     state = HousekeepingState(last_housekeeping_at=last.astimezone(UTC).isoformat())
     future_time = (now + timedelta(minutes=5)).strftime("%H:%M")
-    assert scheduled_tick_due(state, _cfg(run_interval_hours=24, run_at=future_time)) is False
+    assert (
+        scheduled_tick_due(state, _cfg(run_interval_hours=24, run_start_at=future_time)) is False
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -161,7 +161,7 @@ while not shutdown.is_set():
     if not files:
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(shutdown.wait(),
-                                   timeout=poll_interval_seconds)
+                                   timeout=tick_interval_seconds)
         continue                                        # idle-poll
 
     item = files[0]                                     # FIFO
@@ -292,7 +292,7 @@ Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay → 
 flowchart TD
     subgraph Entry["Entry Points"]
         Manual["co dream run\n(writes ~/.co-cli/daemons/dream/run.tag)"]
-        Auto["scheduled tick\n(now ≥ last + run_interval_hours,\nclamped to next run_at)"]
+        Auto["scheduled tick\n(now ≥ last + run_interval_hours,\nclamped to next run_start_at)"]
     end
 
     subgraph Pass["Housekeeping pass — merge → decay"]
@@ -335,7 +335,7 @@ co dream run
   → print "Housekeeping requested. Check `co dream status` for results."
 ```
 
-Worst-case latency from `co dream run` to housekeeping start is `dream.poll_interval_seconds` (default 5 s). There is no ad-hoc spawn — the daemon must be running.
+Worst-case latency from `co dream run` to housekeeping start is `dream.tick_interval_seconds` (default 5 s). There is no ad-hoc spawn — the daemon must be running.
 
 Scheduled tick:
 
@@ -344,7 +344,7 @@ scheduled_tick_due(state, cfg):
   if state.last_housekeeping_at is None: return True
   earliest = last + run_interval_hours
   if now < earliest: return False
-  target = earliest.replace(hour=run_at_hh, minute=run_at_mm)
+  target = earliest.replace(hour=run_start_at_hh, minute=run_start_at_mm)
   if target < earliest: target += one day
   return now ≥ target
 ```
@@ -520,9 +520,9 @@ The daemon wires the same observability stack as the main app via `setup_observa
 | `dream.review_timeout_seconds` | `CO_DREAM_REVIEW_TIMEOUT_SECONDS` | `120` | Per-review LLM call timeout; `asyncio.timeout` in worker loop |
 | `dream.retry_backoff_seconds` | `CO_DREAM_RETRY_BACKOFF_SECONDS` | `30` | Sleep between retry attempts on timeout or error |
 | `dream.max_retry_attempts` | `CO_DREAM_MAX_RETRY_ATTEMPTS` | `3` | After this many failures, move queue file to `failed/` |
-| `dream.poll_interval_seconds` | `CO_DREAM_POLL_INTERVAL_SECONDS` | `5` | Idle queue-scan interval (range 1–60); only fires when queue is empty |
-| `dream.run_interval_hours` | `CO_DREAM_RUN_INTERVAL_HOURS` | `24` | Minimum hours between housekeeping passes (range 1–720) |
-| `dream.run_at` | `CO_DREAM_RUN_AT` | `"03:00"` | Preferred local time-of-day boundary for the scheduled tick (`HH:MM`) |
+| `dream.tick_interval_seconds` | `CO_DREAM_TICK_INTERVAL_SECONDS` | `5` | Idle-loop tick interval (range 1–60) — drives the queue scan **and** the housekeeping-schedule check; only ticks when the queue is empty |
+| `dream.run_interval_hours` | `CO_DREAM_RUN_INTERVAL_HOURS` | `24` | Minimum hours between housekeeping passes (range 1–720; must align to the daily grid — below 24 a factor of 24 (1, 2, 3, 4, 6, 8, 12), above 24 a multiple of 24 (48, 72, …)) |
+| `dream.run_start_at` | `CO_DREAM_RUN_START_AT` | `"03:00"` | Preferred local time-of-day boundary for the scheduled tick (`HH:MM`) |
 | `dream.max_pass_seconds` | `CO_DREAM_MAX_PASS_SECONDS` | `600` | Wall-clock cap on the merge phase of a housekeeping pass (≥ 60); decay runs unconditionally after merge |
 | `dream.done_retention_days` | `CO_DREAM_DONE_RETENTION_DAYS` | `7` | Age (days, ≥ 1) past which `queue/done/` and orphaned `snapshots/` files are deleted by the housekeeping retention prune; `failed/` is never pruned |
 
@@ -597,7 +597,7 @@ Internal caps (housekeeping — apply to both domains):
 | `decay_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled memory candidates; returns count archived |
 | `merge_skills(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of user-skill clusters; pinned excluded; rewrites anchor in-place, archives siblings to `user_skills_dir/.archive/`; returns clusters merged |
 | `decay_skills(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled user skills with a sidecar; pinned and sidecar-less skills protected; returns count archived |
-| `scheduled_tick_due(state, cfg) -> bool` | `co_cli/daemons/dream/_loop.py` | Returns True when ≥ `run_interval_hours` since last pass AND past today's `run_at` boundary |
+| `scheduled_tick_due(state, cfg) -> bool` | `co_cli/daemons/dream/_loop.py` | Returns True when ≥ `run_interval_hours` since last pass AND past today's `run_start_at` boundary |
 | `HousekeepingState` / `HousekeepingStats` | `co_cli/daemons/dream/_state.py` | Pydantic models for housekeeping state persistence |
 | `load_housekeeping_state(daemon_dir)` | `co_cli/daemons/dream/_state.py` | Forgiving loader — fresh state on missing/corrupt |
 | `save_housekeeping_state(daemon_dir, state)` | `co_cli/daemons/dream/_state.py` | Atomic write of `_dream_state.json` under `daemons/dream/` |
@@ -686,7 +686,7 @@ Internal caps (housekeeping — apply to both domains):
 
 | Property | Test file |
 |---|---|
-| Scheduled tick boundaries: never-run, within interval, past interval ± run_at | `tests/daemons/dream/test_housekeeping.py` |
+| Scheduled tick boundaries: never-run, within interval, past interval ± run_start_at | `tests/daemons/dream/test_housekeeping.py` |
 | Memory merge canonical pick: highest `recall_count` wins; tiebreaker by recency | `tests/daemons/dream/test_housekeeping.py` |
 | Memory merge article exclusion: only notes/rules cluster | `tests/daemons/dream/test_housekeeping.py` |
 | Memory decay candidacy: aged + never-recalled → archive | `tests/daemons/dream/test_housekeeping.py` |

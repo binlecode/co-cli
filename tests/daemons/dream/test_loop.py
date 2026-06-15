@@ -34,7 +34,7 @@ def _make_cfg(**overrides) -> DreamSettings:
         "review_timeout_seconds": 30,
         "retry_backoff_seconds": 1,
         "max_retry_attempts": 3,
-        "poll_interval_seconds": 1,
+        "tick_interval_seconds": 1,
     }
     defaults.update(overrides)
     return DreamSettings(**defaults)

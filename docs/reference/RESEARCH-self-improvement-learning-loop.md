@@ -40,7 +40,7 @@ Both review specs are *separate* forked agents (not one combined reviewer), and 
 
 - Package: `co_cli/daemons/dream/` (`__init__.py` is docstring-only per repo rules).
 - Process lifecycle: `process.py` (`co dream start/stop/status`, foreground execution); main loop in `_loop.py`.
-- Trigger model: **filesystem queue + polling**, not the old per-turn in-process `asyncio.Task`. The REPL writes KICK JSON files; the detached daemon polls `queue/` every `poll_interval_seconds` (default 5s) and consumes FIFO.
+- Trigger model: **filesystem queue + polling**, not the old per-turn in-process `asyncio.Task`. The REPL writes KICK JSON files; the detached daemon polls `queue/` every `tick_interval_seconds` (default 5s) and consumes FIFO.
 - Auto-spawn: `maybe_autospawn_dream(deps, frontend)` at REPL startup (`co_cli/main.py`), guarded by `bootstrap/core.py` advisory flock; spawns a detached `co dream start --foreground` subprocess when `dream.enabled` and `CO_DREAM_NO_AUTOSPAWN` is unset.
 
 This matches the durable-queue invariants in memory: producer never gated on consumer liveness (`feedback_queue_decoupling_invariant`), queue is the sole cross-process bridge with no side-channel wake-ups (`feedback_queue_sole_bridge`).
@@ -81,7 +81,7 @@ Both apply the personality **curation lens** when the active soul defines one. E
 4. **decay_skill** — archive aged user skills with no recent recall.
 5. **prune** — delete `queue/done/` items and orphaned compaction snapshots past `done_retention_days`.
 
-State: `HousekeepingState` at `$CO_HOME/daemons/dream/_dream_state.json` (`last_housekeeping_at`, cumulative `stats`: `memory_merged/memory_decayed/skill_merged/skill_decayed/done_pruned`). Schedule: at least `run_interval_hours` since last run, fired at the next `run_at` time-of-day.
+State: `HousekeepingState` at `$CO_HOME/daemons/dream/_dream_state.json` (`last_housekeeping_at`, cumulative `stats`: `memory_merged/memory_decayed/skill_merged/skill_decayed/done_pruned`). Schedule: at least `run_interval_hours` since last run, fired at the next `run_start_at` time-of-day.
 
 ### 2.5 Config (current)
 
@@ -90,11 +90,11 @@ State: `HousekeepingState` at `$CO_HOME/daemons/dream/_dream_state.json` (`last_
 | Field | Default |
 |---|---|
 | `enabled` | `False` |
-| `poll_interval_seconds` | `5` |
+| `tick_interval_seconds` | `5` |
 | `review_timeout_seconds` | `120` |
 | `retry_backoff_seconds` / `max_retry_attempts` | `30` / `3` |
 | `run_interval_hours` | `24` |
-| `run_at` | `"03:00"` |
+| `run_start_at` | `"03:00"` |
 | `max_pass_seconds` | `600` |
 | `done_retention_days` | `7` |
 

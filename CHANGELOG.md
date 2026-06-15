@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.356]
+
+### Refactor: dream daemon config naming + daily-grid interval validation
+
+- **`poll_interval_seconds` → `tick_interval_seconds`** (env `CO_DREAM_POLL_INTERVAL_SECONDS` → `CO_DREAM_TICK_INTERVAL_SECONDS`). The field is the idle-loop tick that drives both the queue scan *and* the housekeeping-schedule check — "poll" undersold it as queue-only. Spec descriptions reworded accordingly.
+- **`run_at` → `run_start_at`** (env `CO_DREAM_RUN_AT` → `CO_DREAM_RUN_START_AT`) — clearer that it is the preferred start time-of-day for the scheduled housekeeping pass.
+- **`run_interval_hours` daily-grid validation.** Because `run_start_at` is a once-per-day clamp, the effective cadence is quantized to whole days. A `field_validator` now rejects misaligned values: below 24 must be a factor of 24 (1, 2, 3, 4, 6, 8, 12); above 24 must be a multiple of 24 (48, 72, …). Prevents a configured interval from being silently rounded by the clamp.
+
 ## [0.8.354]
 
 ### Feature: user image intake — lone path-reference → `image_view` routing (`user-image-intake`)

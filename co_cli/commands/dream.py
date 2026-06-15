@@ -94,8 +94,8 @@ def dream_stop(
 def dream_run() -> None:
     """Request a one-shot housekeeping pass from the running daemon.
 
-    Writes a sentinel file the daemon picks up on its next polling iteration;
-    worst-case latency is ``dream.poll_interval_seconds``. Errors if the daemon
+    Writes a sentinel file the daemon picks up on its next idle tick;
+    worst-case latency is ``dream.tick_interval_seconds``. Errors if the daemon
     is not running — does NOT spawn an ad-hoc pass.
     """
     from co_cli.daemons.dream.process import status_daemon

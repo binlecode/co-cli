@@ -59,7 +59,7 @@ def scheduled_tick_due(state: HousekeepingState, cfg: DreamSettings) -> bool:
     """Return True when the next housekeeping pass is due.
 
     Cadence: at least ``cfg.run_interval_hours`` since the last pass, then
-    clamped to the next ``cfg.run_at`` time-of-day boundary in local time.
+    clamped to the next ``cfg.run_start_at`` time-of-day boundary in local time.
     Never-run state (``last_housekeeping_at is None``) returns True so a
     fresh daemon gets a baseline pass on the first idle tick.
     """
@@ -72,7 +72,7 @@ def scheduled_tick_due(state: HousekeepingState, cfg: DreamSettings) -> bool:
     earliest = (last_utc + timedelta(hours=cfg.run_interval_hours)).astimezone()
     if now_local < earliest:
         return False
-    hh, mm = (int(x) for x in cfg.run_at.split(":"))
+    hh, mm = (int(x) for x in cfg.run_start_at.split(":"))
     target = earliest.replace(hour=hh, minute=mm, second=0, microsecond=0)
     if target < earliest:
         target += timedelta(days=1)
@@ -116,7 +116,7 @@ async def main_loop(
             await _maybe_housekeep(deps, cfg)
             _flush_daemon_usage(deps)
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(shutdown.wait(), timeout=cfg.poll_interval_seconds)
+                await asyncio.wait_for(shutdown.wait(), timeout=cfg.tick_interval_seconds)
             continue
 
         item_path = files[0]

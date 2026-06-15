@@ -106,7 +106,7 @@ async def test_main_loop_exhausts_retries_and_moves_to_failed(tmp_path: Path) ->
         review_timeout_seconds=30,
         retry_backoff_seconds=1,
         max_retry_attempts=1,
-        poll_interval_seconds=1,
+        tick_interval_seconds=1,
     )
 
     await _run_until_failed(deps, queue_dir, state, cfg, "2024-01-01T00-00-00.json")
@@ -142,7 +142,7 @@ async def test_main_loop_attempt_counter_written_on_penultimate_failure(
         review_timeout_seconds=30,
         retry_backoff_seconds=1,
         max_retry_attempts=2,
-        poll_interval_seconds=1,
+        tick_interval_seconds=1,
     )
 
     await _run_until_failed(deps, queue_dir, state, cfg, "2024-01-01T00-00-00.json")
@@ -182,7 +182,7 @@ async def test_main_loop_unknown_domain_lands_in_failed(tmp_path: Path) -> None:
         review_timeout_seconds=30,
         retry_backoff_seconds=1,
         max_retry_attempts=1,
-        poll_interval_seconds=1,
+        tick_interval_seconds=1,
     )
 
     await _run_until_failed(deps, queue_dir, state, cfg, "2024-01-01T00-00-00.json")
@@ -221,7 +221,7 @@ async def test_main_loop_shutdown_interrupts_retry_backoff(tmp_path: Path) -> No
         review_timeout_seconds=30,
         retry_backoff_seconds=10,
         max_retry_attempts=5,
-        poll_interval_seconds=10,
+        tick_interval_seconds=10,
     )
     shutdown = asyncio.Event()
 
