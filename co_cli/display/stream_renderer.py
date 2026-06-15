@@ -16,10 +16,14 @@ Reasoning display modes:
 - full: the `Thinking… Ns` header is shown with the raw thinking body streamed below it,
         and the body + `Thought for Ns` footer are committed
 
-Elapsed time is event-driven: the live counter advances when thinking deltas arrive and
-the committed `Thought for Ns` is measured at thinking-end (wall-clock accurate).
+The live `Thinking… Ns` counter advances on a wall-clock ticker (a thinking-scoped
+background task that repaints once per second) so it ticks even when the model emits
+reasoning in bursts or goes silent between deltas. The committed `Thought for Ns` is
+measured at thinking-end (wall-clock accurate). With no running event loop (sync/headless
+callers), the ticker is skipped and the counter degrades to delta-driven updates.
 """
 
+import asyncio
 import time
 from typing import TYPE_CHECKING
 
@@ -34,6 +38,7 @@ if TYPE_CHECKING:
     from co_cli.display.core import Frontend
 
 _RENDER_INTERVAL = 0.05  # 20 FPS
+_TICK_INTERVAL = 1.0  # wall-clock repaint cadence for the live thinking counter
 
 
 class StreamRenderer:
@@ -55,6 +60,7 @@ class StreamRenderer:
         self._last_thinking_render_at: float = 0.0
         self._thinking_active: bool = False
         self._thinking_started_at: float | None = None
+        self._ticker_task: asyncio.Task[None] | None = None
         self._streamed_text: bool = False
 
     @property
@@ -80,18 +86,63 @@ class StreamRenderer:
             return
         if self._thinking_started_at is None:
             self._thinking_started_at = time.monotonic()
+            self._start_ticker()
         self._thinking_buffer += content
         now = time.monotonic()
         if now - self._last_thinking_render_at < _RENDER_INTERVAL:
             return
         self._last_thinking_render_at = now
+        self._render_thinking_header()
+
+    def _render_thinking_header(self) -> None:
+        """Emit the live `Thinking… Ns` header from current wall-clock elapsed.
+
+        Shared by delta arrival (append_thinking) and the wall-clock ticker. In full
+        mode the streamed body trails the header; collapsed mode shows the header only.
+        """
+        if self._thinking_started_at is None:
+            return
         self._thinking_active = True
-        elapsed = now - self._thinking_started_at
+        elapsed = time.monotonic() - self._thinking_started_at
         header = f"Thinking… {_format_elapsed(elapsed)}"
         if self._reasoning_display == REASONING_DISPLAY_FULL:
             self._frontend.on_thinking_delta(f"{header}\n\n{self._thinking_buffer.rstrip()}")
         else:
             self._frontend.on_thinking_delta(header)
+
+    def _start_ticker(self) -> None:
+        """Spawn the wall-clock repaint task, if a running loop is available.
+
+        Without a running loop (sync/headless callers) the counter falls back to
+        delta-driven updates — no ticker, no error.
+        """
+        if self._ticker_task is not None and not self._ticker_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._ticker_task = loop.create_task(self._tick())
+
+    async def _tick(self) -> None:
+        """Repaint the live header on the wall-clock cadence until thinking ends."""
+        try:
+            while self._thinking_started_at is not None:
+                await asyncio.sleep(_TICK_INTERVAL)
+                if self._thinking_started_at is None:
+                    return
+                self._render_thinking_header()
+        except asyncio.CancelledError:
+            return
+
+    def _stop_ticker(self) -> None:
+        if self._ticker_task is not None:
+            self._ticker_task.cancel()
+            self._ticker_task = None
+
+    def close(self) -> None:
+        """Stop the live ticker — idempotent; called on segment teardown (all paths)."""
+        self._stop_ticker()
 
     def flush_for_tool_output(self) -> None:
         """Flush thinking/text before inline tool annotations and output panels."""
@@ -110,6 +161,7 @@ class StreamRenderer:
         return self._streamed_text
 
     def _flush_thinking(self) -> None:
+        self._stop_ticker()
         if self._thinking_started_at is not None:
             elapsed = time.monotonic() - self._thinking_started_at
             footer = f"Thought for {_format_elapsed(elapsed)}"

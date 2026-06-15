@@ -104,6 +104,7 @@ def build_key_bindings(
     """
     kb = KeyBindings()
     prompt_active = Condition(lambda: frontend.prompt_active)
+    selection_active = Condition(lambda: frontend.selection_active)
 
     @kb.add("y", filter=prompt_active, eager=True)
     @kb.add("a", filter=prompt_active, eager=True)
@@ -114,6 +115,25 @@ def build_key_bindings(
     @kb.add("enter", filter=prompt_active, eager=True)
     def _(event: "KeyPressEvent") -> None:
         frontend.resolve_prompt("")
+
+    # Selection-mode bindings (list picker): up/down navigate, enter selects,
+    # escape/q cancel. Eager so they resolve before the input area sees the key.
+    @kb.add("up", filter=selection_active, eager=True)
+    def _(event: "KeyPressEvent") -> None:
+        frontend.move_selection(-1)
+
+    @kb.add("down", filter=selection_active, eager=True)
+    def _(event: "KeyPressEvent") -> None:
+        frontend.move_selection(1)
+
+    @kb.add("enter", filter=selection_active, eager=True)
+    def _(event: "KeyPressEvent") -> None:
+        frontend.resolve_selection(accept=True)
+
+    @kb.add("escape", filter=selection_active, eager=True)
+    @kb.add("q", filter=selection_active, eager=True)
+    def _(event: "KeyPressEvent") -> None:
+        frontend.resolve_selection(accept=False)
 
     @kb.add("escape")
     def _(event: "KeyPressEvent") -> None:

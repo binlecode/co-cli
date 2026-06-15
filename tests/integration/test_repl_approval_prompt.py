@@ -64,7 +64,7 @@ async def _drive_approval(keystroke: str) -> str:
         create_app_session(input=pipe, output=PlainTextOutput(captured)),
         patch_stdout(),
     ):
-        accept_handler = _build_accept_handler(runtime, dispatch, lambda: None, None)
+        accept_handler = _build_accept_handler(runtime, dispatch, lambda: None, None, frontend)
         key_bindings = build_key_bindings(runtime=runtime, dispatch=dispatch, frontend=frontend)
         app = build_repl_app(
             frontend=frontend,

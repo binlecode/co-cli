@@ -413,7 +413,9 @@ async def test_accept_handler_schedules_turn_task(tmp_path: Path) -> None:
         dispatched.append((user_input, eof))
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
-    handler = _build_accept_handler(runtime, dispatch, lambda: None, _make_deps(tmp_path))
+    handler = _build_accept_handler(
+        runtime, dispatch, lambda: None, _make_deps(tmp_path), TerminalFrontend()
+    )
 
     class _Buf:
         text = "hello"
@@ -449,7 +451,11 @@ async def test_typed_ahead_enqueues_and_drains_fifo(tmp_path: Path) -> None:
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
     handler = _build_accept_handler(
-        runtime, dispatch, lambda: depths.append(len(runtime.queue)), _make_deps(tmp_path)
+        runtime,
+        dispatch,
+        lambda: depths.append(len(runtime.queue)),
+        _make_deps(tmp_path),
+        TerminalFrontend(),
     )
 
     def _buf(text: str):
@@ -485,7 +491,9 @@ async def test_blank_input_never_enqueues(tmp_path: Path) -> None:
         dispatched.append((user_input, eof))
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
-    handler = _build_accept_handler(runtime, dispatch, lambda: None, _make_deps(tmp_path))
+    handler = _build_accept_handler(
+        runtime, dispatch, lambda: None, _make_deps(tmp_path), TerminalFrontend()
+    )
 
     long_task = asyncio.ensure_future(asyncio.sleep(10))
     await asyncio.sleep(0)
@@ -514,7 +522,7 @@ async def test_queue_cap_drops_oldest(tmp_path: Path) -> None:
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
     deps = _make_deps_with_repl(tmp_path, queue_cap=2, drop_policy="oldest")
-    handler = _build_accept_handler(runtime, dispatch, lambda: None, deps)
+    handler = _build_accept_handler(runtime, dispatch, lambda: None, deps, TerminalFrontend())
 
     long_task = asyncio.ensure_future(asyncio.sleep(10))
     await asyncio.sleep(0)
@@ -545,7 +553,7 @@ async def test_queue_cap_newest_rejects(tmp_path: Path) -> None:
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
     deps = _make_deps_with_repl(tmp_path, queue_cap=2, drop_policy="newest")
-    handler = _build_accept_handler(runtime, dispatch, lambda: None, deps)
+    handler = _build_accept_handler(runtime, dispatch, lambda: None, deps, TerminalFrontend())
 
     long_task = asyncio.ensure_future(asyncio.sleep(10))
     await asyncio.sleep(0)
@@ -575,7 +583,7 @@ async def test_cap_zero_unbounded(tmp_path: Path) -> None:
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
     deps = _make_deps_with_repl(tmp_path, queue_cap=0)
-    handler = _build_accept_handler(runtime, dispatch, lambda: None, deps)
+    handler = _build_accept_handler(runtime, dispatch, lambda: None, deps, TerminalFrontend())
 
     long_task = asyncio.ensure_future(asyncio.sleep(10))
     await asyncio.sleep(0)
@@ -663,7 +671,9 @@ async def test_queue_command_bypasses_enqueue_mid_turn(tmp_path: Path) -> None:
         pass
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
-    handler = _build_accept_handler(runtime, dispatch, lambda: None, _make_deps(tmp_path))
+    handler = _build_accept_handler(
+        runtime, dispatch, lambda: None, _make_deps(tmp_path), TerminalFrontend()
+    )
 
     def _buf(text: str):
         return type("_Buf", (), {"text": text})()
@@ -707,7 +717,9 @@ async def test_esc_cancels_turn_and_advances_queue(tmp_path: Path) -> None:
             await gate.wait()
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
-    handler = _build_accept_handler(runtime, dispatch, lambda: None, _make_deps(tmp_path))
+    handler = _build_accept_handler(
+        runtime, dispatch, lambda: None, _make_deps(tmp_path), TerminalFrontend()
+    )
     kb = build_key_bindings(runtime=runtime, dispatch=dispatch, frontend=TerminalFrontend())
 
     def _buf(text: str):
@@ -724,7 +736,9 @@ async def test_esc_cancels_turn_and_advances_queue(tmp_path: Path) -> None:
     assert list(runtime.queue) == ["queued"]
 
     # Esc cancels turn 1; the done-callback drains "queued" as the next turn.
-    esc = kb.get_bindings_for_keys((Keys.Escape,))[0]
+    # With no list picker active, the active escape binding is the unfiltered
+    # turn-cancel one (the selection-mode binding's filter is False).
+    esc = next(b for b in kb.get_bindings_for_keys((Keys.Escape,)) if b.filter())
     esc.handler(object())
     for _ in range(20):
         await asyncio.sleep(0.01)

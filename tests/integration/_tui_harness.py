@@ -157,7 +157,7 @@ async def drive_repl(deps: CoDeps, keys: str, *, sentinel: str) -> str:
         ),
         patch_stdout(raw=True),
     ):
-        accept_handler = _build_accept_handler(runtime, dispatch, lambda: None, deps)
+        accept_handler = _build_accept_handler(runtime, dispatch, lambda: None, deps, frontend)
         key_bindings = build_key_bindings(runtime=runtime, dispatch=dispatch, frontend=frontend)
         app = build_repl_app(
             frontend=frontend,

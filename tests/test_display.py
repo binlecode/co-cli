@@ -82,8 +82,10 @@ async def test_repl_app_builds():
         assert not turn_task.cancelled()
         assert dispatched[-1] == (None, False)
 
-        # Esc cancels the active turn (the new interrupt key).
-        esc = kb.get_bindings_for_keys((Keys.Escape,))[0]
+        # Esc cancels the active turn (the new interrupt key). With no list picker
+        # active, prompt_toolkit dispatches the escape binding whose filter holds —
+        # the unfiltered turn-cancel one, not the selection-mode binding.
+        esc = next(b for b in kb.get_bindings_for_keys((Keys.Escape,)) if b.filter())
         esc.handler(object())
         await asyncio.sleep(0.01)
         assert turn_task.cancelled()
@@ -191,6 +193,46 @@ def test_off_mode_emits_no_reasoning_surface():
     assert "Thought for" not in out
     assert "weighing options" not in out
     assert "the real answer" in out
+
+
+class _HeaderCapture:
+    """Minimal frontend capturing live thinking-header repaints."""
+
+    def __init__(self) -> None:
+        self.headers: list[str] = []
+
+    def on_thinking_delta(self, accumulated: str) -> None:
+        self.headers.append(accumulated)
+
+    def on_thinking_commit(self, final: str) -> None:
+        pass
+
+    def on_text_commit(self, final: str) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_thinking_counter_repaints_without_new_deltas(monkeypatch):
+    """The live header advances on a wall-clock ticker — repaints keep coming after a
+    single delta with no further thinking tokens, and stop once the segment closes."""
+    from co_cli.display import stream_renderer
+
+    monkeypatch.setattr(stream_renderer, "_TICK_INTERVAL", 0.02)
+    frontend = _HeaderCapture()
+    renderer = stream_renderer.StreamRenderer(frontend, reasoning_display="collapsed")
+
+    renderer.append_thinking("one reasoning chunk")
+    await asyncio.sleep(0.1)
+    repaints_during = len(frontend.headers)
+    renderer.close()
+    await asyncio.sleep(0.1)
+    repaints_after = len(frontend.headers)
+
+    # Ticked several times off one delta (the bug was: only one repaint, at delta time).
+    assert repaints_during >= 3
+    # All repaints are the live header; none happened after close (ticker stopped).
+    assert all(h.startswith("Thinking…") for h in frontend.headers)
+    assert repaints_after == repaints_during
 
 
 def test_status_persists_to_scrollback_when_superseded_by_text():

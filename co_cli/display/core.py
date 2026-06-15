@@ -6,11 +6,9 @@ from io import StringIO
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from prompt_toolkit import ANSI, print_formatted_text
-from prompt_toolkit.application import run_in_terminal
 from rich.console import Console, Group, RenderableType
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.prompt import Prompt
 from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
@@ -131,99 +129,6 @@ def make_table(*columns: str) -> Table:
     return t
 
 
-def _render_selection(items: list[str], selected: int, current: str | None) -> None:
-    """Re-render the selection menu in-place, moving cursor up to overwrite."""
-    import sys
-
-    sys.stdout.write(f"\x1b[{len(items)}A")
-    for idx, name in enumerate(items):
-        marker = " *" if name == current else ""
-        if idx == selected:
-            sys.stdout.write(f"\x1b[2K  \x1b[1;36m❯ {name}{marker}\x1b[0m\n")
-        else:
-            sys.stdout.write(f"\x1b[2K    {name}{marker}\n")
-    sys.stdout.flush()
-
-
-def _read_key() -> str:
-    """Read a single keypress from stdin, including escape sequences."""
-    import sys
-    import termios
-    import tty
-
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
-        if ch == "\x1b":
-            ch += sys.stdin.read(2)
-        return ch
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-
-def _run_selection(items: list[str], title: str, current: str | None) -> str | None:
-    """The raw termios arrow-key menu — assumes it owns the terminal in cooked/raw mode."""
-    import sys
-
-    idx = 0
-    if current and current in items:
-        idx = items.index(current)
-
-    # Initial render — write items to establish screen lines
-    console.print(f"[dim]{title} — ↑↓ navigate, Enter select, q cancel[/dim]")
-    for i, name in enumerate(items):
-        marker = " *" if name == current else ""
-        if i == idx:
-            sys.stdout.write(f"  \x1b[1;36m❯ {name}{marker}\x1b[0m\n")
-        else:
-            sys.stdout.write(f"    {name}{marker}\n")
-    sys.stdout.flush()
-
-    try:
-        while True:
-            key = _read_key()
-            if key == "\x1b[A":  # Up
-                idx = (idx - 1) % len(items)
-                _render_selection(items, idx, current)
-            elif key == "\x1b[B":  # Down
-                idx = (idx + 1) % len(items)
-                _render_selection(items, idx, current)
-            elif key in ("\r", "\n"):  # Enter
-                return items[idx]
-            elif key in ("q", "\x1b", "\x03"):  # q, Esc, Ctrl-C
-                return None
-    except (EOFError, KeyboardInterrupt):
-        return None
-
-
-async def prompt_selection(
-    items: list[str],
-    *,
-    title: str = "Select",
-    current: str | None = None,
-) -> str | None:
-    """Interactive arrow-key menu for selecting from a list.
-
-    Up/Down to navigate, Enter to select, q/Esc to cancel.
-    Returns the selected item string, or None if cancelled.
-
-    When an owned Application is running (in-REPL), the raw termios read runs
-    inside run_in_terminal so the app suspends and restores terminal ownership
-    cleanly; otherwise (non-REPL callers) it reads inline (CD-m-3, mirroring
-    hermes cli.py:7103-7117).
-    """
-    from prompt_toolkit.application import get_app_or_none
-
-    if not items:
-        return None
-
-    if get_app_or_none() is not None:
-        return await run_in_terminal(lambda: _run_selection(items, title, current))
-    return _run_selection(items, title, current)
-
-
 # -- Frontend — abstraction for display + user interaction ----------
 
 
@@ -297,6 +202,12 @@ class Frontend(Protocol):
         """Prompt user for a free-text or constrained answer. Returns the user's answer."""
         ...
 
+    async def prompt_selection(
+        self, items: list[str], *, title: str = "Select", current: str | None = None
+    ) -> str | None:
+        """Prompt user to pick one item from a list. Returns the choice, or None if cancelled."""
+        ...
+
     async def prompt_confirm(self, message: str) -> bool:
         """Prompt user for a yes/no confirmation. Returns True if confirmed."""
         ...
@@ -354,6 +265,19 @@ class TerminalFrontend:
         self._prompt_future: asyncio.Future[str] | None = None
         self._prompt_valid_keys: frozenset[str] = frozenset()
         self._prompt_default: str = ""
+        # In-app list-picker state (selection menu). Navigation keys are
+        # intercepted by the app's selection-mode key bindings (move_selection /
+        # resolve_selection); the menu renders in the in-flight region. Same
+        # owned-app, no-terminal-suspend mechanism as the single-key prompt above.
+        self._selection_future: asyncio.Future[str | None] | None = None
+        self._selection_items: list[str] = []
+        self._selection_index: int = 0
+        self._selection_title: str = ""
+        self._selection_current: str | None = None
+        # In-app free-text input state (clarify question). The answer is typed
+        # into the existing input area; Enter routes through accept_handler to
+        # resolve_question. The question/options hint renders in the in-flight region.
+        self._question_future: asyncio.Future[str] | None = None
 
     def bind_app(self, app: "Application") -> None:
         """Bind the owning Application so the frontend can request repaints (F3).
@@ -528,6 +452,24 @@ class TerminalFrontend:
         """
         return self._prompt_future is not None and not self._prompt_future.done()
 
+    @property
+    def selection_active(self) -> bool:
+        """True while an in-app list picker is awaiting navigation/selection.
+
+        The app's selection-mode key bindings gate on this so up/down/enter/esc
+        drive the menu instead of typing into the input area.
+        """
+        return self._selection_future is not None and not self._selection_future.done()
+
+    @property
+    def question_active(self) -> bool:
+        """True while a free-text question is awaiting a typed answer.
+
+        The accept_handler gates on this so Enter resolves the question instead
+        of arming or queueing a turn.
+        """
+        return self._question_future is not None and not self._question_future.done()
+
     def resolve_prompt(self, key: str) -> None:
         """Resolve an active key-prompt with ``key`` (Enter/unknown → default).
 
@@ -564,6 +506,85 @@ class TerminalFrontend:
             self._prompt_default = ""
             self._clear_inflight()
 
+    def _render_selection_menu(self) -> RenderableType:
+        """Render the list picker (title hint + cursor/current markers) for the in-flight region."""
+        lines: list[RenderableType] = [
+            Text(f"{self._selection_title} — ↑↓ navigate, Enter select, q cancel", style="hint")
+        ]
+        for idx, name in enumerate(self._selection_items):
+            marker = " *" if name == self._selection_current else ""
+            if idx == self._selection_index:
+                lines.append(Text(f"❯ {name}{marker}", style="accent"))
+            else:
+                lines.append(Text(f"  {name}{marker}"))
+        return Group(*lines)
+
+    def move_selection(self, delta: int) -> None:
+        """Advance the picker cursor by ``delta`` (wrapping) and re-render in-flight."""
+        if not self.selection_active:
+            return
+        self._selection_index = (self._selection_index + delta) % len(self._selection_items)
+        self._set_inflight(self._render_selection_menu(), "selection")
+
+    def resolve_selection(self, *, accept: bool) -> None:
+        """Resolve the active picker with the highlighted item, or None if cancelled."""
+        future = self._selection_future
+        if future is None or future.done():
+            return
+        future.set_result(self._selection_items[self._selection_index] if accept else None)
+
+    async def prompt_selection(
+        self, items: list[str], *, title: str = "Select", current: str | None = None
+    ) -> str | None:
+        """Render a list picker in the in-flight region and await a selection.
+
+        Navigation is delivered by the running Application's own event loop via
+        the selection-mode key bindings — no terminal suspend. Returns the chosen
+        item, or None if cancelled / empty list / no owned app (headless/stub).
+        """
+        if not items or self._app is None:
+            return None
+        self.clear_status()
+        self._selection_items = list(items)
+        self._selection_title = title
+        self._selection_current = current
+        self._selection_index = items.index(current) if current in items else 0
+        self._selection_future = asyncio.get_running_loop().create_future()
+        self._set_inflight(self._render_selection_menu(), "selection")
+        try:
+            return await self._selection_future
+        finally:
+            self._selection_future = None
+            self._selection_items = []
+            self._selection_index = 0
+            self._selection_title = ""
+            self._selection_current = None
+            self._clear_inflight()
+
+    def resolve_question(self, text: str) -> None:
+        """Resolve the active free-text question with the typed answer."""
+        future = self._question_future
+        if future is None or future.done():
+            return
+        future.set_result(text)
+
+    async def _prompt_free_text(self, renderable: RenderableType) -> str:
+        """Render ``renderable`` in the in-flight region and await a typed answer.
+
+        The answer is typed into the existing input area; Enter routes through the
+        accept_handler to resolve_question. Returns "" if no owned app (headless/stub).
+        """
+        if self._app is None:
+            return ""
+        self.clear_status()
+        self._question_future = asyncio.get_running_loop().create_future()
+        self._set_inflight(renderable, "question")
+        try:
+            return await self._question_future
+        finally:
+            self._question_future = None
+            self._clear_inflight()
+
     async def prompt_approval(self, subject: ApprovalSubject) -> str:
         """Prompt for y/n/a inside the owned app (in-flight panel + key bindings)."""
         hint = Text.assemble(
@@ -581,23 +602,26 @@ class TerminalFrontend:
         )
 
     async def prompt_question(self, prompt: QuestionPrompt) -> str:
-        """Prompt for a constrained or free-text answer, suspending the app via run_in_terminal."""
-        self.clear_status()
+        """Prompt for a constrained or free-text answer inside the owned app.
 
-        def _ask() -> str:
-            if prompt.options:
-                suffix = " (select multiple, comma-separated)" if prompt.multiple else ""
-                body = f"[accent]{prompt.question}[/accent]\n[hint]Options: {' | '.join(prompt.options)}{suffix}[/hint]"
-            else:
-                body = f"[accent]{prompt.question}[/accent]"
-            console.print(Panel(body, title="Question", border_style="info", title_align="left"))
-            if prompt.options and not prompt.multiple:
-                return Prompt.ask("", choices=prompt.options, console=console)
-            if prompt.options and prompt.multiple:
-                return Prompt.ask("Select (comma-separated)", console=console)
-            return Prompt.ask("Answer", console=console)
+        Single-select with options is a list picker (delegates to prompt_selection);
+        multi-select and free-text are typed answers (in-flight hint + input area).
+        All paths resolve through the app's own event loop — no terminal suspend.
+        """
+        if prompt.options and not prompt.multiple:
+            choice = await self.prompt_selection(prompt.options, title=prompt.question)
+            return choice if choice is not None else prompt.options[0]
 
-        return await run_in_terminal(_ask)
+        if prompt.options:
+            body = (
+                f"[accent]{prompt.question}[/accent]\n"
+                f"[hint]Options: {' | '.join(prompt.options)} "
+                "(select multiple, comma-separated)[/hint]"
+            )
+        else:
+            body = f"[accent]{prompt.question}[/accent]"
+        panel = Panel(body, title="Question", border_style="info", title_align="left")
+        return await self._prompt_free_text(panel)
 
     async def prompt_confirm(self, message: str) -> bool:
         """Prompt for a yes/no confirmation inside the owned app."""

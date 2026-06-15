@@ -576,6 +576,7 @@ def _build_accept_handler(
     dispatch: Callable[..., Awaitable[None]],
     on_status: Callable[[], None],
     deps: CoDeps,
+    frontend: TerminalFrontend,
 ) -> Callable[[Buffer], bool]:
     """Return the input TextArea accept_handler wired for the input queue.
 
@@ -610,6 +611,9 @@ def _build_accept_handler(
 
     def accept_handler(buffer: Buffer) -> bool:
         text = buffer.text
+        if frontend.question_active:
+            frontend.resolve_question(text)
+            return False
         if runtime.turn_active:
             is_queue, queue_args = _parse_queue_command(text)
             if is_queue:
@@ -716,7 +720,9 @@ async def _chat_loop(
         def _on_queue_status() -> None:
             frontend.update_status(_build_status_snapshot(deps, "active", runtime.queue))
 
-        accept_handler = _build_accept_handler(runtime, _dispatch, _on_queue_status, deps)
+        accept_handler = _build_accept_handler(
+            runtime, _dispatch, _on_queue_status, deps, frontend
+        )
         key_bindings = build_key_bindings(runtime=runtime, dispatch=_dispatch, frontend=frontend)
         app = build_repl_app(
             frontend=frontend,

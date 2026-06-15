@@ -63,9 +63,12 @@ def _rehydrate_todos(messages: list) -> list[TodoItem]:
 
 async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
     """Resume a past session via interactive picker."""
-    from co_cli.display.core import prompt_selection
     from co_cli.session.browser import format_file_size, list_sessions
     from co_cli.session.persistence import load_transcript
+
+    if ctx.frontend is None:
+        console.print("[dim]Resume is only available in the interactive REPL.[/dim]")
+        return None
 
     sessions = list_sessions(ctx.deps.sessions_dir)
     if not sessions:
@@ -77,7 +80,7 @@ async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | Non
         date_str = s.last_modified.strftime("%Y-%m-%d %H:%M")
         items.append(f"{s.title} ({date_str} · {format_file_size(s.file_size)})")
 
-    selection = await prompt_selection(items, title="Resume session")
+    selection = await ctx.frontend.prompt_selection(items, title="Resume session")
     if selection is None:
         return None
 

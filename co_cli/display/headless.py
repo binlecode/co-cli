@@ -16,6 +16,7 @@ class HeadlessFrontend:
         approval_response: returned by prompt_approval ("y" auto-approves everything)
         confirm_response:  returned by prompt_confirm
         question_answer:   returned by prompt_question
+        selection_choice:  returned by prompt_selection (None → first item)
         verbose:           print status messages to stdout as they arrive
 
     Recorded state (inspect after a run):
@@ -25,6 +26,7 @@ class HeadlessFrontend:
         last_approval_subject:  most recent ApprovalSubject passed to prompt_approval
         last_question:          most recent QuestionPrompt passed to prompt_question
         question_call_count:    total prompt_question invocations
+        last_selection_items:   most recent items list passed to prompt_selection
         last_status_snapshot:   most recent StatusSnapshot pushed via update_status
     """
 
@@ -34,11 +36,13 @@ class HeadlessFrontend:
         approval_response: str = "y",
         confirm_response: bool = False,
         question_answer: str = "",
+        selection_choice: str | None = None,
         verbose: bool = False,
     ) -> None:
         self._approval_response = approval_response
         self._confirm_response = confirm_response
         self._question_answer = question_answer
+        self._selection_choice = selection_choice
         self._verbose = verbose
         self._t0 = time.monotonic()
 
@@ -48,6 +52,7 @@ class HeadlessFrontend:
         self.last_approval_subject: ApprovalSubject | None = None
         self.last_question: QuestionPrompt | None = None
         self.question_call_count: int = 0
+        self.last_selection_items: list[str] | None = None
         self.last_status_snapshot: StatusSnapshot | None = None
 
     def on_text_delta(self, accumulated: str) -> None:
@@ -89,6 +94,16 @@ class HeadlessFrontend:
         self.last_question = prompt
         self.question_call_count += 1
         return self._question_answer
+
+    async def prompt_selection(
+        self, items: list[str], *, title: str = "Select", current: str | None = None
+    ) -> str | None:
+        self.last_selection_items = list(items)
+        if not items:
+            return None
+        if self._selection_choice is not None and self._selection_choice in items:
+            return self._selection_choice
+        return items[0]
 
     async def prompt_confirm(self, message: str) -> bool:
         return self._confirm_response

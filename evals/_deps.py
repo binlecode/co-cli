@@ -68,6 +68,11 @@ class EvalFrontend(TerminalFrontend):
             return prompt.options[0]
         return ""
 
+    async def prompt_selection(
+        self, items: list[str], *, title: str = "Select", current: str | None = None
+    ) -> str | None:
+        return items[0] if items else None
+
     async def prompt_confirm(self, message: str) -> bool:
         return True
 

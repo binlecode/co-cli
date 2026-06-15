@@ -401,6 +401,7 @@ async def _execute_stream_segment(
                         result = event_result
                 renderer.finish()
         finally:
+            renderer.close()
             frontend.cleanup()
     except BaseException as exc:
         pop_span(status="ERROR", status_msg=str(exc))
