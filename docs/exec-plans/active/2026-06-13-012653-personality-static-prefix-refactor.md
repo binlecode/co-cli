@@ -287,6 +287,12 @@ independent triggers:
    warm-call timing guide it.
 
 ## Deferred — follow-ons (documented, not in scope)
+- **Canon relevance injection** (`2026-06-14-015439-canon-injection.md`) — sibling **additive** plan, its
+  own artifact and gate. Builds the missing per-turn relevance injection of canon scenes (a
+  `per_turn_instructions` provider, no LLM surface). Different thesis from this plan (additive, not
+  subtractive thinning) — listed here for program coherence, not merged. Its viability gate reads this
+  plan's TASK-4 mindset verdict: a FLAT_OK / grounding-sufficient result here weakens canon-injection's
+  value premise. Peer of P1/P2 below.
 - **Mindset selection router** — built only if TASK-4's mindset branch leaves A2 > A1′ (a measured
   distraction gap authoring can't close). Single constrained LLM call, temp=0, structured output limited
   to the 6 labels (multi-label), returning a triage object (`{task_labels, …}`) extensible to

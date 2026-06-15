@@ -1,192 +1,144 @@
 # RESEARCH: Multi-Agent Workroom & File Exchange Pattern
-_Date: 2026-03-10_
-_Status: Proposed (Pending PO & TL Review)_
+_Original proposal: 2026-03-10_
+_Reconciled against implementation: 2026-06-13 (v0.8.352)_
+_Status: **Superseded by what actually shipped.** The three proposed directories (`.co-cli/workspaces/`, `.co-cli/exchange/`, `.co-cli/schedules/`) were NOT built. The underlying needs were each met by a different mechanism. This doc is retained as a design-rationale record of why._
 
 ## Executive Summary
 
-Following the review of peer systems and local-first agent runtimes, we identified a critical gap in `co-cli`'s execution model: **File-System Sandboxing and Transparency**.
+The 2026-03-10 proposal advocated three new directories under `.co-cli/` to harden sub-agent isolation, file ingress, and background-task legibility:
 
-While `co` enforces strict *tool* boundaries (e.g., read-only sub-agents), it executes all agents within the same global working directory. This proposal introduces the **Multi-Agent Workroom Pattern**, adapting isolated per-task workspace ideas to fit `co`'s engineering rigor.
+1. **Sub-agent Sandboxing** (`.co-cli/workspaces/`): ephemeral per-task scratchpads.
+2. **File Exchange** (`.co-cli/exchange/`): an ingress/egress directory for file drops.
+3. **Markdown-Backed Background Tasks** (`.co-cli/schedules/`): a SQLite cron scheduler reading `.md` payloads.
 
-This proposal advocates for three distinct architectural additions under the `.co-cli/` directory:
-1. **Sub-agent Sandboxing** (`.co-cli/workspaces/`): Ephemeral scratchpads for delegated tasks.
-2. **File Exchange** (`.co-cli/exchange/`): A standard ingress/egress directory for future multimodal and cross-surface file sharing.
-3. **Markdown-Backed Background Tasks** (`.co-cli/schedules/`): Pairing our upcoming SQLite scheduler with legible, user-editable markdown files for job instructions.
+None of these three directories exist in the shipped system. The needs behind them were real, and each was solved — but by mechanisms that fit `co`'s actual grain better than a new directory would have:
 
-### Why Adopt This? (Alignment with `co` Principles)
-The `co` architecture explicitly rejects "magic prompt hacking" and "black-box execution." We believe in inspectability, local-first control, and structured tools. 
+| Proposed pillar | What it wanted | What actually shipped |
+| --- | --- | --- |
+| `.co-cli/workspaces/` sandboxing | Stop sub-agents polluting the working tree; prove execution safety | **Path-boundary enforcement** (`tools/files/fs_guards.py`) on a `workspace_dir` (write anchor) + `file_search_roots` (read roots), plus **tool-surface isolation** for task agents (`TaskAgentSpec`). No per-task chroot. |
+| `.co-cli/exchange/` file drop | Async bulk-context ingress while the terminal is busy | **In-memory REPL input queue** (the doc's own §3.5 recommendation) shipped for the *text* twin; the *bulk-file* twin was never needed — multi-root `file_search_roots` lets the agent read files in place. |
+| `.co-cli/schedules/` cron | Legible recurring background work | **Session-scoped background tasks** (`task_start`/`task_status`/`task_cancel`/`task_list`), **interactive stdin drive** (`task_write`/`task_close`), **PTY** shell mode, and the **dream daemon's file kick-queue** for recurring memory/skill review. No recurring cron scheduler. |
 
-Adopting a strict File Exchange and Multi-Agent Workroom pattern provides three massive adoption benefits for `co`:
-1. **It preserves CLI simplicity**: We don't need to build complex WebUI upload widgets or Base64 API payload handlers for future multimodal features (images, PDFs). A simple directory watch on `.co-cli/exchange/` keeps the terminal UX clean.
-2. **It hardens the trust boundary**: `co`'s primary value proposition is being a *trusted* local operator. Sandboxing sub-agents physically (via the file system) before they ever gain write access proves we take execution safety seriously, matching Codex's rigor.
-3. **It makes autonomy legible**: Users hate opaque cron jobs hidden in SQLite tables. Storing background task instructions as standard `.md` files means users can manage their agent's recurring behavior using their own IDE and Git, which perfectly aligns with our existing `skills/*.md` and `memory/*.md` paradigms.
-
----
-
-## 1. The Problem
-
-Currently, `co-cli` operates directly in the project root. This creates several risks and limitations as the system scales:
-
-1. **Sub-agent Pollution**: When `delegate_coder` runs, it reads the actual project files. If we ever grant sub-agents write capabilities (e.g., to generate test scaffolds), they risk polluting or breaking the user's working tree while "thinking" or iterating.
-2. **Multimodal Friction**: As `co` moves toward cross-surface continuity (uploading PDFs, images, or audio), handling these files via base64 API payloads or complex schema attachments is brittle and bloats the context window.
-3. **Opaque Background Tasks**: The planned `TaskScheduler` (from `RESEARCH-cron-scheduler.md`) stores the shell command in SQLite. This makes complex, multi-step instructions for a background task invisible to the user's IDE, hiding the "what" behind a database query.
+The most useful outcome of this proposal was a *correct prediction it argued against itself*: §3.5 concluded the text queue should be in-memory, not a file. That is exactly what shipped (`_ReplRuntime` deque, `/queue` command). The file-backed exchange half it was paired with was correctly dropped.
 
 ---
 
-## 2. Product Owner (PO) Perspective: UX & Safety
+## 1. The Original Problem (unchanged framing)
 
-From a product standpoint, this proposal doubles down on `co`'s core tenets: **Trust through explicitness and inspectability.**
+The 2026-03-10 framing identified three scaling risks of operating directly in the project root:
 
-### Feature 1: The "Thinking" Scratchpad
-Users currently have to trust that sub-agents won't mess up their files. By explicitly routing sub-agents to a `.co-cli/workspaces/task_123/` directory, users can physically open that folder in VSCode and watch the agent work in real-time, safely separated from their actual source code. If the agent writes a great script, the user can manually copy it over.
+1. **Sub-agent pollution** — if sub-agents gain write access they could corrupt the working tree while iterating.
+2. **Multimodal friction** — base64 API payloads for file ingress bloat context and are brittle.
+3. **Opaque background tasks** — a SQLite-stored command string hides multi-step instructions from the user's IDE.
 
-### Feature 2: Drop-and-Chat (File Exchange & Input Queuing)
-Instead of building complex UI for file uploads or wrestling with terminal blocking while the LLM generates long responses, we establish a `.co-cli/exchange/` directory as an asynchronous context queue. 
-- **User workflow**: The user drops `Q3_Report.pdf` or writes a complex `new_instructions.md` into `.co-cli/exchange/` while the terminal is busy rendering output.
-- **Agent workflow**: On the very next turn boundary (before the UI queue pops the next text message), the system scans the directory. The agent is notified `[System: New files detected in .co-cli/exchange/: Q3_Report.pdf]` and can immediately use its standard `read_file` tool to interact with it. This natively solves the "how do I give the agent bulk context while it's thinking" problem without complicating the CLI's read loop.
-
-### Feature 3: Legible Cron Jobs
-Users don't want to use `/schedule update <id> --command "..."` to edit a complex daily summary prompt. By putting the instructions in `.co-cli/schedules/daily-digest.md`, the user manages the prompt like any other file in their project.
+All three are still recognizable concerns. The resolutions below show how each was actually addressed.
 
 ---
 
-## 3. Tech Lead (TL) Perspective: Architecture & Implementation
+## 2. Pillar 1 — Sub-agent Isolation: boundary enforcement, not workspaces
 
-From an engineering perspective, this requires surgical changes to `CoDeps`, the `ShellBackend`, and the `tools/files.py` implementations, rather than a massive rewrite.
+**Proposed:** route each sub-agent into `.co-cli/workspaces/task_<uuid>/`, add `CoDeps.workspace_dir` as a chroot, raise `SecurityError` on `../` breakout, clean up on success.
 
-### 3.1 Directory Topology
+**Shipped (different shape):**
 
-```text
-<project-root>/.co-cli/
-├── workspaces/
-│   └── task_<uuid>/        # Ephemeral. Sub-agent cwd. Cleaned up on success.
-├── exchange/               # Ingress/egress for files. Kept clean by a TTL policy.
-└── schedules/
-    └── <job_name>.md       # Markdown payloads for the SQLite scheduler.
-```
+### 2.1 `workspace_dir` exists — but as a write anchor, not a chroot
+`CoDeps` carries two path fields (`co_cli/deps.py`):
+- `workspace_dir: Path` (deps.py:316) — the single **write anchor**, resolved from config at bootstrap (`resolve_workspace_paths`, deps.py:364–383).
+- `file_search_roots: list[Path]` (deps.py:320) — the **read roots**; defaults to `[workspace_dir]` when unset (`__post_init__`, deps.py:355–356). A non-empty config list is authoritative and total (no implicit `workspace_dir` append).
 
-### 3.2 Refactoring `CoDeps` and Context Isolation
+This is the opposite of the proposal's single chroot: reads are deliberately *multi-root* (the user can grant additional read-only roots), while writes are confined to one anchor.
 
-Currently, `make_subagent_deps(base_deps)` just copies the existing `CoDeps`. We need to introduce a `workspace_dir` to `CoDeps` that enforces a chroot-like boundary.
+### 2.2 Boundary enforcement is real — but raises `ValueError`, not `SecurityError`
+`co_cli/tools/files/fs_guards.py` implements the join-then-resolve guard the proposal asked for:
+- `enforce_read_boundary(path, roots)` — for each root, `(root / path).resolve()`, accept the first that `is_relative_to` that root; returns `(resolved, root)`. An absolute path passes through under whichever root contains it; a relative path anchors to `roots[0]`. Raises `ValueError` if no root contains it.
+- `enforce_write_boundary(path, workspace_dir)` — `(workspace_dir / path).resolve()` must stay under `workspace_dir`; else `ValueError`.
 
-**Changes to `deps.py`:**
-```python
-@dataclass
-class CoDeps:
-    ...
-    workspace_dir: Path | None = None  # If set, tools must treat this as the root/cwd
-```
+Both block `..` traversal and in-bounds symlinks whose resolved target escapes (the post-`.resolve()` `is_relative_to` check). The violation is a plain `ValueError`, caught and surfaced as a `tool_error()` — there is no dedicated `SecurityError` type. Wired into `file_read`/`file_write`/`file_search`, and `shell_exec` resolves its `work_dir` through `enforce_write_boundary` before running (`co_cli/tools/shell/execute.py`). `ShellBackend` itself is stateless and holds no anchor (`co_cli/tools/shell_backend.py`).
 
-**Changes to `tools/files.py` & `_shell_backend.py`:**
-File tools (`read_file`, `write_file`, `list_directory`) and the `ShellBackend` must intercept requests and resolve them against `ctx.deps.workspace_dir` (if present) instead of `os.getcwd()`. Attempting to use `../` to break out of the `workspace_dir` must raise a `SecurityError`.
+### 2.3 Sub-agents are isolated by tool surface and forked state — not by directory
+There is **no `.co-cli/workspaces/`** and no per-task chroot. `fork_deps()` (deps.py:386–441) builds a sub-agent's deps by:
+- **inheriting** `workspace_dir` and `file_search_roots` *by reference* (deps.py:429–430) — sub-agents see the same filesystem as the parent;
+- **sharing** `file_tracker`, `resource_locks`, `tool_dispatch_sem`, `usage_accumulator`, `degradations` (cross-agent coordination by design);
+- **resetting** `runtime` to a fresh `CoRuntimeState(agent_depth = parent + 1)` (deps.py:428) and resetting per-session fields (todos, background_tasks, …);
+- **excluding** the toolset entirely — task agents wire their own minimal surface.
 
-### 3.3 Modifying `tools/delegation.py`
+Isolation therefore comes from (a) a deliberately narrow **tool surface** declared per task agent in `TaskAgentSpec` (`co_cli/agent/spec.py:36–58`, built by `build_task_agent`, `co_cli/agent/build.py:58–108`) and (b) forked runtime/session state — *not* from a filesystem jail. The proposal's "physical isolation" was answered by boundary checks + surface restriction.
 
-When `delegate_coder` or `delegate_research` is invoked:
-1. Generate a unique task ID.
-2. `workspace_path = create_ephemeral_workspace(task_id)`
-3. Optionally copy required context files into the workspace.
-4. Pass the new `workspace_path` into `make_subagent_deps()`.
-5. Run the agent.
-6. On success, extract the `CoderResult` and optionally delete the workspace. On failure, leave the workspace intact for debugging.
+`agent_depth` is tracked (incremented by `fork_deps`) but **not enforced** — there is no `MAX_AGENT_DEPTH` check. `run_standalone` (`co_cli/agent/run.py:20–85`) explicitly never depth-checks because daemons are top-level.
 
-### 3.4 Modifying the Upcoming Scheduler (`_scheduler.py`)
+### 2.4 There is no model-callable "delegate" / "spawn sub-agent" tool
+The proposal's `tools/delegation.py` with `delegate_coder` / `delegate_research` does not exist, and there is no general-purpose subagent-spawn tool exposed to the model (`tools/agent_tool.py` is only the `@agent_tool` registration decorator). Runtime delegation today is internal:
+- the **dream daemon** runs `MEMORY_REVIEW_SPEC` / `SKILL_REVIEW_SPEC` task agents via `run_standalone` + `fork_deps_for_reviewer` (`co_cli/daemons/dream/_reviewer.py:71–100`);
+- **skill invocation** (`/skillname args`) routes to a `DelegateToAgent` command outcome (`co_cli/commands/core.py:104–149`) that runs an in-turn delegated agent.
 
-Instead of storing a raw `command` string in the SQLite `scheduled_jobs` table, the table stores a reference to the payload file.
-
-**SQLite Schema Adjustment:**
-```sql
--- Before
-command TEXT NOT NULL
-
--- After
-payload_file TEXT NOT NULL -- e.g., ".co-cli/schedules/standup.md"
-```
-
-**Execution Flow:**
-When the timer ticks, the `TaskScheduler` reads the markdown file. The file can use frontmatter to define whether it is a raw shell script or an LLM prompt (e.g., `kind: agent_turn`).
-
-### 3.5 Integrating with the Upcoming Input Queue
-
-The `docs/reference/RESEARCH-input-queue.md` proposes an explicit UI text queue. The File Exchange directory acts as the **bulk data twin** to that text queue. 
-
-**Wait, Should the Text Queue also be a sequence file?**
-We considered whether the text FIFO queue itself should be backed by a sequence file (e.g., `.co-cli/exchange/queue.jsonl`) rather than an in-memory queue inside `main.py`. 
-
-*Why an in-memory `QueueManager` is better for text inputs:*
-1. **Interrupts:** If the user hits `Ctrl+C` while the agent is busy, we want to clear or pause the in-memory queue immediately. If the queue were a file, we'd have to deal with race conditions and file-locking upon abrupt exits.
-2. **Ephemeral Nature:** User chat inputs ("stop", "actually fix the other function") are highly contextual to the exact second they are typed. If the process crashes and restarts 10 minutes later, replaying a stale "fix the other function" command from a JSONL file without context is dangerous.
-3. **The File Exchange is for Bulk Data:** Text commands are control signals; files are data. We should keep control signals in memory where they can be explicitly canceled, and keep data on disk where it can be asynchronously dropped.
-
-**Changes to `main.py` (chat loop integration):**
-`co-cli`'s chat loop uses `prompt_toolkit` to wait for user text input, and then passes that single input into `run_turn()`. We integrate both queues perfectly before the UI blocks for typing.
-
-```python
-        while True:
-            # 1. Existing skill watcher...
-            _new_snap = _skills_snapshot(deps.config.skills_dir)
-            
-            # 2. THE DATA QUEUE: File Exchange Scan
-            new_files = _scan_exchange_directory(deps.config.exchange_dir, last_scan_time)
-            if new_files:
-                # Bypass the user prompt! Synthesize an automatic turn.
-                user_input = f"[System: New files detected in workspace exchange: {', '.join(new_files)}. Please review them if relevant to the current task.]"
-                last_scan_time = time.time()
-                
-            # 3. THE TEXT QUEUE: In-memory FIFO
-            elif text_queue.has_items():
-                user_input = text_queue.pop_next()
-                
-            # 4. DEFAULT: Block the UI for human typing
-            else:
-                try:
-                    user_input = await session.prompt_async(f"Co {PROMPT_CHAR} ")
-                except ...
-```
-
-This elegant priority system guarantees that if a user drops a massive log file into the exchange folder while the model is typing, and then queues up the text "read the log", the file notification is pushed to the agent's context *before* the text command is executed, completely decoupling the UI's blocking nature from asynchronous data transfers.
+> Note on the original §4 (AutoGen comparison): the build-time dev-workflow skills (`orchestrate-plan`, `orchestrate-dev`) are Claude-Code build-time tooling for developing co-cli — not runtime agent behavior. Don't conflate them with the runtime delegation surface above (build-time vs runtime layering).
 
 ---
 
-## 4. Multi-Agent Design: AutoGen vs. co-cli Context Boundaries
+## 3. Pillar 2 — File ingress: the in-memory input queue shipped; the file exchange did not
 
-Following a review of `autogen`'s multi-agent architecture, the distinction between "code-first orchestration" and "prompt-first orchestration" becomes critical for this proposal.
+**Proposed:** a `.co-cli/exchange/` directory scanned each turn boundary, synthesizing an automatic `[System: New files detected …]` turn; paired with an in-memory text queue for chat control signals.
 
-### AutoGen's Approach
-AutoGen solves complexity through **structural delegation** — splitting responsibilities into distinct agent instances (e.g., `AssistantAgent`, `CodeExecutorAgent`, `UserProxyAgent`) and wiring them together using a Team orchestrator like `SwarmGroupChat` or `RoundRobinGroupChat`. State is maintained internally by agents, and handoffs are explicit message types. This represents the classic, code-heavy multi-agent framework paradigm.
+**Shipped:** the **in-memory text queue only**. `.co-cli/exchange/` was never built; no `_scan_exchange_directory`, no turn-boundary directory scan.
 
-### The 2026 Frontier Trend (co-cli Alignment)
-The 2026 frontier trend heavily favors **light agent + prompt orchestration**. Rather than building heavy, stateful Python classes, the consensus shifts orchestration into the prompt and relies on context boundaries (via tools, memory, and skills) to separate roles. `co-cli` uses specialized markdown skills (`orchestrate-plan`, `orchestrate-dev`) and a `Task` subagent tool to achieve the same role separation while remaining fundamentally lighter and more flexible.
+The proposal's §3.5 already argued the text queue should be in-memory (cancelable on Ctrl-C, ephemeral, no file-locking races) rather than a `queue.jsonl`. That reasoning held, and the queue shipped exactly so:
+- `_ReplRuntime` owns a `collections.deque[str]` FIFO (`co_cli/main.py`); the accept handler enqueues mid-turn submissions and runs immediately when idle; a done-callback drains the next item on turn completion or Esc-cancel.
+- `/queue` command surface (`co_cli/commands/queue.py`, `_queue_control.py`): `list`, `clear`, `pop [n]`.
+- Bounded cap + drop policy ("oldest" / "newest"), config-gated; head-item preview in the status toolbar.
+- Shipped across v0.8.260 → v0.8.268 (plan: `docs/exec-plans/completed/2026-05-23-151807-repl-input-queue.md`). There is no standalone `RESEARCH-input-queue.md`.
 
-### Why the Workroom Pattern Completes the Design
-While `co-cli`'s lightweight prompt orchestration prevents framework lock-in, it lacks the physical isolation that AutoGen gets "for free" by spawning distinct agent environments (e.g., AutoGen's Docker-sandboxed `CodeExecutorAgent`). The **Multi-Agent Workroom Pattern** introduces this physical isolation to the file system, acting as the structural safety net for our lightweight orchestration. It guarantees that our lightweight subagents cannot pollute the global workspace while thinking or iterating.
-
----
-
-## 5. Phased Rollout Plan
-
-### Phase 1: Core Scaffolding & File Exchange
-1. Update `config.py` to generate `.co-cli/workspaces/` and `.co-cli/exchange/` on startup.
-2. Implement `CoDeps.workspace_dir` and enforce the boundary checks in `tools/files.py` (preventing directory traversal breakouts).
-
-### Phase 2: Sub-agent Sandboxing
-1. Update `tools/delegation.py` to generate ephemeral workspaces.
-2. Update the `make_*_agent` factories to bind the isolated `CoDeps`.
-3. Add a background cleanup task to wipe `.co-cli/workspaces/` directories older than 24 hours to prevent disk bloat.
-
-### Phase 3: Scheduler Integration (Dependent on Scheduler Rollout)
-1. Ensure the implementation of `RESEARCH-cron-scheduler.md` Phase 1 incorporates `.co-cli/schedules/<file>.md` as the execution payload source of truth.
-2. Update `/schedule add` to automatically generate the markdown template file and open it in the user's default `$EDITOR`.
+The **bulk-file** half turned out unnecessary: multi-root `file_search_roots` plus the boundary-checked file tools let the user keep files wherever they are and have the agent read them in place — answering RFC question 7 ("track files wherever they are on disk") in the affirmative. Base64/multimodal ingress is handled separately by the vision plumbing track, not by a drop directory.
 
 ---
 
-## 6. Security & Risk Assessment
+## 4. Pillar 3 — Background work: session tasks + dream kick-queue, not a cron scheduler
 
-* **Directory Traversal (High Risk):** An LLM might try to `read_file("../../src/secrets.env")`. 
-  * *Mitigation:* `tools/files.py` must use `Path.resolve()` and explicitly check `resolved_path.is_relative_to(deps.workspace_dir)` before performing *any* I/O operations.
-* **Disk Bloat (Low Risk):** Workspaces pile up over time.
-  * *Mitigation:* Apply the same TTL (Time-To-Live) cleanup logic we use for session persistence (`session_ttl_minutes`).
+**Proposed:** a SQLite `scheduled_jobs` table storing a `payload_file TEXT` reference to `.co-cli/schedules/<job>.md`, with `/schedule add` opening the template in `$EDITOR`.
 
-## 7. Request for Comments
-- **PO:** Does the `exchange/` directory feel like the right UX for future multimodal file drops, or should we just track files wherever they are on disk?
-- **TL:** Should the `workspace_dir` boundary apply strictly to *all* tools (including shell execution), or just native file tools? (Recommendation: Both, to prevent `cat ../../main.py` via shell).
+**Shipped:** none of it. There is **no scheduler, no `scheduled_jobs` table, no `/schedule` command, no `.co-cli/schedules/`**, and `RESEARCH-cron-scheduler.md` was never written. Recurring background work and long-running processes are covered by three concrete mechanisms instead:
+
+### 4.1 Session-scoped background tasks
+`co_cli/tools/background.py` + `co_cli/tools/tasks/control.py` provide four tools:
+- `task_start(command, description, work_dir)` — approval-gated spawn via `asyncio.create_subprocess_shell` (stdin=PIPE, stdout→log); returns `task_id`.
+- `task_status(task_id, tail_lines)` — status + tail of the log.
+- `task_cancel(task_id)` — SIGTERM → 200ms → SIGKILL via process group.
+- `task_list(status_filter)` — enumerate/filter tasks.
+
+Each task streams to `~/.co-cli/logs/bg-{task_id}.log` (single source of truth; `LOGS_DIR`, `config/core.py`).
+
+### 4.2 Interactive stdin drive (v0.8.352)
+- `task_write(task_id, input, newline)` — write to a running task's stdin; `TaskInputError` on dead task / closed pipe.
+- `task_close(task_id)` — close stdin (EOF).
+- Human surface: `/write <id> <input>`.
+- Approval is gated once at `task_start` (the command); writes to an already-approved interactive process are allowed by design.
+
+### 4.3 PTY shell mode (v0.8.352, Phase 1)
+`ShellBackend.run_command(..., pty=False)` gains a `pty=True` path using stdlib `pty.openpty()` — output fidelity only (programs see a tty via `isatty`), no stdin drive on a one-shot command. Surfaced through `shell_exec(..., pty=False)` (`co_cli/tools/shell/execute.py`). Plan: `docs/exec-plans/completed/2026-05-28-200025-toolgap-interactive-terminal.md`.
+
+### 4.4 Recurring background work → dream daemon kick-queue
+The proposal's "legible recurring tasks" need is, in practice, only exercised by memory/skill curation, which runs through the **dream daemon's file-based kick-queue** (`~/.co-cli/daemons/dream/queue` + `done/`/`failed/`, `config/core.py`). Main writes JSON kick files; the daemon polls. Per design doctrine the queue is the *sole* cross-process bridge — no producer→consumer wake-up signal, and the producer never gates on consumer liveness. This is durable and inspectable (JSON files on disk), which captures the proposal's "legibility" goal without a cron table or `.md` payloads.
+
+---
+
+## 5. Directories actually created on startup
+
+`_ensure_dirs()` (`co_cli/config/core.py`) creates, under `USER_DIR` (`$CO_HOME` or `~/.co-cli`):
+`logs/`, `memory/`, `sessions/`, `tool-results/`, `daemons/dream/queue/` (+ `done/`, `failed/`).
+
+**Not created** (proposed, never built): `.co-cli/exchange/`, `.co-cli/workspaces/`, `.co-cli/schedules/`.
+
+---
+
+## 6. Disposition of the original RFC questions
+
+- **PO — "is `exchange/` the right UX, or just track files in place?"** → Resolved as *track in place*. Multi-root `file_search_roots` + boundary-checked file tools made a drop directory unnecessary.
+- **TL — "should the boundary apply to shell too, or just file tools?"** → Resolved as *both*. `shell_exec` resolves `work_dir` through `enforce_write_boundary`; file tools use `enforce_read_boundary` / `enforce_write_boundary`.
+
+## 7. Why the three directories were the wrong unit
+
+The proposal reached for a *new directory* per concern. The shipped system reached for the smallest mechanism that fit `co`'s existing grain:
+- isolation → a **field pair + guard functions**, reusing the deps/tool layering, instead of an ephemeral-dir lifecycle to create, copy into, and garbage-collect;
+- ingress → an **in-memory queue** for control + **existing file tools** for data, instead of a watched directory and synthesized system turns;
+- background → **session-scoped task tools + the dream queue**, instead of a cron table and `$EDITOR`-managed payload files.
+
+Each avoids a persistent on-disk surface that would need its own TTL, cleanup, and traversal hardening — the very risks §6 of the original flagged. The proposal's analytical core (in-memory text queue; enforce boundaries on both file and shell I/O) was right; its packaging (three new directories) was not adopted.
