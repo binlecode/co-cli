@@ -292,7 +292,7 @@ def _check_memory_store(memory_store: Any, backend: str) -> CheckResult:
         return CheckResult(ok=True, status="warn", detail="grep mode")
     # Probe: run a minimal health check that raises on FTS/vector schema errors.
     try:
-        memory_store.probe()
+        memory_store.index.probe()
     except Exception as e:
         return CheckResult(ok=False, status="error", detail=str(e))
     return CheckResult(ok=True, status="ok", detail=f"{backend} active")
