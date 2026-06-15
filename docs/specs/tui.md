@@ -288,6 +288,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 | `/queue` | `[list\|clear\|pop [n]]` | Inspect or prune pending REPL input-queue items; mid-turn bypass runs immediately without enqueueing | `None` |
 | `/reasoning` | `[off\|summary\|full\|next]` | Show or set reasoning display mode (see §2) | `None` |
 | `/usage` | `[week\|month\|total]` | Show token usage: no arg = current session totals (daemon excluded); a window shows a Session / Daemon / Total split with a distinct-session count | `None` |
+| `/status` | — | Consolidated current-state snapshot in six sections (Session, Model & context, Dream, Work in flight, Capabilities, Degraded); read-only, no model call, each section degrades to a placeholder if its source is unreadable | `None` |
 
 ## 5. Files
 
@@ -295,6 +296,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 |---|---|
 | `co_cli/main.py` | REPL loop (`_chat_loop`), foreground turn entry, `_enqueue`, `_build_status_snapshot`, `chat` CLI command |
 | `co_cli/commands/core.py` | Slash-command `dispatch()` |
+| `co_cli/commands/status.py` | `/status` handler — consolidated current-state snapshot assembled from `deps` + cheap local reads |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, completer helpers |
 | `co_cli/commands/types.py` | `CommandContext`, `SlashOutcome`, `LocalOnly`, `ReplaceTranscript`, `DelegateToAgent`, `_confirm` |
 | `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `render_to_ansi`, `StatusSnapshot`, `QuestionPrompt`, `console`, `set_theme`, `PROMPT_CHAR` |

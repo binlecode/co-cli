@@ -1,5 +1,6 @@
 """Themed terminal display — console, semantic styles, display helpers, Frontend, TerminalFrontend."""
 
+import asyncio
 from dataclasses import dataclass
 from io import StringIO
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
@@ -319,8 +320,6 @@ class Frontend(Protocol):
 
 # -- TerminalFrontend (Frontend implementation) --------------------
 
-_CHOICES_HINT = " [[green]y[/green]=once  [yellow]a[/yellow]=session  [red]n[/red]=deny]"
-
 
 class TerminalFrontend:
     """Single-owner terminal frontend implementing Frontend.
@@ -331,10 +330,12 @@ class TerminalFrontend:
     ``app.invalidate()``; committed output (final text, thinking, tool result
     panels) is printed to scrollback via ``print_formatted_text(ANSI(...))``.
 
-    The four live surfaces are mutually exclusive in time (StreamRenderer commits
-    text before any tool/thinking surface renders), so one in-flight region is
-    sufficient. The app handle is supplied by ``bind_app`` — this frontend never
-    calls prompt_toolkit's ``get_app()`` itself (F3), keeping it stub-testable.
+    The live surfaces (text, thinking, tool labels, status, and the y/n/a approval
+    prompt) are mutually exclusive in time — StreamRenderer commits text before any
+    tool/thinking surface renders, and the prompt surface only shows while the turn
+    is paused at an approval gate — so one in-flight region is sufficient. The app
+    handle is supplied by ``bind_app`` — this frontend never calls prompt_toolkit's
+    ``get_app()`` itself (F3), keeping it stub-testable.
     """
 
     def __init__(self) -> None:
@@ -349,6 +350,14 @@ class TerminalFrontend:
         self._tool_labels: dict[str, str] = {}
         # Last pushed status snapshot; drives render_footer_toolbar
         self._footer_snapshot: StatusSnapshot | None = None
+        # In-app single-key prompt state (approval / confirm). The owned
+        # Application's own key bindings resolve _prompt_future via resolve_prompt;
+        # the prompt panel renders in the in-flight region. This replaces the old
+        # run_in_terminal + Rich Prompt.ask path, which deadlocked the owned app
+        # waiting on a terminal cursor-position handshake (the prompt never surfaced).
+        self._prompt_future: asyncio.Future[str] | None = None
+        self._prompt_valid_keys: frozenset[str] = frozenset()
+        self._prompt_default: str = ""
 
     def bind_app(self, app: "Application") -> None:
         """Bind the owning Application so the frontend can request repaints (F3).
@@ -522,27 +531,66 @@ class TerminalFrontend:
             title_align="left",
         )
 
-    async def prompt_approval(self, subject: ApprovalSubject) -> str:
-        """Prompt for y/n/a, suspending the owned app via run_in_terminal.
+    @property
+    def prompt_active(self) -> bool:
+        """True while an in-app single-key prompt is awaiting a keystroke.
 
-        run_in_terminal restores cooked-mode terminal ownership for the blocking
-        read, so the old SIGINT-handler swap is no longer needed.
+        The app's prompt-mode key bindings (build_key_bindings) gate on this so
+        y/n/a/Enter resolve the prompt instead of typing into the input area.
         """
+        return self._prompt_future is not None and not self._prompt_future.done()
+
+    def resolve_prompt(self, key: str) -> None:
+        """Resolve an active key-prompt with ``key`` (Enter/unknown → default).
+
+        Called from the owned Application's prompt-mode key bindings, which only
+        fire while ``prompt_active`` — the None/done guard is defensive belt-and-
+        suspenders, never expected to trip on the single event loop.
+        """
+        future = self._prompt_future
+        if future is None or future.done():
+            return
+        future.set_result(key if key in self._prompt_valid_keys else self._prompt_default)
+
+    async def _prompt_keys(
+        self, renderable: RenderableType, *, valid_keys: frozenset[str], default: str
+    ) -> str:
+        """Render ``renderable`` in the in-flight region and await one keystroke.
+
+        The keystroke is delivered by the running Application's own event loop via
+        resolve_prompt — no terminal suspend, so the prompt always surfaces. With
+        no owned app bound (headless/stub), returns ``default`` without blocking.
+        """
+        if self._app is None:
+            return default
         self.clear_status()
+        self._prompt_valid_keys = valid_keys
+        self._prompt_default = default
+        self._prompt_future = asyncio.get_running_loop().create_future()
+        self._set_inflight(renderable, "prompt")
+        try:
+            return await self._prompt_future
+        finally:
+            self._prompt_future = None
+            self._prompt_valid_keys = frozenset()
+            self._prompt_default = ""
+            self._clear_inflight()
 
-        def _ask() -> str:
-            console.print(self._build_approval_panel(subject))
-            console.print("Allow?" + _CHOICES_HINT, end=" ")
-            return Prompt.ask(
-                "",
-                choices=["y", "n", "a"],
-                default="n",
-                show_choices=False,
-                show_default=False,
-                console=console,
-            )
-
-        return await run_in_terminal(_ask)
+    async def prompt_approval(self, subject: ApprovalSubject) -> str:
+        """Prompt for y/n/a inside the owned app (in-flight panel + key bindings)."""
+        hint = Text.assemble(
+            "Allow? ",
+            ("y", "green"),
+            "=once  ",
+            ("a", "yellow"),
+            "=session  ",
+            ("n", "red"),
+            "=deny",
+        )
+        renderable = Group(self._build_approval_panel(subject), hint)
+        return await self._prompt_keys(
+            renderable, valid_keys=frozenset({"y", "n", "a"}), default="n"
+        )
 
     async def prompt_question(self, prompt: QuestionPrompt) -> str:
         """Prompt for a constrained or free-text answer, suspending the app via run_in_terminal."""
@@ -564,9 +612,10 @@ class TerminalFrontend:
         return await run_in_terminal(_ask)
 
     async def prompt_confirm(self, message: str) -> bool:
-        """Prompt for a yes/no confirmation, suspending the app via run_in_terminal."""
-        response = await run_in_terminal(lambda: console.input(message))
-        return response.strip().lower() == "y"
+        """Prompt for a yes/no confirmation inside the owned app."""
+        renderable = Text.assemble(message.rstrip() + " ", ("y", "green"), "/", ("n", "red"))
+        choice = await self._prompt_keys(renderable, valid_keys=frozenset({"y", "n"}), default="n")
+        return choice == "y"
 
     def cleanup(self) -> None:
         """Clear the in-flight region and tool state on exception/cancellation."""

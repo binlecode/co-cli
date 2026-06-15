@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.358]
+
+### Feature: `/status` command + TUI render-fidelity harness
+
+- **`/status` slash command** — consolidated current-state report (Session, Model & context, Dream, Work in flight, Capabilities, Degraded). Read-only: assembles from in-memory `deps` plus cheap local reads, degrading each section to a placeholder rather than aborting. Capability counts shared with the banner via `build_status_counts` (`bootstrap/banner.py`) so the two cannot diverge.
+- **REPL render fixes** — `patch_stdout(raw=True)` so the themed console's SGR passes through `write_raw` instead of being sanitized to `?` (was rendering garbled escape sequences mid-app); plus an input echo in `_handle_one_input` so submitted commands/turns leave a record in scrollback (the inline `TextArea` never committed accepted input).
+- **`build_key_bindings(frontend=...)`** — prompt-mode key bindings now gate on `frontend.prompt_active`; in-app y/n/a approval resolves on the running app's event loop (replacing the deadlock-prone `run_in_terminal` path).
+- **Render-fidelity test harness** — `tests/integration/_tui_harness.py` drives the real `build_repl_app` through pipe-fed keystrokes under production-equivalent `patch_stdout(raw=True)`, captures the actual ANSI byte stream via `Vt100_Output`, and forces the module console to emit SGR. First regression test over `/status` asserts input echo, no ESC-sanitization garble, real styled headers, and all six sections — guarding the two render regressions that previously shipped undetected.
+
 ## [0.8.356]
 
 ### Refactor: dream daemon config naming + daily-grid interval validation

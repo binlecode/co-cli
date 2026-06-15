@@ -81,9 +81,16 @@ class _ReplRuntime:
         return task
 
 
-def build_key_bindings(*, runtime: _ReplRuntime, dispatch: Dispatch) -> KeyBindings:
+def build_key_bindings(
+    *, runtime: _ReplRuntime, dispatch: Dispatch, frontend: TerminalFrontend
+) -> KeyBindings:
     """Build the REPL key bindings.
 
+    Prompt mode (``y``/``a``/``n``/``enter``, filtered by ``frontend.prompt_active``,
+    ``eager`` so they resolve before the input area inserts the char): an in-app
+    single-key prompt (approval / confirm) renders in the in-flight region and is
+    resolved here via ``frontend.resolve_prompt`` on the running app's own event
+    loop — replacing the run_in_terminal path that deadlocked the owned app.
     ``escape``: if a turn is active, cancel it; the turn task's done-callback
     drains the next queued item, so Esc interrupts and advances the queue (C4).
     Idle: no-op (this binding overrides prompt_toolkit's default escape, so the
@@ -96,6 +103,17 @@ def build_key_bindings(*, runtime: _ReplRuntime, dispatch: Dispatch) -> KeyBindi
     ``c-d``: route to ``_handle_one_input(eof=True)``.
     """
     kb = KeyBindings()
+    prompt_active = Condition(lambda: frontend.prompt_active)
+
+    @kb.add("y", filter=prompt_active, eager=True)
+    @kb.add("a", filter=prompt_active, eager=True)
+    @kb.add("n", filter=prompt_active, eager=True)
+    def _(event: "KeyPressEvent") -> None:
+        frontend.resolve_prompt(event.key_sequence[0].data)
+
+    @kb.add("enter", filter=prompt_active, eager=True)
+    def _(event: "KeyPressEvent") -> None:
+        frontend.resolve_prompt("")
 
     @kb.add("escape")
     def _(event: "KeyPressEvent") -> None:
@@ -129,7 +147,7 @@ def build_repl_app(
     above the app via ``print_formatted_text`` (under ``patch_stdout``).
     """
     input_area = TextArea(
-        prompt=f"Co {PROMPT_CHAR} ",
+        prompt=f"{PROMPT_CHAR} ",
         multiline=False,
         completer=completer,
         complete_while_typing=True,

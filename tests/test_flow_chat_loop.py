@@ -18,7 +18,7 @@ from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.config.repl import ReplSettings
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display._app import _ReplRuntime, build_key_bindings
-from co_cli.display.core import console
+from co_cli.display.core import TerminalFrontend, console
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.factory import build_model
 from co_cli.main import _build_accept_handler, _handle_one_input, _IterationState
@@ -627,7 +627,7 @@ async def test_ctrl_c_is_exit_only_double_press() -> None:
         if runtime.state.should_exit:
             exited.append(True)
 
-    kb = build_key_bindings(runtime=runtime, dispatch=dispatch)
+    kb = build_key_bindings(runtime=runtime, dispatch=dispatch, frontend=TerminalFrontend())
     cc = kb.get_bindings_for_keys((Keys.ControlC,))[0]
 
     turn_task = asyncio.ensure_future(asyncio.sleep(10))
@@ -708,7 +708,7 @@ async def test_esc_cancels_turn_and_advances_queue(tmp_path: Path) -> None:
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
     handler = _build_accept_handler(runtime, dispatch, lambda: None, _make_deps(tmp_path))
-    kb = build_key_bindings(runtime=runtime, dispatch=dispatch)
+    kb = build_key_bindings(runtime=runtime, dispatch=dispatch, frontend=TerminalFrontend())
 
     def _buf(text: str):
         return type("_Buf", (), {"text": text})()

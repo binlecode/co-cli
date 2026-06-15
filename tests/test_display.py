@@ -49,7 +49,7 @@ async def test_repl_app_builds():
         dispatched.append((user_input, eof))
 
     runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
-    kb = build_key_bindings(runtime=runtime, dispatch=dispatch)
+    kb = build_key_bindings(runtime=runtime, dispatch=dispatch, frontend=frontend)
 
     with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
         app = build_repl_app(

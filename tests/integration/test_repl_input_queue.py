@@ -126,7 +126,7 @@ async def test_typed_ahead_enqueues_and_drains_under_real_turn(tmp_path: Path) -
         patch_stdout(),
     ):
         accept_handler = _build_accept_handler(runtime, dispatch, _on_queue_status, deps)
-        key_bindings = build_key_bindings(runtime=runtime, dispatch=dispatch)
+        key_bindings = build_key_bindings(runtime=runtime, dispatch=dispatch, frontend=frontend)
         app = build_repl_app(
             frontend=frontend,
             completer=completer,

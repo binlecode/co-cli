@@ -125,7 +125,7 @@ async def test_repl_renders_real_turn_under_owned_application(tmp_path: Path) ->
         patch_stdout(),
     ):
         accept_handler = _build_accept_handler(runtime, dispatch, lambda: None, deps)
-        key_bindings = build_key_bindings(runtime=runtime, dispatch=dispatch)
+        key_bindings = build_key_bindings(runtime=runtime, dispatch=dispatch, frontend=frontend)
         app = build_repl_app(
             frontend=frontend,
             completer=completer,

@@ -24,6 +24,7 @@ from co_cli.commands.registry import (
 from co_cli.commands.resume import _cmd_resume
 from co_cli.commands.sessions import _cmd_sessions
 from co_cli.commands.skills import _cmd_skills
+from co_cli.commands.status import _cmd_status
 from co_cli.commands.tasks import _cmd_tasks
 from co_cli.commands.tools import _cmd_tools
 from co_cli.commands.types import (
@@ -95,6 +96,9 @@ BUILTIN_COMMANDS["reasoning"] = SlashCommand(
 )
 BUILTIN_COMMANDS["usage"] = SlashCommand(
     "usage", "Show token usage: /usage [week|month|total]", _cmd_usage
+)
+BUILTIN_COMMANDS["status"] = SlashCommand(
+    "status", "Show current session + system status", _cmd_status
 )
 
 

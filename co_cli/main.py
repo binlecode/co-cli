@@ -19,7 +19,7 @@ from pydantic_ai.messages import BinaryContent, ModelMessage
 
 from co_cli.agent.build import build_orchestrator
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
-from co_cli.bootstrap.banner import display_welcome_banner
+from co_cli.bootstrap.banner import context_pct, display_welcome_banner
 from co_cli.bootstrap.core import (
     create_deps,
     maybe_autospawn_dream,
@@ -44,6 +44,7 @@ from co_cli.daemons.dream.kick import write_review_kick
 from co_cli.deps import CoDeps
 from co_cli.display._app import _ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import (
+    PROMPT_CHAR,
     Frontend,
     StatusSnapshot,
     TerminalFrontend,
@@ -403,6 +404,12 @@ async def _handle_one_input(
             should_exit=False,
         )
 
+    # Echo the submitted input to scrollback — the inline Application's TextArea
+    # does not commit accepted input (unlike PromptSession.prompt), so without this
+    # neither slash commands nor turns leave a record of what the user typed. One
+    # place covers both idle-armed and queue-drained inputs.
+    console.print(f"[dim]{PROMPT_CHAR}[/dim] {user_input}")
+
     # A lone image path the user dragged in is a "look at this" gesture, not a command —
     # detect it BEFORE slash dispatch so a bare absolute path (which starts with "/") is
     # honored rather than rejected as an unknown command. Collision-free: no slash command
@@ -494,14 +501,10 @@ def _build_status_snapshot(
 ) -> StatusSnapshot:
     stem = deps.session.session_path.stem
     session_label = stem[-8:] if stem else "—"
-    context_pct: float | None = None
-    estimate = deps.runtime.current_request_tokens_estimate
-    if estimate is not None and deps.model_max_ctx > 0:
-        context_pct = estimate / deps.model_max_ctx
     return StatusSnapshot(
         session_label=session_label,
         mode=mode,
-        context_pct=context_pct,
+        context_pct=context_pct(deps),
         background_task_count=len(deps.session.background_tasks),
         approval_count=len(deps.session.session_approval_rules),
         queue_depth=len(queue),
@@ -714,7 +717,7 @@ async def _chat_loop(
             frontend.update_status(_build_status_snapshot(deps, "active", runtime.queue))
 
         accept_handler = _build_accept_handler(runtime, _dispatch, _on_queue_status, deps)
-        key_bindings = build_key_bindings(runtime=runtime, dispatch=_dispatch)
+        key_bindings = build_key_bindings(runtime=runtime, dispatch=_dispatch, frontend=frontend)
         app = build_repl_app(
             frontend=frontend,
             completer=completer,
@@ -727,7 +730,11 @@ async def _chat_loop(
         # patch_stdout makes the ~128 incidental console.print/display_* sites
         # reflow above the input area (BC4) — the load-bearing half of single
         # terminal ownership, not polish.
-        with patch_stdout():
+        # raw=True so the themed console's ANSI (rich detects the proxied stdout
+        # as a tty and emits SGR codes) is passed through via write_raw instead of
+        # sanitized ESC->'?' by Vt100_Output.write — without it every styled
+        # mid-app console.print renders garbled escape sequences.
+        with patch_stdout(raw=True):
             await app.run_async()
     finally:
         await _drain_and_cleanup(deps, stack)
