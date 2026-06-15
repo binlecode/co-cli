@@ -7,6 +7,7 @@ written to a temp CO_HOME, asserting the agent-facing tool contract is stable.
 
 import asyncio
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -16,17 +17,18 @@ from tests._settings import SETTINGS
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.session.filename import session_filename
 from co_cli.session.store import SessionStore
 from co_cli.tools.session.recall import _SESSIONS_CHANNEL_CAP, session_search
 from co_cli.tools.shell_backend import ShellBackend
 
-_SESSION_TIMESTAMP = "2026-01-01-T120000Z"
+_SESSION_CREATED_AT = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def _make_session_file(sessions_dir: Path, uuid8: str, content: str) -> Path:
     """Create a minimal pydantic-ai JSONL session file with a user-prompt turn."""
     sessions_dir.mkdir(parents=True, exist_ok=True)
-    path = sessions_dir / f"{_SESSION_TIMESTAMP}-{uuid8}.jsonl"
+    path = sessions_dir / session_filename(_SESSION_CREATED_AT, uuid8)
     line = json.dumps([{"parts": [{"part_kind": "user-prompt", "content": content}]}])
     path.write_text(line + "\n", encoding="utf-8")
     return path
@@ -106,7 +108,7 @@ def _make_tool_call_session_file(
 ) -> Path:
     """Create a session JSONL file whose only content is one tool-call part."""
     sessions_dir.mkdir(parents=True, exist_ok=True)
-    path = sessions_dir / f"{_SESSION_TIMESTAMP}-{uuid8}.jsonl"
+    path = sessions_dir / session_filename(_SESSION_CREATED_AT, uuid8)
     line = json.dumps(
         [{"parts": [{"part_kind": "tool-call", "tool_name": tool_name, "args": json.dumps(args)}]}]
     )
