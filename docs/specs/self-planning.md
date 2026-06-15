@@ -63,7 +63,7 @@ flowchart TD
 | **R3** | Id ownership | Model assigns ids; runtime never auto-generates them |
 | **R4** | Status convention | Typical flow: `pending` → `in_progress` → `completed` / `cancelled` (not enforced) |
 
-> **R2 enforcement status:** R2 is stated in the `todo_write` docstring (`co_cli/tools/todo/rw.py`) but is not validated in `_run_fresh` or `_run_merge`. A payload producing >1 `in_progress` item is currently accepted. Validation enforcement is tracked as a follow-up plan (`docs/exec-plans/active/2026-05-14-093656-todo-one-in-progress-enforce.md`).
+> **R2 enforcement status:** R2 is validated by `_check_one_in_progress` (`co_cli/tools/todo/rw.py`), called from both `_run_fresh` and `_run_merge`. A payload producing >1 `in_progress` item is rejected — the call returns `(None, errors)` and no write occurs. (Enforcement landed via `docs/exec-plans/completed/2026-05-14-093656-todo-one-in-progress-enforce.md`.)
 
 ### 2.2 `todo_write` — Fresh vs Merge
 

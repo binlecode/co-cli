@@ -240,13 +240,12 @@ Dream housekeeping (see [dream.md](dream.md)) collapses note/rule duplicates via
 
 ### `source_type` taxonomy
 
-Six values populate `MemoryItem.source_type`:
+Five values populate `MemoryItem.source_type`:
 
 | source_type | Producer | Meaning |
 | --- | --- | --- |
 | `web_fetch` | `save_memory_item` URL-keyed branch, fired when the agent calls `memory_create(kind=article, source_url=…)` | curated article saved with a URL for dedup; re-saves with the same URL consolidate (same `artifact_id`, existing `related` preserved). `web_fetch` itself does not write memory — the agent composes the two tools. |
 | `manual` | agent inline saves via `memory_create` | default for agent-curated notes/rules/articles without URL |
-| `obsidian` | Obsidian vault sync | external read-only source |
 | `drive` | Google Drive sync | external read-only source |
 | `consolidated` | dream merge (`_housekeeping.merge_memory`) | output of duplicate-collapse pass |
 | `session_review` | memory reviewer (`_run_memory_review`) | reviewer-extracted durable facts |

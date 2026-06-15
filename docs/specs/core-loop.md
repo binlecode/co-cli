@@ -254,22 +254,26 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors, Preflight, And Inline Compaction
 
-The main agent is built with four registered history processors (pure transformers) in this exact order (see `co_cli/agent/orchestrator.py` `history_processors=(...)`):
+The main agent is built with five registered history processors (pure transformers) in this exact order (see `co_cli/agent/orchestrator.py` `history_processors=(...)`):
 
-1. `dedup_tool_results`
-2. `evict_old_tool_results`
-3. `spill_largest_tool_results`
-4. `proactive_window_processor`
+1. `elide_old_multimodal_prompts`
+2. `dedup_tool_results`
+3. `evict_old_tool_results`
+4. `spill_largest_tool_results`
+5. `proactive_window_processor`
 
-Two functions are registered via `agent.instructions()` and run before every model request as dynamic instructions:
+Four functions are registered via `agent.instructions()` and run before every model request as dynamic instructions:
 
 - `safety_prompt` — doom-loop detection + shell reflection cap; active warnings returned as plain text
 - `current_time_prompt` — current date/time string at the tail position; ephemeral grounding
+- `deferred_tool_awareness_prompt` — names the deferred-tool surface so the model knows what it can fetch
+- `skill_manifest_prompt` — injects the `<available_skills>` manifest
 
 Processor roles:
 
 | Processor | Role |
 | --- | --- |
+| `elide_old_multimodal_prompts` | strips inline pixels (`BinaryContent`) from non-tail `UserPromptPart`s so base64 does not accumulate; preserves the most recent turn's images; protects the last turn via the same `_find_last_turn_start` boundary |
 | `dedup_tool_results` | collapses identical `(tool_name, content-hash)` `ToolReturnPart`s in the pre-tail region into back-references pointing at the latest `tool_call_id` |
 | `evict_old_tool_results` | content-clears tool returns older than the 5-most-recent per tool name; replaces with a semantic marker; protects the last turn (from last `UserPromptPart` onward) |
 | `spill_largest_tool_results` | force-spills the largest unspilled `ToolReturnPart`s across the full message list when total tokens exceed `deps.spill_threshold_tokens`; the cheap (non-LLM) path that fires before `proactive_window_processor` |
