@@ -39,10 +39,19 @@ def parse_session_filename(name: str) -> tuple[str, datetime] | None:
 
 
 def find_latest_session(sessions_dir: Path) -> Path | None:
-    """Return the most recent session Path by lexicographic sort (= chronological order)."""
+    """Return the most recent canonically-named session by lexicographic sort.
+
+    Only files matching the canonical ``YYYY-MM-DD-THHMMSSZ-{uuid8}.jsonl`` scheme
+    are considered — lexicographic order equals chronological order only for those.
+    Foreign ``.jsonl`` files (e.g. eval fixtures written into the real sessions dir)
+    are skipped so they never get restored into a live chat.
+    """
     if not sessions_dir.exists():
         return None
-    files = sorted(sessions_dir.glob("*.jsonl"), reverse=True)
+    files = sorted(
+        (p for p in sessions_dir.glob("*.jsonl") if parse_session_filename(p.name) is not None),
+        reverse=True,
+    )
     return files[0] if files else None
 
 
