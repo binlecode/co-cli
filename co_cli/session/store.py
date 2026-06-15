@@ -2,7 +2,8 @@
 
 Past session transcripts live as JSONL files in ``sessions_dir``. Search is
 lexical (ripgrep over the raw files, see ``_search.py``) — there is no index,
-chunk pipeline, or embedding. ``count`` is the number of transcript files.
+chunk pipeline, or embedding. ``count`` is the number of canonically-named
+transcript files.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from co_cli.session._search import SessionHit, search_sessions
+from co_cli.session.filename import parse_session_filename
 
 if TYPE_CHECKING:
     from co_cli.config.core import Settings
@@ -31,7 +33,16 @@ class SessionStore:
         return search_sessions(self._sessions_dir, query, limit)
 
     def count(self) -> int:
-        """Number of session transcript files on disk."""
+        """Number of canonically-named session transcripts on disk.
+
+        Mirrors the filter every other lifecycle path applies (restore, resume,
+        browse, search) so the count matches what is actually listable — foreign
+        ``.jsonl`` files (e.g. eval fixtures) are excluded.
+        """
         if not self._sessions_dir.exists():
             return 0
-        return sum(1 for _ in self._sessions_dir.glob("*.jsonl"))
+        return sum(
+            1
+            for p in self._sessions_dir.glob("*.jsonl")
+            if parse_session_filename(p.name) is not None
+        )
