@@ -7,7 +7,32 @@ import asyncio
 import os
 import pty
 
-from co_cli.tools.shell_env import build_subprocess_env, kill_process_tree
+from co_cli.tools.shell_env import (
+    build_subprocess_env,
+    kill_process_tree,
+    terminate_process_group,
+)
+
+# Retains in-flight SIGKILL-escalation tasks scheduled on cancel so the event loop
+# does not GC them before they run; each discards itself on completion. Module-level
+# (not on the backend) keeps ShellBackend stateless.
+_pending_force_kills: set[asyncio.Task[None]] = set()
+
+
+def _kill_process_group_on_cancel(proc: asyncio.subprocess.Process) -> None:
+    """Cancellation-safe process-group teardown for a turn aborted mid-command.
+
+    Sends an immediate synchronous SIGTERM (guaranteed even if the event loop is
+    tearing down on app exit), then schedules ``kill_process_tree`` as a retained
+    background task to escalate to SIGKILL if the group ignores SIGTERM. The async
+    escalation cannot run inline — the awaiting task is itself being cancelled — so
+    it rides an independent task, mirroring openclaw's unref'd timer and opencode's
+    acquireRelease finalizer. Without escalation a SIGTERM-ignoring child orphans.
+    """
+    terminate_process_group(proc)
+    task = asyncio.ensure_future(kill_process_tree(proc))
+    _pending_force_kills.add(task)
+    task.add_done_callback(_pending_force_kills.discard)
 
 
 class ShellBackend:
@@ -57,6 +82,9 @@ class ShellBackend:
         )
         try:
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.CancelledError:
+            _kill_process_group_on_cancel(proc)
+            raise
         except TimeoutError:
             await kill_process_tree(proc)
             # Read any buffered output before raising
@@ -138,6 +166,9 @@ class ShellBackend:
                         msg += f"\nPartial output:\n{partial_str}"
                     raise RuntimeError(msg) from None
                 await proc.wait()
+            except asyncio.CancelledError:
+                _kill_process_group_on_cancel(proc)
+                raise
             finally:
                 loop.remove_reader(master)
         finally:

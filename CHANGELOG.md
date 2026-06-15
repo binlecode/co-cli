@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.359]
+
+### Fix: kill the shell process group when a turn is cancelled mid-command
+
+- **Orphaned subprocess on cancel.** `shell_exec` spawns with `start_new_session=True` (own process group), but cancelling a turn mid-command (Esc) only raised `CancelledError` out of the backend — the child was left running, reparented to init. A long foreground command (e.g. `mpv` streaming audio) kept running after the prompt returned, and the REPL appeared "blocked" while it held the turn open.
+- **Cancellation-safe group teardown.** On `CancelledError`, both the plain and pty paths now send an immediate synchronous `SIGTERM` to the process group (`terminate_process_group`), then schedule `kill_process_tree` as a retained background task to escalate to `SIGKILL` if the group ignores `SIGTERM`. The async escalation cannot run inline (the awaiting task is itself being cancelled), so it rides an independent task — mirroring the peer pattern (openclaw's unref'd timer, opencode's acquireRelease finalizer, hermes's kill-before-re-raise).
+
 ## [0.8.358]
 
 ### Feature: `/status` command + TUI render-fidelity harness

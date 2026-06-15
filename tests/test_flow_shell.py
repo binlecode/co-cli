@@ -103,3 +103,61 @@ async def test_pty_true_timeout_maps_to_model_retry(tmp_path: Path) -> None:
             await shell_exec(ctx, "sleep 5", timeout=1, pty=True)
     elapsed = time.monotonic() - start
     assert elapsed < 4, f"tool timeout path did not kill promptly (took {elapsed:.1f}s)"
+
+
+@pytest.mark.asyncio
+async def test_cancel_kills_process_group(tmp_path: Path) -> None:
+    """Cancelling a run mid-command kills the child — no orphaned process keeps running.
+
+    The command would create a marker file after a delay; a clean kill on cancel
+    means the marker never appears (a leaked process would create it).
+    """
+    backend = ShellBackend()
+    marker = tmp_path / "marker"
+    task = asyncio.ensure_future(backend.run_command(f"sleep 2; touch {marker}", timeout=30))
+    await asyncio.sleep(0.5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(2.5)
+    assert not marker.exists(), "cancelled command kept running — process was orphaned"
+
+
+@pytest.mark.asyncio
+async def test_cancel_kills_process_group_pty(tmp_path: Path) -> None:
+    """Same orphan-on-cancel guard for the pty-backed path."""
+    backend = ShellBackend()
+    marker = tmp_path / "marker-pty"
+    task = asyncio.ensure_future(
+        backend.run_command(f"sleep 2; touch {marker}", timeout=30, pty=True)
+    )
+    await asyncio.sleep(0.5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(2.5)
+    assert not marker.exists(), "cancelled pty command kept running — process was orphaned"
+
+
+@pytest.mark.asyncio
+async def test_cancel_escalates_to_sigkill_for_sigterm_ignoring_child(tmp_path: Path) -> None:
+    """A child that ignores SIGTERM is still killed on cancel via SIGKILL escalation.
+
+    Without the escalation, SIGTERM alone would leave it running to create the marker.
+    """
+    backend = ShellBackend()
+    marker = tmp_path / "marker-ignore-term"
+    script_file = tmp_path / "ignore_term.py"
+    script_file.write_text(
+        "import signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "time.sleep(2)\n"
+        f"open({str(marker)!r}, 'w').close()\n"
+    )
+    task = asyncio.ensure_future(backend.run_command(f"python3 {script_file}", timeout=30))
+    await asyncio.sleep(0.6)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.sleep(2.5)
+    assert not marker.exists(), "SIGTERM-ignoring child survived cancel — no SIGKILL escalation"
