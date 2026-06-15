@@ -67,7 +67,7 @@
 
   "theme": "light",
   "personality": "tars",
-  "reasoning_display": "summary",
+  "reasoning_display": "collapsed",
   "tool_retries": 3,
   "doom_loop_threshold": 3,
   "max_reflections": 3,

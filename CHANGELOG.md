@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.362]
+
+### Refactor: reasoning display — drop `summary`, adopt `Thinking… Ns` / `Thought for Ns`
+
+- **`summary` mode removed.** The outlier last-sentence reducer (`_reduce_thinking`) and its discard-on-supersede path are deleted. `reasoning_display` is now `off` / `collapsed` / `full`, defaulting to `collapsed`.
+- **`collapsed` (new default).** A live transient `Thinking… Ns` header that commits a single durable `Thought for Ns` line; the raw reasoning body is never shown. To read the raw reasoning, switch to `full`.
+- **`full`.** Streams the `Thinking… Ns` header plus the raw thinking body, committing the body + `Thought for Ns` footer.
+- **Event-driven elapsed.** The counter advances as thinking deltas arrive; the committed `Thought for Ns` is measured at thinking-end (wall-clock accurate). No periodic ticker was added.
+- **Frontend cleanup.** `on_reasoning_progress` and the transient `"reasoning"` in-flight kind are removed; `StreamRenderer` composes per-mode strings into the existing `on_thinking_delta` / `on_thinking_commit` surfaces. Tool-start annotations now render in all modes (the old `summary`-only suppression is gone).
+
 ## [0.8.360]
 
 ### Feature: shell_exec auto-yields an unbounded command to a background task

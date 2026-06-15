@@ -67,7 +67,6 @@ _LENGTH_RETRY_BOOST = 2
 
 assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for retry to terminate"
 
-from co_cli.config.core import REASONING_DISPLAY_SUMMARY
 from co_cli.config.llm import cap_output_tokens
 from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
 from co_cli.context.compaction import is_context_overflow, recover_overflow_history
@@ -283,9 +282,7 @@ def _handle_tool_call_event(
     renderer.flush_for_tool_output()
     tool_id = event.tool_call_id
     name = event.part.tool_name
-    # In summary mode annotations are suppressed — tool result panel is sufficient feedback
-    if deps.session.reasoning_display != REASONING_DISPLAY_SUMMARY:
-        frontend.on_tool_start(tool_id, name, get_tool_start_args_display(name, event.part))
+    frontend.on_tool_start(tool_id, name, get_tool_start_args_display(name, event.part))
     deps.runtime.tool_progress_callback = lambda msg, _tid=tool_id: frontend.on_tool_progress(
         _tid, msg
     )

@@ -769,7 +769,7 @@ def chat(
         False, "--verbose", "-v", help="Alias for --reasoning-display full"
     ),
     reasoning_display: str = typer.Option(
-        None, "--reasoning-display", help="Reasoning display mode: off, summary, full"
+        None, "--reasoning-display", help="Reasoning display mode: off, collapsed, full"
     ),
 ):
     """Start an interactive chat session with Co."""

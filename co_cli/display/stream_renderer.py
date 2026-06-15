@@ -11,9 +11,13 @@ Ownership contract:
 
 Reasoning display modes:
 - off: thinking stream is silently dropped
-- summary: thinking deltas are reduced to short operator-style progress lines
-           via on_reasoning_progress(); raw thinking is never shown
-- full: thinking is buffered and rendered as-is via on_thinking_delta/commit
+- collapsed: thinking is surfaced only as a live `Thinking… Ns` header and commits a
+             single durable `Thought for Ns` line; the raw body is never shown
+- full: the `Thinking… Ns` header is shown with the raw thinking body streamed below it,
+        and the body + `Thought for Ns` footer are committed
+
+Elapsed time is event-driven: the live counter advances when thinking deltas arrive and
+the committed `Thought for Ns` is measured at thinking-end (wall-clock accurate).
 """
 
 import time
@@ -21,16 +25,15 @@ from typing import TYPE_CHECKING
 
 from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
+    REASONING_DISPLAY_COLLAPSED,
     REASONING_DISPLAY_FULL,
     REASONING_DISPLAY_OFF,
-    REASONING_DISPLAY_SUMMARY,
 )
 
 if TYPE_CHECKING:
     from co_cli.display.core import Frontend
 
 _RENDER_INTERVAL = 0.05  # 20 FPS
-_PROGRESS_MAX_CHARS = 80
 
 
 class StreamRenderer:
@@ -51,6 +54,7 @@ class StreamRenderer:
         self._thinking_buffer: str = ""
         self._last_thinking_render_at: float = 0.0
         self._thinking_active: bool = False
+        self._thinking_started_at: float | None = None
         self._streamed_text: bool = False
 
     @property
@@ -74,19 +78,20 @@ class StreamRenderer:
         """Append thinking content. Behavior depends on reasoning_display mode."""
         if not content or self._reasoning_display == REASONING_DISPLAY_OFF:
             return
+        if self._thinking_started_at is None:
+            self._thinking_started_at = time.monotonic()
         self._thinking_buffer += content
         now = time.monotonic()
         if now - self._last_thinking_render_at < _RENDER_INTERVAL:
             return
         self._last_thinking_render_at = now
-        if self._reasoning_display == REASONING_DISPLAY_SUMMARY:
-            reduced = _reduce_thinking(self._thinking_buffer)
-            if reduced:
-                self._frontend.on_reasoning_progress(reduced)
+        self._thinking_active = True
+        elapsed = now - self._thinking_started_at
+        header = f"Thinking… {_format_elapsed(elapsed)}"
+        if self._reasoning_display == REASONING_DISPLAY_FULL:
+            self._frontend.on_thinking_delta(f"{header}\n\n{self._thinking_buffer.rstrip()}")
         else:
-            # full mode — stream raw thinking
-            self._thinking_active = True
-            self._frontend.on_thinking_delta(self._thinking_buffer.rstrip() or "...")
+            self._frontend.on_thinking_delta(header)
 
     def flush_for_tool_output(self) -> None:
         """Flush thinking/text before inline tool annotations and output panels."""
@@ -105,13 +110,18 @@ class StreamRenderer:
         return self._streamed_text
 
     def _flush_thinking(self) -> None:
-        if self._reasoning_display == REASONING_DISPLAY_FULL and self._thinking_buffer:
-            self._frontend.on_thinking_commit(self._thinking_buffer.rstrip())
-        # summary: buffer discarded; the in-flight status region is superseded by on_text_delta
-        # off: buffer never filled (early return in append_thinking), nothing to discard
+        if self._thinking_started_at is not None:
+            elapsed = time.monotonic() - self._thinking_started_at
+            footer = f"Thought for {_format_elapsed(elapsed)}"
+            if self._reasoning_display == REASONING_DISPLAY_FULL and self._thinking_buffer:
+                self._frontend.on_thinking_commit(f"{self._thinking_buffer.rstrip()}\n{footer}")
+            elif self._reasoning_display == REASONING_DISPLAY_COLLAPSED:
+                self._frontend.on_thinking_commit(footer)
+        # off: thinking_started_at stays None (early return in append_thinking), nothing emitted
         self._thinking_buffer = ""
         self._last_thinking_render_at = 0.0
         self._thinking_active = False
+        self._thinking_started_at = None
 
     def _commit_text(self) -> None:
         if self._text_buffer:
@@ -120,35 +130,9 @@ class StreamRenderer:
             self._last_text_render_at = 0.0
 
 
-def _reduce_thinking(buffer: str) -> str:
-    """Extract the last complete sentence from the thinking buffer.
-
-    Scans for the last sentence boundary (. ? ! or newline), extracts
-    the sentence ending there, and truncates to _PROGRESS_MAX_CHARS.
-    Returns empty string if the buffer contains only whitespace or
-    there is no complete sentence boundary yet.
-    """
-    buf = buffer.strip()
-    if not buf:
-        return ""
-    # Find the last sentence boundary
-    last_end = -1
-    for i in range(len(buf) - 1, -1, -1):
-        if buf[i] in ".?!\n":
-            last_end = i
-            break
-    if last_end < 0:
-        return ""
-    else:
-        # Extract just the last sentence
-        prev_end = -1
-        for i in range(last_end - 1, -1, -1):
-            if buf[i] in ".?!\n":
-                prev_end = i
-                break
-        sentence = buf[prev_end + 1 : last_end + 1].strip()
-    if not sentence:
-        return ""
-    if len(sentence) > _PROGRESS_MAX_CHARS:
-        return sentence[: _PROGRESS_MAX_CHARS - 3] + "..."
-    return sentence
+def _format_elapsed(seconds: float) -> str:
+    """Render an elapsed-seconds count as a compact human label (`8s`, `1m4s`)."""
+    total = int(seconds)
+    if total < 60:
+        return f"{total}s"
+    return f"{total // 60}m{total % 60}s"

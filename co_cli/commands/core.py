@@ -91,7 +91,7 @@ BUILTIN_COMMANDS["resume"] = SlashCommand("resume", "Resume a past session", _cm
 BUILTIN_COMMANDS["sessions"] = SlashCommand("sessions", "List past sessions", _cmd_sessions)
 BUILTIN_COMMANDS["reasoning"] = SlashCommand(
     "reasoning",
-    "Show or set reasoning display: /reasoning [off|summary|full|next]",
+    "Show or set reasoning display: /reasoning [off|collapsed|full|next]",
     _cmd_reasoning,
 )
 BUILTIN_COMMANDS["usage"] = SlashCommand(

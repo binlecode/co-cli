@@ -6,7 +6,7 @@ from co_cli.commands.types import CommandContext
 from co_cli.config.core import VALID_REASONING_DISPLAY_MODES
 from co_cli.display.core import console
 
-_REASONING_CYCLE = ["off", "summary", "full"]
+_REASONING_CYCLE = ["off", "collapsed", "full"]
 
 
 async def _cmd_reasoning(ctx: CommandContext, args: str) -> None:
@@ -25,7 +25,7 @@ async def _cmd_reasoning(ctx: CommandContext, args: str) -> None:
         ctx.deps.session.reasoning_display = token
     else:
         console.print(
-            f"[error]Unknown reasoning mode: {token!r}. Valid: off, summary, full, next[/error]"
+            f"[error]Unknown reasoning mode: {token!r}. Valid: off, collapsed, full, next[/error]"
         )
         return None
     console.print(

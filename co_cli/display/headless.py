@@ -62,9 +62,6 @@ class HeadlessFrontend:
     def on_thinking_commit(self, final: str) -> None:
         pass
 
-    def on_reasoning_progress(self, message: str) -> None:
-        pass
-
     def on_tool_start(self, tool_id: str, name: str, args_display: str) -> None:
         pass
 

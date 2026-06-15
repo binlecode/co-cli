@@ -285,10 +285,6 @@ class Frontend(Protocol):
         """Status messages (e.g. 'Co is thinking...')."""
         ...
 
-    def on_reasoning_progress(self, text: str) -> None:
-        """Reasoning progress update (e.g. intermediate reasoning steps)."""
-        ...
-
     def on_final_output(self, text: str) -> None:
         """Fallback Markdown render when streaming didn't emit text."""
         ...
@@ -505,14 +501,6 @@ class TerminalFrontend:
             console.print(Text(message, style="dim"))
             return
         self._set_inflight(Text(message, style="dim"), "status")
-
-    def on_reasoning_progress(self, text: str) -> None:
-        if not text or not text.strip():
-            return
-        if self._app is None:
-            console.print(Text(text, style="status"))
-            return
-        self._set_inflight(Text(text, style="status"), "status")
 
     def on_final_output(self, text: str) -> None:
         self._commit_status()

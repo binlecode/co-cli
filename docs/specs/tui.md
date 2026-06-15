@@ -207,27 +207,39 @@ to `CoRuntimeState` — use `CoSessionState` for user-preference and cross-turn 
 
 | Mode | Display behaviour |
 |---|---|
-| `off` | Thinking stream is silently dropped |
-| `summary` | Thinking is reduced to short operator-style progress lines (default) |
-| `full` | Raw thinking is streamed and committed to the terminal |
+| `off` | Thinking stream is silently dropped — no reasoning surface at all |
+| `collapsed` | Default. A live transient `Thinking… Ns` header in the in-flight region; on thinking-end commits a single durable `Thought for Ns` line. The raw body is never shown |
+| `full` | The `Thinking… Ns` header is shown with the raw thinking body streamed below it; the body + `Thought for Ns` footer are committed to scrollback |
+
+co commits to scrollback line-by-line (not a retained-widget TUI), so reasoning cannot be
+expanded after the fact — to read the raw reasoning, switch to `full`. The elapsed counter is
+event-driven: it advances as thinking deltas arrive and freezes during model silence, while the
+committed `Thought for Ns` is measured at thinking-end (wall-clock accurate). There is no
+periodic ticker.
 
 Usage:
 - `/reasoning` — print current mode, no state change
-- `/reasoning next` (or `cycle`) — advance through `off → summary → full → off`
-- `/reasoning off|summary|full` — set directly
+- `/reasoning next` (or `cycle`) — advance through `off → collapsed → full → off`
+- `/reasoning off|collapsed|full` — set directly
 
 The mode is stored on `deps.session.reasoning_display` (a `CoSessionState` field, default
-`"summary"`). It is read by `_execute_stream_segment()` at stream start via
+`"collapsed"`). It is read by `_execute_stream_segment()` at stream start via
 `StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)`. Changes take
 effect on the next turn; any in-flight stream uses the mode it started with. Delegation agent
 turns inherit the mode via `fork_deps()`, which copies `base.session.reasoning_display` into the
 child agent's `CoSessionState`.
 
+`StreamRenderer` owns the mode, the thinking buffer, and the elapsed timing; it composes the
+per-mode display string and feeds the dumb frontend surfaces `on_thinking_delta()` (transient
+in-flight) and `on_thinking_commit()` (durable scrollback). `collapsed` feeds only the
+`Thinking… Ns` / `Thought for Ns` header; `full` additionally streams and commits the raw body;
+`off` emits nothing.
+
 ## 3. Config
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Initial reasoning display mode; overridden by `--reasoning-display` CLI flag or `/reasoning` mid-session |
+| `reasoning_display` | `CO_REASONING_DISPLAY` | `collapsed` | Initial reasoning display mode (`off`/`collapsed`/`full`); overridden by `--reasoning-display` CLI flag or `/reasoning` mid-session |
 | `repl.queue_cap` | `CO_REPL_QUEUE_CAP` | `0` | Max pending mid-turn input-queue items (≥ 0); `0` = unbounded |
 | `repl.drop_policy` | `CO_REPL_DROP_POLICY` | `"oldest"` | Drop policy when an enqueue exceeds `queue_cap`: `"oldest"` drops the head, `"newest"` rejects the incoming item. Inert at cap `0` |
 
@@ -286,7 +298,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 | `/cancel` | `<task-id>` | Cancel a running background task | `None` |
 | `/write` | `<task-id> <input>` | Write a line to a running background task's stdin (first token = id; remainder verbatim + newline) to answer an interactive prompt | `None` |
 | `/queue` | `[list\|clear\|pop [n]]` | Inspect or prune pending REPL input-queue items; mid-turn bypass runs immediately without enqueueing | `None` |
-| `/reasoning` | `[off\|summary\|full\|next]` | Show or set reasoning display mode (see §2) | `None` |
+| `/reasoning` | `[off\|collapsed\|full\|next]` | Show or set reasoning display mode (see §2) | `None` |
 | `/usage` | `[week\|month\|total]` | Show token usage: no arg = current session totals (daemon excluded); a window shows a Session / Daemon / Total split with a distinct-session count | `None` |
 | `/status` | — | Consolidated current-state snapshot in six sections (Session, Model & context, Dream, Work in flight, Capabilities, Degraded); read-only, no model call, each section degrades to a placeholder if its source is unreadable | `None` |
 
@@ -327,6 +339,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 | A built-in name cannot be shadowed by a skill | `tests/test_flow_slash_dispatch.py` |
 | Blocked skill env keys (`PATH`, `HOME`, …) filtered at load | `tests/test_flow_slash_dispatch.py` |
 | In-flight buffer set on text delta and cleared on commit; thinking commit erases in-flight then commits final | `tests/test_display.py` |
+| `collapsed` commits a `Thought for Ns` timer line but not the raw body; `full` commits body + timer; `off` emits no reasoning surface; generic status line persists to scrollback on supersession | `tests/test_display.py` |
 | `update_status` repaints (invalidates) the bound app | `tests/test_display.py` |
 | Footer toolbar renders all fields; omits ctx/bg/approval/queue when zero; pluralises approvals; renders queue depth + preview | `tests/test_display.py` |
 | `StatusSnapshot` assembly from `CoDeps`: session label from path stem, context pct from realtime estimate, queue head preview populated/truncated/none, counts reflect session state | `tests/test_display.py` |

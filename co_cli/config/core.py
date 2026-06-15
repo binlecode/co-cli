@@ -55,13 +55,13 @@ DEFAULT_TOOL_RETRIES = 3
 DEFAULT_DOOM_LOOP_THRESHOLD = 3
 DEFAULT_MAX_REFLECTIONS = 3
 REASONING_DISPLAY_OFF = "off"
-REASONING_DISPLAY_SUMMARY = "summary"
+REASONING_DISPLAY_COLLAPSED = "collapsed"
 REASONING_DISPLAY_FULL = "full"
-DEFAULT_REASONING_DISPLAY = REASONING_DISPLAY_SUMMARY
+DEFAULT_REASONING_DISPLAY = REASONING_DISPLAY_COLLAPSED
 VALID_REASONING_DISPLAY_MODES: frozenset[str] = frozenset(
     {
         REASONING_DISPLAY_OFF,
-        REASONING_DISPLAY_SUMMARY,
+        REASONING_DISPLAY_COLLAPSED,
         REASONING_DISPLAY_FULL,
     }
 )
@@ -111,7 +111,9 @@ class Settings(BaseModel):
 
     # Flat — behavior
     theme: str = Field(default=DEFAULT_THEME)
-    reasoning_display: Literal["off", "summary", "full"] = Field(default=DEFAULT_REASONING_DISPLAY)
+    reasoning_display: Literal["off", "collapsed", "full"] = Field(
+        default=DEFAULT_REASONING_DISPLAY
+    )
     personality: str | None = Field(default=DEFAULT_PERSONALITY)
     tool_retries: int = Field(default=DEFAULT_TOOL_RETRIES)
 

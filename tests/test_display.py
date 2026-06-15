@@ -136,6 +136,75 @@ def test_thinking_commit_erases_inflight_and_commits_final():
     assert "partial reasoning text" not in out
 
 
+class _StubApp:
+    """Minimal owned-app stand-in so in-flight surfaces take the live region path
+    (on_status prints directly only when no app is bound)."""
+
+    def invalidate(self) -> None:
+        pass
+
+
+def _run_thinking_segment(mode: str):
+    """Drive a StreamRenderer through a thinking→text segment, capturing scrollback.
+
+    Returns the committed scrollback text. `time.sleep` between deltas defeats the
+    20 FPS throttle so the thinking delta actually renders.
+    """
+    import time
+
+    from co_cli.display.stream_renderer import StreamRenderer
+
+    frontend = TerminalFrontend()
+    frontend._app = _StubApp()
+    renderer = StreamRenderer(frontend, reasoning_display=mode)
+
+    session, buffer = _capture_committed()
+    with session:
+        renderer.append_thinking("the model is weighing options ")
+        time.sleep(_RENDER_INTERVAL_S)
+        renderer.append_thinking("and reaching a conclusion")
+        renderer.append_text("the real answer")
+        renderer.finish()
+    return buffer.getvalue()
+
+
+_RENDER_INTERVAL_S = 0.06
+
+
+def test_collapsed_mode_commits_timer_header_not_body():
+    out = _run_thinking_segment("collapsed")
+    # Durable timer summary lands in scrollback; raw reasoning body never does.
+    assert "Thought for" in out
+    assert "weighing options" not in out
+    assert "the real answer" in out
+
+
+def test_full_mode_commits_body_and_timer():
+    out = _run_thinking_segment("full")
+    assert "Thought for" in out
+    assert "weighing options" in out
+    assert "the real answer" in out
+
+
+def test_off_mode_emits_no_reasoning_surface():
+    out = _run_thinking_segment("off")
+    assert "Thought for" not in out
+    assert "weighing options" not in out
+    assert "the real answer" in out
+
+
+def test_status_persists_to_scrollback_when_superseded_by_text():
+    frontend = TerminalFrontend()
+    frontend._app = _StubApp()
+    frontend.on_status("Co is thinking...")
+
+    session, buffer = _capture_committed()
+    with session:
+        frontend.on_text_delta("the real answer")
+    # Generic status retains transient=False parity — committed on supersession.
+    assert "Co is thinking..." in buffer.getvalue()
+
+
 # ── TerminalFrontend.render_footer_toolbar ─────────────────────────────────
 
 

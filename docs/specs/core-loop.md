@@ -182,8 +182,8 @@ Reasoning display is purely a frontend concern:
 | Mode | Behavior |
 | --- | --- |
 | `off` | thinking is discarded |
-| `summary` | thinking is reduced to short status lines via `on_reasoning_progress()` |
-| `full` | raw thinking is streamed and committed through the thinking surface |
+| `collapsed` | default; a transient `Thinking… Ns` live line that commits a single durable `Thought for Ns` summary; raw body never shown |
+| `full` | the `Thinking… Ns` header plus the raw thinking body are streamed and committed through the thinking surface |
 
 ### 2.3 Approval Flow
 
@@ -383,7 +383,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
 | `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
 | `llm.max_model_requests_per_turn` | `CO_LLM_MAX_MODEL_REQUESTS_PER_TURN` | `90` | Max `ModelResponse`s per turn; `0` disables the cap |
-| `reasoning_display` | `CO_REASONING_DISPLAY` | `summary` | Thinking display mode for streamed turns |
+| `reasoning_display` | `CO_REASONING_DISPLAY` | `collapsed` | Thinking display mode for streamed turns (`off`/`collapsed`/`full`) |
 
 ## 4. Public Interface
 
@@ -425,7 +425,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/agent/toolset.py` | native filtered toolset construction with per-tool loading policy |
 | `co_cli/tools/approvals.py` | approval-subject resolution, remembered rule matching, decision recording, and `QuestionRequired` exception |
 | `co_cli/tools/shell/execute.py` | command-shape shell allow/deny/approval logic |
-| `co_cli/display/stream_renderer.py` | text/thinking buffering, reasoning reduction, and progress callback wiring |
+| `co_cli/display/stream_renderer.py` | text/thinking buffering, per-mode reasoning rendering, and `Thinking… Ns` / `Thought for Ns` elapsed timing |
 | `co_cli/display/core.py` | terminal frontend surfaces, tool panels, status rendering, approval prompts, and question prompting (`QuestionPrompt`, `prompt_question`) |
 | `co_cli/session/filename.py` | session filename generation and latest-session discovery |
 | `co_cli/skills/lifecycle.py` | skill-run environment save/restore and active-skill-name cleanup |
