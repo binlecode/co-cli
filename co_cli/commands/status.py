@@ -96,6 +96,8 @@ def _model_rows(ctx: CommandContext) -> list[tuple[str, str]]:
         if pct is None:
             return _PLACEHOLDER
         estimate = deps.runtime.current_request_tokens_estimate
+        if estimate is None:
+            estimate = deps.static_floor_tokens
         return f"{pct:.0%}  ({estimate:,} / {deps.model_max_ctx:,} tokens)"
 
     def _session_tokens() -> str:

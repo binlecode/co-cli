@@ -47,13 +47,17 @@ def workspace_dir_label(deps: "CoDeps") -> str:
 def context_pct(deps: "CoDeps") -> float | None:
     """Fraction of the model context window currently estimated in use.
 
-    None when no estimate exists yet (between turns) or the budget is unknown.
+    None only when the context window is unknown. Before the first turn there is
+    no per-request estimate yet, but the static floor (system prompt + tool/skill
+    schemas) is always resident — so a live session reports that baseline, never None.
     Shared by the footer snapshot and the /status report so the calc cannot drift.
     """
+    if deps.model_max_ctx <= 0:
+        return None
     estimate = deps.runtime.current_request_tokens_estimate
-    if estimate is not None and deps.model_max_ctx > 0:
-        return estimate / deps.model_max_ctx
-    return None
+    if estimate is None:
+        estimate = deps.static_floor_tokens
+    return estimate / deps.model_max_ctx
 
 
 @dataclass(frozen=True)

@@ -343,11 +343,11 @@ def test_build_status_snapshot_empty_session_path_produces_dash():
     assert snapshot.session_label == "—"
 
 
-def test_build_status_snapshot_no_estimate_produces_none_context_pct():
-    deps = _deps(model_max_ctx=200_000)
+def test_build_status_snapshot_no_estimate_reports_static_floor_baseline():
+    deps = _deps(model_max_ctx=200_000, static_floor_tokens=10_000)
     assert deps.runtime.current_request_tokens_estimate is None
     snapshot = _build_status_snapshot(deps, "idle", deque())
-    assert snapshot.context_pct is None
+    assert snapshot.context_pct == pytest.approx(0.05)
 
 
 def test_build_status_snapshot_zero_max_ctx_produces_none_context_pct():
