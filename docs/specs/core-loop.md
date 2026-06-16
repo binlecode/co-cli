@@ -7,7 +7,19 @@ For top-level architecture and startup sequencing, see [01-system.md](01-system.
 
 This doc describes one complete foreground turn, from prompt input to post-turn finalization.
 
-**Vocabulary — `turn ⊇ run ⊇ model request`.** A **turn** (one user message) contains one or more **runs**; a **run** (one `agent.run_stream_events()` call → one `AgentRunResult`) contains one or more model **requests** (one request/response exchange with the LLM). A turn spans multiple runs only at two boundaries — tool approval (a run ends with `DeferredToolRequests` and resumes in a fresh run) and length-continuation retry; a run spans multiple model requests whenever the model emits tool calls and the SDK loops to feed results back. This three-level containment is pydantic-ai's own model (see [pydantic-ai-integration.md](pydantic-ai-integration.md)).
+**Vocabulary — `turn ⊇ run ⊇ model request`.** A **turn** (one user message) contains one or more **runs**; a **run** (one `agent.run_stream_events()` call → one `AgentRunResult`) contains one or more model **requests** (one request/response exchange with the LLM); a model request may carry one or more **tool calls**. A turn spans multiple runs only at two boundaries — tool approval (a run ends with `DeferredToolRequests` and resumes in a fresh run) and length-continuation retry; a run spans multiple model requests whenever the model emits tool calls and the SDK loops to feed results back. This three-level containment is pydantic-ai's own model (see [pydantic-ai-integration.md](pydantic-ai-integration.md)).
+
+**Bounds at each layer.** Each level of the hierarchy has its own ceiling:
+
+| Layer | Bound | Mechanism |
+| --- | --- | --- |
+| model request → tool calls | `MAX_TOOL_CALLS_PER_MODEL_REQUEST` (3) parallel tool calls per response; `TOOL_CAP_HARD_STOP_CONSECUTIVE` (3) consecutive over-cap requests end the turn | `_CallSeamToolset.call_tool` rejects the `(cap+1)`-th call; the consecutive-violation streak is finalized at the run boundary in `_execute_run` and read by `_check_turn_caps` |
+| run → model requests | **unbounded** — co passes `UsageLimits(request_limit=None)`, which disables pydantic-ai's default 50-request per-run ceiling | `_execute_run` (`orchestrate.py`); the human drives turn length, so a single run's tool-loop is not capped |
+| turn → model requests | `max_model_requests_per_turn` (40; `0` disables) caps the `model_requests` accumulator summed across **all** runs in the turn | `_check_turn_caps` returns an error `TurnResult` once the accumulator reaches the cap |
+
+The run-level ceiling being open while the turn-level ceiling is the real bound is deliberate: approval/retry split a turn into several runs, so the meaningful aggregate limit lives at the turn layer.
+
+**Why the turn cap is 40 — circuit breaker, not work limit.** `max_model_requests_per_turn` is the *only* guard against an in-cap doom-loop: a model that re-issues 1–3 tool calls per request indefinitely never trips the consecutive-over-cap hard-stop (the streak resets on any ≤3-call request), so the turn-cumulative count is what stops it. The value is sized between two opposing bounds. Floor: observed legitimate usage maxes at ~7 model requests per single pass, but the accumulator sums across approval-resume *and* length-continuation retries within one turn, so a recon-heavy multi-gate turn can realistically stack to ~20–25 — the cap must clear that to never bite real work. Ceiling: the prior value of 90 let such a loop burn ~90 multi-second local-model requests (minutes of a wedged-looking session) before firing. 40 sits ≈5–6× over typical real usage with >2× margin over the multi-resume worst case, yet ~2.5× tighter than 90. It is deliberately set *above* peer single-loop caps (e.g. opencode's 25) because co's approval-split turns span more cumulative requests than a single activity loop, so 25 would risk false trips. Within the defensible 35–40 band the high end is chosen: a too-low cap falsely kills legitimate user work (user-visible, erodes trust), whereas a too-high cap only lets a doom-loop run a handful of extra cheap requests (invisible) — an asymmetry that favors headroom.
 
 Cross-subsystem overview — one full turn crosses every subsystem; detailed behavior at each step lives in the linked specs:
 
@@ -384,7 +396,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | Per-tool retry count baked into agent/tool registration |
 | `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
 | `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
-| `llm.max_model_requests_per_turn` | `CO_LLM_MAX_MODEL_REQUESTS_PER_TURN` | `90` | Max `ModelResponse`s per turn; `0` disables the cap |
+| `llm.max_model_requests_per_turn` | `CO_LLM_MAX_MODEL_REQUESTS_PER_TURN` | `40` | Max `ModelResponse`s per turn; `0` disables the cap |
 | `reasoning_display` | `CO_REASONING_DISPLAY` | `collapsed` | Thinking display mode for streamed turns (`off`/`collapsed`/`full`) |
 
 ## 4. Public Interface

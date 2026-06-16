@@ -28,7 +28,7 @@ DEFAULT_LLM_MODELS: dict[str, str] = {
 
 DEFAULT_MAX_CTX = 65_536
 
-DEFAULT_MAX_MODEL_REQUESTS_PER_TURN: int = 90
+MAX_MODEL_REQUESTS_PER_TURN: int = 40
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ class LlmSettings(BaseModel):
     # Both checks use max_ctx as the reference — they do not compare against each other.
     max_ctx: int = Field(default=DEFAULT_MAX_CTX)
     # 0 = disabled (no cap on model requests per turn).
-    max_model_requests_per_turn: int = Field(default=DEFAULT_MAX_MODEL_REQUESTS_PER_TURN, ge=0)
+    max_model_requests_per_turn: int = Field(default=MAX_MODEL_REQUESTS_PER_TURN, ge=0)
 
     @model_validator(mode="after")
     def _default_model_per_provider(self) -> LlmSettings:

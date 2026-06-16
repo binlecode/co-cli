@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.368]
+
+### Refactor: tighten the turn-level model-request cap (90 → 40)
+
+- **`max_model_requests_per_turn` default lowered 90 → 40.** This turn-cumulative cap is the only guard against an in-cap doom-loop (a model re-issuing 1–3 tool calls per request indefinitely — the consecutive-over-cap hard-stop never trips because the streak resets on any ≤3-call request). At 90 such a loop burned ~90 multi-second local-model requests (a wedged-looking session) before firing; 40 stops it an order of magnitude sooner. Sized as a circuit breaker: ≈5–6× over typical real usage (~7/turn) with >2× margin over the multi-resume worst case (~20–25), above opencode's single-loop 25 because co's approval-split turns span more cumulative requests.
+- **Constant renamed `DEFAULT_MAX_MODEL_REQUESTS_PER_TURN` → `MAX_MODEL_REQUESTS_PER_TURN`** (it names a control limit, not a fallback default; zero-backward-compat, no alias).
+- **Specs:** folded the circuit-breaker sizing rationale into `core-loop.md` §1 and corrected the stale 90 → 40 there and in `config.md`.
+
 ## [0.8.367]
 
 ### Fix: show `ctx %` immediately after a transcript swap

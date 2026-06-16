@@ -19,7 +19,7 @@ from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.config.core import load_config
-from co_cli.config.llm import DEFAULT_MAX_MODEL_REQUESTS_PER_TURN, LlmSettings
+from co_cli.config.llm import MAX_MODEL_REQUESTS_PER_TURN, LlmSettings
 from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
@@ -31,11 +31,11 @@ from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
 # ---------------------------------------------------------------------------
 
 
-def test_max_model_requests_default_is_90() -> None:
-    """LlmSettings() with no overrides yields max_model_requests_per_turn == 90."""
+def test_max_model_requests_default_is_40() -> None:
+    """LlmSettings() with no overrides yields max_model_requests_per_turn == 40."""
     s = LlmSettings(provider="ollama")
-    assert s.max_model_requests_per_turn == DEFAULT_MAX_MODEL_REQUESTS_PER_TURN
-    assert s.max_model_requests_per_turn == 90
+    assert s.max_model_requests_per_turn == MAX_MODEL_REQUESTS_PER_TURN
+    assert s.max_model_requests_per_turn == 40
 
 
 def test_max_model_requests_env_override(tmp_path: Path) -> None:
