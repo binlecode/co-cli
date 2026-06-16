@@ -40,6 +40,7 @@ from co_cli.config.core import (
     settings,
 )
 from co_cli.context.orchestrate import TurnResult, run_turn
+from co_cli.context.summarization import estimate_message_tokens
 from co_cli.daemons.dream.kick import write_review_kick
 from co_cli.deps import CoDeps
 from co_cli.display._app import _ReplRuntime, build_key_bindings, build_repl_app
@@ -309,6 +310,12 @@ def _apply_command_outcome(
             deps.runtime.persisted_message_count = len(outcome.history)
             # /resume and other no-LLM transcript swaps: reset defensively (normally 0 here).
             deps.usage_accumulator.reset()
+        # Seed the context-usage estimate so the footer shows `ctx %` immediately
+        # after a transcript swap, before the next turn runs. Mirrors the spill
+        # trigger formula (history_processors.py) so the value cannot drift.
+        deps.runtime.current_request_tokens_estimate = (
+            deps.static_floor_tokens + estimate_message_tokens(outcome.history)
+        )
         return True, outcome.history, "", {}
     if isinstance(outcome, DelegateToAgent):
         saved_env: dict[str, str | None] = {k: os.environ.get(k) for k in outcome.skill_env}

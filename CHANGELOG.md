@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.367]
+
+### Fix: show `ctx %` immediately after a transcript swap
+
+- **`/resume` and `/compact` now seed the context-usage estimate.** The footer's `ctx %` read `current_request_tokens_estimate`, which was only written by the history processor during a turn — so a restored or compacted session showed no `ctx %` until the first message. The `ReplaceTranscript` outcome now seeds the estimate via `static_floor_tokens + estimate_message_tokens(history)`, mirroring the spill-trigger formula so the value cannot drift.
+
 ## [0.8.366]
 
 ### Refactor: drop the "segment" term — align co's vocabulary to pydantic-ai's "run"
