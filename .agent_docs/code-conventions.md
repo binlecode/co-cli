@@ -51,7 +51,7 @@ For cross-cutting concerns, use the existing project primitive before adding ano
 
 Full-overwrite file mutation uses `co_cli.fileio.atomic.atomic_write_text` (or `atomic_write_bytes` for binary). Both primitives `mkdir(parents=True, exist_ok=True)` before writing — do not pre-create the parent at call sites. Local `tempfile.NamedTemporaryFile` + `os.replace` blocks in mutation paths are forbidden.
 
-Multi-step writes to `MemoryStore` use `with store.transaction() as tx: tx.index(...); tx.index_chunks(...)`. The public `index() / index_chunks() / remove() / remove_chunks()` methods always commit; hidden transaction state on the store is forbidden.
+Multi-step index writes use the `IndexStore` transaction: `with index_store.transaction() as tx: tx.upsert(...); tx.index_chunks(...)` (commits on success, rolls back on exception, nesting raises). `MemoryStore` wraps this internally via its `_index` handle. The bare public `upsert() / index_chunks() / remove() / remove_chunks()` methods each commit on their own; hidden transaction state on the store is forbidden.
 
 ## Display
 

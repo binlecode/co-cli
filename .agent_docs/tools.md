@@ -6,19 +6,17 @@ Native tools use `@agent_tool(...)` with `RunContext[CoDeps]`; `_build_native_to
 
 ## Tool Availability Gating
 
-Integration tools (tools that require external config or runtime state) have two registration-time gates and one call-time fallback. Choose based on when availability is knowable.
+Integration tools (tools that require external config or runtime state) gate per-turn via one mechanism, plus an optional label.
 
-**`requires_config="field_name"`** — build-time exclusion. `_build_native_toolset()` checks `getattr(config, field_name)` before registering; if falsy, the tool is never added to the toolset. Use when the tool cannot function under any circumstances without the config field — no point advertising it to the model at all.
+**`check_fn=fn`** — per-turn hide. `fn(deps) -> bool` is wrapped into a pydantic-ai `prepare` callback (`_make_prepare`) invoked before each model turn. Returning `False` omits the tool from that turn's tool manifest; returning `True` includes it. The tool stays in the toolset between turns, so availability can change mid-session (credentials refresh, vault mounted/unmounted) without restart. Example: the `google_*` tools carry `check_fn=_google_available`, so they vanish from the manifest when credentials are absent or the token is expired and reappear once auth is healthy.
 
-**`check_fn=fn`** — per-turn hide. `fn(deps) -> bool` is wrapped into a pydantic-ai `prepare` callback invoked before each model turn. Returning `False` omits the tool from that turn's tool manifest; returning `True` includes it. The tool remains in the toolset between turns, so availability can change mid-session (credentials refresh, vault mounted/unmounted) without restart. Use when the config field may be present but runtime state is needed to confirm usability.
+**`integration="name"`** — a label, not a gate. It groups a tool under a named integration (e.g. `"google_drive"`, `"google_gmail"`) for the deferred-prompt display, MCP prefixing, and startup health checks (`bootstrap/check.py` reports unconfigured integrations as `not_configured`). It does not affect registration or per-turn visibility on its own.
 
-**Combining both** — use `requires_config` as the hard outer gate and `check_fn` as the soft inner gate. Example: `google_drive_*` is excluded entirely when `google_credentials_path` is absent (`requires_config`), then hidden per-turn when the token is expired (`check_fn`).
-
-**Call-time failure** — `web_search` has neither gate; it fails at call time when `brave_search_api_key` is None. This is a gap, not a pattern to follow. Prefer `requires_config` for any new tool whose API key is required.
+**Call-time failure** — `web_search` has no `check_fn`; it fails at call time when `brave_search_api_key` is None. This is a gap, not a pattern to follow. Prefer a `check_fn` for any new tool whose credential is required, so the model never sees an unusable tool.
 
 ## Tool Approval
 
-Tools that mutate system state (filesystem writes, external service writes, process spawning) use `approval=True` on `@agent_tool(...)` — this routes through the deferred-approval mechanism; putting approval logic inside the tool body bypasses it. Runtime-approval tools such as `shell` and `code_execute` may raise `ApprovalRequired` based on command policy. Read-only operations do not require approval. Approval UX lives in the chat loop.
+Tools that mutate system state (filesystem writes, external service writes, process spawning) use `is_approval_required=True` on `@agent_tool(...)` — this routes through the deferred-approval mechanism; putting approval logic inside the tool body bypasses it. Runtime-approval tools such as `shell` and `code_execute` may raise `ApprovalRequired` based on command policy. Read-only operations do not require approval. Approval UX lives in the chat loop.
 
 ## Tool Return Type
 
@@ -53,6 +51,6 @@ Use `settings.json` or env vars.
 - Tool file in `co_cli/tools/`; decorate with `@agent_tool` (self-registers into `TOOL_REGISTRY`) and ensure its module is imported in `co_cli/agent/toolset.py` so the decorator runs.
 - Return `tool_output()` / `tool_error()` — never a raw `str`, `dict`, or `list`.
 - First docstring line is the tool schema description — make it count.
-- `approval=True` for any tool that writes files, spawns processes, or calls external write APIs.
+- `is_approval_required=True` for any tool that writes files, spawns processes, or calls external write APIs.
 - `ALWAYS` visibility = present every turn; `DEFERRED` = hidden by the per-turn visibility filter and surfaced by name via the `tool_view` loader on demand (co-owned; no SDK `search_tools`).
-- For integration tools: use `requires_config="field"` to exclude when unconfigured, `check_fn=fn` to hide per-turn when runtime state is unavailable. See **Tool Availability Gating**.
+- For integration tools: use `check_fn=fn` to hide the tool per-turn when its credential/runtime state is unavailable, and `integration="name"` to label it for health checks and display. See **Tool Availability Gating**.
