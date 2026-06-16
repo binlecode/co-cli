@@ -20,7 +20,7 @@ import co_cli.personality
 from co_cli.config.core import Settings, get_settings
 from co_cli.deps import CoDeps, CoRuntimeState, resolve_workspace_paths
 from co_cli.display.core import TerminalFrontend
-from co_cli.session.filename import find_latest_session, new_session_path
+from co_cli.session.filename import new_session_path
 from co_cli.tools.shell_backend import ShellBackend
 
 logger = logging.getLogger(__name__)
@@ -540,22 +540,14 @@ def maybe_autospawn_dream(deps: CoDeps, frontend: TerminalFrontend) -> None:
         logger.warning("dream auto-spawn failed: %s", exc)
 
 
-@trace("restore_session")
-def restore_session(deps: CoDeps, frontend: TerminalFrontend) -> Path:
-    """Restore the most recent session or create a new session path."""
+@trace("start_session")
+def start_session(deps: CoDeps, frontend: TerminalFrontend) -> Path:
+    """Start a fresh session. Resuming a prior session is explicit via /resume."""
     span = current_span()
-    session_path = find_latest_session(deps.sessions_dir)
-    if session_path is not None:
-        deps.session.session_path = session_path
-        short_id = session_path.stem[-8:]
-        span.set_attribute("status", "restored")
-        span.set_attribute("session_id", short_id)
-        frontend.on_status(f"  Session restored — {short_id}...")
-    else:
-        session_path = new_session_path(deps.sessions_dir)
-        deps.session.session_path = session_path
-        short_id = session_path.stem[-8:]
-        span.set_attribute("status", "new")
-        span.set_attribute("session_id", short_id)
-        frontend.on_status(f"  Session new — {short_id}...")
+    session_path = new_session_path(deps.sessions_dir)
+    deps.session.session_path = session_path
+    short_id = session_path.stem[-8:]
+    span.set_attribute("status", "new")
+    span.set_attribute("session_id", short_id)
+    frontend.on_status(f"  Session new — {short_id}...")
     return session_path

@@ -1,13 +1,14 @@
 """Behavioral tests for session persistence — restore, transcript round-trip, oversized read.
 
 Production paths:
-  - co_cli/bootstrap/core.py:restore_session — picks the most recent session at startup.
+  - co_cli/bootstrap/core.py:start_session — starts a fresh session at startup.
   - co_cli/memory/transcript.py — append/load.
 
 No LLM needed — filesystem only.
 
 Each test guards a specific regression:
-- test_restore_session_picks_most_recent: glob ordering bug → wrong session resumed.
+- test_start_session_creates_fresh_session: startup must not resume a prior session
+  implicitly (resuming is explicit via /resume).
 - test_normal_turn_appends_delta_to_existing_session: delta append miscounts
   cause messages to be written twice or skipped on reload.
 - test_load_transcript_rejects_oversized_file: files above MAX_TRANSCRIPT_READ_BYTES
@@ -29,7 +30,7 @@ from pydantic_ai.messages import (
 )
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.bootstrap.core import restore_session
+from co_cli.bootstrap.core import start_session
 from co_cli.commands.resume import _rehydrate_todos
 from co_cli.context.compaction import TODO_SNAPSHOT_PREFIX
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
@@ -64,11 +65,11 @@ def _make_deps(tmp_path: Path) -> CoDeps:
     )
 
 
-def test_restore_session_picks_most_recent(tmp_path: Path) -> None:
-    """restore_session() must pick the most recent session by lexicographic filename sort.
+def test_start_session_creates_fresh_session(tmp_path: Path) -> None:
+    """start_session() must start a fresh session, never resume a prior one implicitly.
 
-    Failure mode: glob/sort order bug → user resumes the oldest session at startup,
-    losing access to their most recent conversation.
+    Failure mode: startup silently appends to the most recent transcript, conflating
+    unrelated conversations. Resuming is explicit via /resume only.
     """
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(parents=True)
@@ -80,9 +81,12 @@ def test_restore_session_picks_most_recent(tmp_path: Path) -> None:
     new_path.touch()
 
     deps = _make_deps(tmp_path)
-    result = restore_session(deps, TerminalFrontend())
+    result = start_session(deps, TerminalFrontend())
 
-    assert result == new_path, "restore_session() must pick the most recently dated session"
+    assert result not in {old_path, new_path}, (
+        "start_session() must not resume an existing session"
+    )
+    assert deps.session.session_path == result
 
 
 def test_normal_turn_appends_delta_to_existing_session(tmp_path: Path) -> None:

@@ -23,7 +23,7 @@ from co_cli.bootstrap.banner import context_pct, display_welcome_banner
 from co_cli.bootstrap.core import (
     create_deps,
     maybe_autospawn_dream,
-    restore_session,
+    start_session,
 )
 from co_cli.bootstrap.project_info import project_info
 from co_cli.commands._queue_control import run_queue_control
@@ -658,13 +658,13 @@ async def _chat_loop(
         completer.update(build_completer_entries(deps.skill_catalog))
         agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
 
-        restore_session(deps, frontend)
+        start_session(deps, frontend)
         _sweep_tool_results(deps)
         from co_cli.skills.index import get_skill_catalog
 
         frontend.on_status(f"  {len(get_skill_catalog(deps.skill_catalog))} skill(s) loaded")
 
-        if deps.session.session_path.exists():
+        if any(deps.sessions_dir.glob("*.jsonl")):
             console.print("[dim]Previous session available — /resume to continue[/dim]")
 
         memory_count = 0

@@ -38,14 +38,6 @@ def parse_session_filename(name: str) -> tuple[str, datetime] | None:
     return uuid8, created_at
 
 
-def find_latest_session(sessions_dir: Path) -> Path | None:
-    """Return the most recent session Path by lexicographic sort (= chronological order)."""
-    if not sessions_dir.exists():
-        return None
-    files = sorted(sessions_dir.glob("*.jsonl"), reverse=True)
-    return files[0] if files else None
-
-
 def new_session_path(sessions_dir: Path) -> Path:
     """Return a new session Path without creating the file."""
     now = datetime.now(UTC)
