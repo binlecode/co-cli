@@ -38,7 +38,7 @@ co_cli.main.chat() → asyncio.run(_chat_loop())
 ├─ create_deps(frontend, stack)
 │  ├─ config = settings; paths = resolve_workspace_paths(config, cwd)
 │  ├─ config.llm.validate_config()
-│  ├─ [if ollama] probe_ollama_model() → model_max_ctx = min(probe.num_ctx, llm.max_ctx)
+│  ├─ [if ollama] probe_ollama_model() → model_max_context_tokens = min(probe.num_ctx, llm.max_context_tokens)
 │  ├─ build_model(config.llm)
 │  ├─ build_native_toolset() → (native_toolset, tool_catalog)
 │  ├─ build_mcp_entries(config, tool_catalog)
@@ -110,7 +110,7 @@ An unset `llm.model` is auto-resolved to `DEFAULT_LLM_MODELS[provider]` by a pyd
 `model_validator` before `validate_config()` runs, so "no model configured" is not a
 reachable bootstrap failure.
 
-If the provider is `ollama`, bootstrap probes the model's runtime `num_ctx` from the Modelfile via `/api/show`. The probe result is capped by `config.llm.max_ctx` and stored as `deps.model_max_ctx`. If the capped value is below the minimum supported agentic context, startup fails immediately.
+If the provider is `ollama`, bootstrap probes the model's runtime `num_ctx` from the Modelfile via `/api/show`. The probe result is capped by `config.llm.max_context_tokens` and stored as `deps.model_max_context_tokens`. If the capped value is below the minimum supported agentic context, startup fails immediately.
 
 ### Step 5. Build the foreground model and local tool registry
 
@@ -217,7 +217,7 @@ These settings most directly affect bootstrap behavior.
 | `llm.provider` | `CO_LLM_PROVIDER` | `ollama` | Selects provider-specific bootstrap checks and model wiring |
 | `llm.host` | `CO_LLM_HOST` | `http://localhost:11433` | Host used by Ollama checks and runtime model calls (multi-instance router; `11434` bypasses to primary Ollama) |
 | `llm.model` | `CO_LLM_MODEL` | provider default | Primary foreground model built during startup |
-| `llm.max_ctx` | — | `65536` | Ceiling on probed Ollama context window; `deps.model_max_ctx = min(probe, max_ctx)` |
+| `llm.max_context_tokens` | — | `65536` | Ceiling on probed Ollama context window; `deps.model_max_context_tokens = min(probe, max_context_tokens)` |
 | `memory.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
 | `memory.embedding_provider` | `CO_MEMORY_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
 | `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory` | User-global memory item directory synced during bootstrap |

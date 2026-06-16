@@ -38,9 +38,11 @@ def _review_config():
     )
 
 
-def _make_ctx(tmp_path, *, model_max_ctx: int = 2000, with_model: bool = True) -> RunContext:
+def _make_ctx(
+    tmp_path, *, model_max_context_tokens: int = 2000, with_model: bool = True
+) -> RunContext:
     deps = CoDeps(shell=ShellBackend(), config=_review_config(), session=CoSessionState())
-    deps.model_max_ctx = model_max_ctx
+    deps.model_max_context_tokens = model_max_context_tokens
     deps.model = object() if with_model else None
     deps.session.session_path = tmp_path / "sess-abc123.jsonl"
     return RunContext(deps=deps, model=None, usage=RunUsage())
@@ -126,7 +128,7 @@ async def test_second_in_turn_compaction_still_snapshots(monkeypatch, tmp_path):
 async def test_strip_only_path_produces_no_snapshot(monkeypatch, tmp_path):
     """recover_overflow_history PATH 1 (strip-only-fits) drops no message → no snapshot."""
     snapshots, queue = _patch_dirs(monkeypatch, tmp_path)
-    ctx = _make_ctx(tmp_path, model_max_ctx=2000)
+    ctx = _make_ctx(tmp_path, model_max_context_tokens=2000)
 
     big = "x" * 5000
     messages = [

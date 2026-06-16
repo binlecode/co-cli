@@ -17,7 +17,7 @@ from co_cli.config.core import (
     USER_DIR,
     Settings,
 )
-from co_cli.config.llm import DEFAULT_MAX_CTX
+from co_cli.config.llm import MAX_CONTEXT_TOKENS
 from co_cli.session.usage import UsageAccumulator
 from co_cli.tools.file_read_tracker import FileReadTracker
 
@@ -339,11 +339,11 @@ class CoDeps:
     usage_accumulator: UsageAccumulator = field(default_factory=UsageAccumulator, repr=False)
 
     # Effective context window size — single source of truth, set unconditionally at bootstrap.
-    # Ollama: read from the loaded Modelfile via /api/show, capped by max_ctx (probe-failure
-    # fallback: max_ctx). Other providers: max_ctx ceiling. Defaults to the configured ceiling
+    # Ollama: read from the loaded Modelfile via /api/show, capped by max_context_tokens (probe-failure
+    # fallback: max_context_tokens). Other providers: max_context_tokens ceiling. Defaults to the configured ceiling
     # so a deps built outside bootstrap still resolves a usable budget (never a 0-divide / 0-budget).
-    model_max_ctx: int = DEFAULT_MAX_CTX
-    # Bootstrap-cached: int(spill_ratio x model_max_ctx). Immutable after bootstrap.
+    model_max_context_tokens: int = MAX_CONTEXT_TOKENS
+    # Bootstrap-cached: int(spill_ratio x model_max_context_tokens). Immutable after bootstrap.
     # Read by spill_largest_tool_results; never recomputed at read sites.
     spill_threshold_tokens: int = 0
     # Bootstrap-cached: measured static-instruction tokens + ALWAYS-schema tokens — the
@@ -443,7 +443,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         tool_results_dir=base.tool_results_dir,
         usage_log_path=base.usage_log_path,
         usage_accumulator=base.usage_accumulator,
-        model_max_ctx=base.model_max_ctx,
+        model_max_context_tokens=base.model_max_context_tokens,
         spill_threshold_tokens=base.spill_threshold_tokens,
         degradations=base.degradations,
     )

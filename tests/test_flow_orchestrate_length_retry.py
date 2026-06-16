@@ -39,7 +39,7 @@ def _make_deps() -> CoDeps:
         tool_catalog=_TOOL_INDEX,
         config=SETTINGS_NO_MCP,
         session=CoSessionState(),
-        model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
+        model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
     )
 
 
@@ -99,7 +99,7 @@ async def test_overflow_warning_uses_provider_input_count() -> None:
 
     After dropping ``last_reported_input_tokens``, ``_check_output_limits`` re-sources the
     final request's input tokens straight from the ``AgentRunResult``'s last ``ModelResponse``
-    (provider ground-truth). Run a real turn, then shrink ``model_max_ctx`` below the
+    (provider ground-truth). Run a real turn, then shrink ``model_max_context_tokens`` below the
     provider-reported input so the ratio crosses 1.0 and the "Context limit reached" status
     fires carrying that exact provider count.
     """
@@ -116,13 +116,14 @@ async def test_overflow_warning_uses_provider_input_count() -> None:
     assert provider_input > 0, "provider must report a non-zero input token count"
 
     # Shrink the window below the provider-reported input so ratio >= 1.0.
-    deps.model_max_ctx = provider_input - 1
+    deps.model_max_context_tokens = provider_input - 1
     frontend = SilentFrontend()
     turn_state = _TurnState(current_input=None, current_history=[], latest_result=result)
 
     _check_output_limits(turn_state, deps, frontend)
 
     assert any(
-        f"Context limit reached ({provider_input:,} / {deps.model_max_ctx:,} tokens)" in s
+        f"Context limit reached ({provider_input:,} / {deps.model_max_context_tokens:,} tokens)"
+        in s
         for s in frontend.statuses
     ), f"expected provider-count overflow warning; got {frontend.statuses}"

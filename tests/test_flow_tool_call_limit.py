@@ -29,7 +29,7 @@ def _make_deps() -> CoDeps:
         config=SETTINGS_NO_MCP,
         session=CoSessionState(),
         runtime=CoRuntimeState(),
-        model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
+        model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
     )
 
 

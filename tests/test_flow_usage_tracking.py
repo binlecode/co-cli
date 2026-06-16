@@ -52,7 +52,7 @@ def _make_deps(tmp_path: Path, *, max_model_requests: int = 90) -> CoDeps:
         session=CoSessionState(session_path=session_path),
         sessions_dir=tmp_path / "sessions",
         usage_log_path=tmp_path / "usage.jsonl",
-        model_max_ctx=config.llm.max_ctx,
+        model_max_context_tokens=config.llm.max_context_tokens,
     )
 
 

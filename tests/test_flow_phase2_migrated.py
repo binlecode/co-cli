@@ -69,7 +69,7 @@ def _make_deps(model: object | None = None) -> CoDeps:
         model=model,  # type: ignore[arg-type]
         config=SETTINGS_NO_MCP,
         session=CoSessionState(),
-        model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
+        model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
     )
 
 

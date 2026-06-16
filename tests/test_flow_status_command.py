@@ -104,7 +104,7 @@ async def test_report_shows_all_sections_with_live_values(tmp_path: Path) -> Non
     assert _SESSION_ID in text
     # Model line reflects the configured provider/model.
     assert deps.config.llm.provider in text
-    # Context % rendered from the live estimate (5,000 / model_max_ctx).
+    # Context % rendered from the live estimate (5,000 / model_max_context_tokens).
     assert "%" in text
     assert "5,000" in text
     # Dream state present (disabled by default config).

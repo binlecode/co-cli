@@ -447,7 +447,7 @@ def spill_largest_tool_results(
     tail_protected_count = sum(1 for index, _ in candidates if index >= tail_start)
 
     event_attrs: dict[str, Any] = {
-        "budget.context_window_tokens": deps.model_max_ctx,
+        "budget.context_window_tokens": deps.model_max_context_tokens,
         "request.threshold_tokens": threshold,
         "request.tokens_before": trigger,
         "request.local_tokens": local_total,

@@ -280,49 +280,49 @@ def _sync_indexes_offthread(
         worker_index.close()
 
 
-def _check_ollama_num_ctx_floor(num_ctx: int, model: str, max_ctx: int) -> None:
-    """Raise ValueError when the model's num_ctx undercuts the configured max_ctx floor."""
-    if num_ctx < max_ctx:
+def _check_ollama_num_ctx_floor(num_ctx: int, model: str, max_context_tokens: int) -> None:
+    """Raise ValueError when the model's num_ctx undercuts the configured max_context_tokens floor."""
+    if num_ctx < max_context_tokens:
         raise ValueError(
             f"Ollama model {model!r} reports num_ctx={num_ctx:,} "
-            f"but max_ctx={max_ctx:,} is configured. "
-            f"Raise the model's num_ctx (Modelfile) or lower max_ctx in settings."
+            f"but max_context_tokens={max_context_tokens:,} is configured. "
+            f"Raise the model's num_ctx (Modelfile) or lower max_context_tokens in settings."
         )
 
 
 def _probe_model_ctx(config: Settings) -> tuple[int, bool]:
-    """Resolve model_max_ctx and agent vision-capability from config + Ollama probe.
+    """Resolve model_max_context_tokens and agent vision-capability from config + Ollama probe.
 
-    Returns ``(model_max_ctx, agent_vision_capable)``. Gemini is natively multimodal
+    Returns ``(model_max_context_tokens, agent_vision_capable)``. Gemini is natively multimodal
     (vision True, no probe). Ollama reads num_ctx and the vision capability from one
     /api/show probe; probe failure degrades vision to False (honest gate) and falls
-    back to the configured max_ctx for the context size.
+    back to the configured max_context_tokens for the context size.
     """
     if not config.llm.uses_ollama():
         logger.debug(
-            "non-ollama provider %s; using configured max_ctx=%d",
+            "non-ollama provider %s; using configured max_context_tokens=%d",
             config.llm.provider,
-            config.llm.max_ctx,
+            config.llm.max_context_tokens,
         )
-        return config.llm.max_ctx, True
+        return config.llm.max_context_tokens, True
 
     from co_cli.bootstrap.check import probe_ollama_model, validate_ollama_num_ctx
 
     probe = probe_ollama_model(config.llm.host, config.llm.model)
     if probe.num_ctx is not None:
-        _check_ollama_num_ctx_floor(probe.num_ctx, config.llm.model, config.llm.max_ctx)
+        _check_ollama_num_ctx_floor(probe.num_ctx, config.llm.model, config.llm.max_context_tokens)
     else:
         logger.warning(
-            "ollama ctx probe failed; using configured max_ctx=%d as fallback",
-            config.llm.max_ctx,
+            "ollama ctx probe failed; using configured max_context_tokens=%d as fallback",
+            config.llm.max_context_tokens,
         )
     validate_ollama_num_ctx(config)
-    return config.llm.max_ctx, probe.vision
+    return config.llm.max_context_tokens, probe.vision
 
 
 @trace("tool_budget.resolved")
 def _emit_tool_budget_span(
-    model_max_ctx: int,
+    model_max_context_tokens: int,
     spill_ratio: float,
     spill_threshold_tokens: int,
 ) -> None:
@@ -330,7 +330,7 @@ def _emit_tool_budget_span(
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     span = current_span()
-    span.set_attribute("budget.context_window_tokens", model_max_ctx)
+    span.set_attribute("budget.context_window_tokens", model_max_context_tokens)
     span.set_attribute("budget.spill_ratio", spill_ratio)
     span.set_attribute("budget.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_REQUEST)
     span.set_attribute("budget.spill_threshold_chars", SPILL_THRESHOLD_CHARS)
@@ -369,23 +369,23 @@ async def create_deps(
     if error:
         raise ValueError(error)
 
-    model_max_ctx, agent_vision_capable = _probe_model_ctx(config)
+    model_max_context_tokens, agent_vision_capable = _probe_model_ctx(config)
 
     from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
     from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     spill_ratio = config.compaction.spill_ratio
-    spill_threshold_tokens = int(spill_ratio * model_max_ctx)
+    spill_threshold_tokens = int(spill_ratio * model_max_context_tokens)
 
     _emit_tool_budget_span(
-        model_max_ctx=model_max_ctx,
+        model_max_context_tokens=model_max_context_tokens,
         spill_ratio=spill_ratio,
         spill_threshold_tokens=spill_threshold_tokens,
     )
 
     logger.info(
         "tool-budget bounds: context_window=%d tool_call_limit=%d spill=%dc spill_threshold=%d tokens",
-        model_max_ctx,
+        model_max_context_tokens,
         MAX_TOOL_CALLS_PER_MODEL_REQUEST,
         SPILL_THRESHOLD_CHARS,
         spill_threshold_tokens,
@@ -465,7 +465,7 @@ async def create_deps(
         toolset=toolset,
         skill_catalog=skill_catalog,
         runtime=runtime,
-        model_max_ctx=model_max_ctx,
+        model_max_context_tokens=model_max_context_tokens,
         spill_threshold_tokens=spill_threshold_tokens,
         degradations=MappingProxyType(degradations),
         **paths,

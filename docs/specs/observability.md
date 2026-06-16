@@ -183,7 +183,7 @@ These small attribute-only blocks were previously zero-duration spans; they are 
 
 | Event name | Attached to | Attributes |
 |------------|-------------|-----------|
-| `ctx_overflow_check` | active `co.turn` span | `ctx.input_tokens`, `ctx.max_ctx`, `ctx.ratio` |
+| `ctx_overflow_check` | active `co.turn` span | `ctx.input_tokens`, `ctx.max_context_tokens`, `ctx.ratio` |
 | `tool_budget.spill_tool_result` | active `tool` span | `tool.name`, `spill.threshold_chars`, `spill.content_chars`, `spill.fired`, `spill.forced`, `spill.savings_chars` |
 | `tool_budget.spill_largest_tool_results` | active model span | `request.threshold_tokens`, `request.tokens_before`, `request.tokens_after`, `request.spilled_count`, `request.spill_fired`, `request.skip_reason` (one of `""`, `below_threshold`, `no_candidates`, `all_spilled`, `fallback_to_summarize`) |
 | `provider_error` | active `co.turn` span | `http.status_code`, `error.body` (capped at 500 chars) |

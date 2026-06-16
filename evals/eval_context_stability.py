@@ -2,7 +2,7 @@
 
 Drives a long multi-turn conversation through a **text/reasoning-heavy phase**
 that accumulates near-incompressible content with no spillable ``ToolReturnPart``
-candidates, under the shared 32k eval window (``EVAL_MAX_CTX``, halved from the
+candidates, under the shared 32k eval window (``EVAL_MAX_CONTEXT_TOKENS``, halved from the
 system default to magnify pressure). A text middle has nothing for the layer-2
 spill to bite on, so the proactive compactor (``proactive_window_processor``) is
 the sole defense and the anti-thrash gate's no-op→growth path is reachable.
@@ -106,7 +106,7 @@ _PROACTIVE_SPAN_NAME = "compaction.proactive_check"
 
 # Number of text-heavy turns to drive. Each turn injects a large block of
 # near-incompressible content so the running history crosses the proactive
-# trigger (compaction_ratio x model_max_ctx) within a bounded turn count, then
+# trigger (compaction_ratio x model_max_context_tokens) within a bounded turn count, then
 # keeps pressure on it so multiple proactive passes fire. Bounded so the run is
 # a tractable real-LLM UAT smoke (not an endurance test).
 _NUM_TURNS = 10
@@ -374,8 +374,8 @@ async def case_cs_a_text_pressure_bounded(
     history: list[Any] = []
 
     # Each turn appends a near-incompressible block (see _high_entropy_block) so
-    # the running history climbs gradually toward the 0.50 x model_max_ctx ~= 16k
-    # trigger (model_max_ctx is the shared EVAL_MAX_CTX baseline, capped at 32k to
+    # the running history climbs gradually toward the 0.50 x model_max_context_tokens ~= 16k
+    # trigger (model_max_context_tokens is the shared EVAL_MAX_CONTEXT_TOKENS baseline, capped at 32k to
     # magnify pressure) and sustains pressure past it. Sized small enough that a
     # single turn's prefill stays a tractable warm-latency call even once the
     # context is near-trigger (large blocks balloon prefill past the per-turn

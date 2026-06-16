@@ -35,7 +35,7 @@ def _make_deps(
     tmp_path: Path,
     *,
     threshold_tokens: int,
-    model_max_ctx: int = 131_072,
+    model_max_context_tokens: int = 131_072,
 ) -> CoDeps:
     """Build a minimal CoDeps suitable for spill_largest_tool_results tests."""
     return CoDeps(
@@ -44,7 +44,7 @@ def _make_deps(
         session=CoSessionState(),
         runtime=CoRuntimeState(),
         tool_results_dir=tmp_path,
-        model_max_ctx=model_max_ctx,
+        model_max_context_tokens=model_max_context_tokens,
         spill_threshold_tokens=threshold_tokens,
     )
 

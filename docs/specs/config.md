@@ -121,17 +121,17 @@ for functional calls (compaction, memory extraction, dream merge) via `llm_call(
 ### Ollama context window probe
 
 `probe_ollama_model(host, model)` posts to `/api/show`, parses `parameters.num_ctx`. Called
-during `create_deps()` before `build_model()`. `max_ctx` is the contract pivot:
+during `create_deps()` before `build_model()`. `max_context_tokens` is the contract pivot:
 
-- **Floor check**: probed Modelfile `num_ctx` must be `>= max_ctx`; fails fast otherwise.
+- **Floor check**: probed Modelfile `num_ctx` must be `>= max_context_tokens`; fails fast otherwise.
 - **Ceiling check**: static `num_ctx` in `_LLM_SETTINGS` (injected per-request via
-  `extra_body["options"]["num_ctx"]`) must be `<= max_ctx`; fails fast otherwise.
+  `extra_body["options"]["num_ctx"]`) must be `<= max_context_tokens`; fails fast otherwise.
 
-The two checks use `max_ctx` as the shared reference and do not compare against each other.
-`deps.model_max_ctx` is always `config.llm.max_ctx` — the probed value is only used for the
+The two checks use `max_context_tokens` as the shared reference and do not compare against each other.
+`deps.model_max_context_tokens` is always `config.llm.max_context_tokens` — the probed value is only used for the
 floor validation, not as a dynamic injection value.
 
-Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is).
+Gemini: no probe; `deps.model_max_context_tokens = config.llm.max_context_tokens` (ceiling used as-is).
 
 
 ## 3. Config
@@ -161,7 +161,7 @@ Gemini: no probe; `deps.model_max_ctx = config.llm.max_ctx` (ceiling used as-is)
 | `llm.host` | `CO_LLM_HOST` | `"http://localhost:11433"` | Ollama server base URL (multi-instance router; `11434` bypasses to primary Ollama) |
 | `llm.model` | `CO_LLM_MODEL` | `"qwen3.6:35b-a3b-agentic"` (Ollama default) | Single model name for all tasks; falls back to `DEFAULT_LLM_MODELS[provider]` when unset |
 | `llm.judge_model` | — | `None` | Optional pinned-distinct judge model name. Used by phase-1 judge cases (W1.A coherence, W4.A skill body) AND all phase-2 behavioral evals. Inherits provider/host/api_key from `llm.*`; only the model name differs. When unset, the judge falls back to `llm.model` and `CaseResult.reason` carries `[judge_model_same_as_agent]` — a single-model regression can mask itself in the judge. Pick a model with comparable capability but a different family/training data than `model` when possible (e.g. `qwen` agent + `llama` judge) so single-family regressions don't mask. |
-| `llm.max_ctx` | — | `65536` | Ceiling on probed Ollama context window |
+| `llm.max_context_tokens` | — | `65536` | Ceiling on probed Ollama context window |
 | `llm.max_model_requests_per_turn` | `CO_LLM_MAX_MODEL_REQUESTS_PER_TURN` | `40` | Max LLM calls (ModelResponses) per user turn; `0` disables the cap. Doom-loop circuit breaker, not a work limit — see [core-loop.md](core-loop.md) §1 for the sizing rationale |
 | `llm.api_key` | `GEMINI_API_KEY` (gemini), else `CO_LLM_API_KEY` | `None` | Provider API key |
 
@@ -347,7 +347,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `co_cli/llm/call.py` | `llm_call()` — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
 | `co_cli/bootstrap/check.py` | `probe_ollama_model()` — `/api/show` probe for num_ctx + capabilities |
 | `co_cli/bootstrap/core.py` | `create_deps()` — calls `validate_config()`, `probe_ollama_model()`, `build_model()` at startup |
-| `co_cli/context/summarization.py` | `resolve_compaction_budget(deps)` — returns `deps.model_max_ctx` directly |
+| `co_cli/context/summarization.py` | `resolve_compaction_budget(deps)` — returns `deps.model_max_context_tokens` directly |
 
 
 ## 6. Test Gates
@@ -360,4 +360,4 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `llm_call()` threads message history | `tests/test_flow_llm_call.py` |
 | Provider/model availability reflected in capabilities surface | `tests/test_flow_capability_checks.py` |
 | Degradation state surfaces in capability checks | `tests/test_flow_capability_checks.py` |
-| Compaction budget resolves from `model_max_ctx` | `tests/test_flow_compaction_summarization.py` |
+| Compaction budget resolves from `model_max_context_tokens` | `tests/test_flow_compaction_summarization.py` |

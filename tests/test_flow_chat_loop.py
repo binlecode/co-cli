@@ -40,7 +40,7 @@ def _make_deps(tmp_path: Path) -> CoDeps:
         skills_dir=_BUNDLED_SKILLS_DIR,
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
-        model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
+        model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
     )
 
 

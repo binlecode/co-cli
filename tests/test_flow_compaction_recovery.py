@@ -24,14 +24,14 @@ from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
 
 
-def _make_ctx(model_max_ctx: int) -> RunContext:
+def _make_ctx(model_max_context_tokens: int) -> RunContext:
     """Build a real RunContext with a tunable budget and no model.
 
     ``deps.model = None`` (default) closes ``_summarization_gate_open`` so the
     summarize path falls back to a static marker — deterministic, no LLM call.
     """
     deps = CoDeps(shell=ShellBackend(), config=SETTINGS, session=CoSessionState())
-    deps.model_max_ctx = model_max_ctx
+    deps.model_max_context_tokens = model_max_context_tokens
     return RunContext(deps=deps, model=None, usage=RunUsage())
 
 
@@ -87,7 +87,7 @@ async def test_recover_strip_only_fits():
         pending,
     ]
 
-    ctx = _make_ctx(model_max_ctx=2000)
+    ctx = _make_ctx(model_max_context_tokens=2000)
     recovered = await recover_overflow_history(ctx, messages)
 
     assert recovered is not None
@@ -125,7 +125,7 @@ async def test_recover_strip_plus_summary_fits():
         msgs.append(ret)
     msgs.append(ModelRequest(parts=[UserPromptPart(content="pending request")]))
 
-    ctx = _make_ctx(model_max_ctx=50)
+    ctx = _make_ctx(model_max_context_tokens=50)
     recovered = await recover_overflow_history(ctx, msgs)
 
     assert recovered is not None
@@ -151,7 +151,7 @@ async def test_recover_terminal_when_planner_returns_none():
 
     # Tiny budget so even after strip the markers exceed; with one turn group,
     # plan_compaction_boundaries returns None (len(groups) < 2).
-    ctx = _make_ctx(model_max_ctx=1)
+    ctx = _make_ctx(model_max_context_tokens=1)
     recovered = await recover_overflow_history(ctx, messages)
 
     assert recovered is None
@@ -159,11 +159,11 @@ async def test_recover_terminal_when_planner_returns_none():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model_max_ctx",
+    "model_max_context_tokens",
     [3000, 30],
     ids=["strip_only_fits", "strip_plus_summary"],
 )
-async def test_recover_preserves_tool_call_id_pairing(model_max_ctx: int):
+async def test_recover_preserves_tool_call_id_pairing(model_max_context_tokens: int):
     """Both recovery paths preserve ToolCallPart/ToolReturnPart pairing by tool_call_id.
 
     Property: every call_id in a remaining ToolCallPart has a paired
@@ -180,7 +180,7 @@ async def test_recover_preserves_tool_call_id_pairing(model_max_ctx: int):
         msgs.append(ret)
     msgs.append(ModelRequest(parts=[UserPromptPart(content="pending")]))
 
-    ctx = _make_ctx(model_max_ctx=model_max_ctx)
+    ctx = _make_ctx(model_max_context_tokens=model_max_context_tokens)
     recovered = await recover_overflow_history(ctx, msgs)
     assert recovered is not None
 

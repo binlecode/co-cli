@@ -255,7 +255,7 @@ Spills any single tool result exceeding its per-tool threshold to `.co-cli/tool-
 
 Placeholder shape — multi-line `<persisted-output>` block carrying a size preamble, `tool:` / `file:` lines, a `file_read` retrieval hint, and a `preview:` of the first `TOOL_RESULT_PREVIEW_CHARS` (1,500) chars (newline-aware truncation past halfway point).
 
-**Why 4,000?** Derivation from context-budget arithmetic against the default Qwen3.6 model with `model_max_ctx = 65,536`.
+**Why 4,000?** Derivation from context-budget arithmetic against the default Qwen3.6 model with `model_max_context_tokens = 65,536`.
 
 | Reservation | Tokens | Chars (~4/tok) |
 |---|---|---|
@@ -265,7 +265,7 @@ Placeholder shape — multi-line `<persisted-output>` block carrying a size prea
 | Compaction marker headroom | ~2,000 | ~8,000 |
 | **Working budget** (history + tool calls + tool returns) | **~51,000** | **~204,000** |
 
-L2 spill fires at `spill_ratio × model_max_ctx = 0.5 × 65,536 ≈ 32,768 tokens ≈ 131,000 chars` of total request.
+L2 spill fires at `spill_ratio × model_max_context_tokens = 0.5 × 65,536 ≈ 32,768 tokens ≈ 131,000 chars` of total request.
 
 Design target: **~30 tool calls per turn** before any management layer fires — enough headroom for an exploratory agent loop without compacting every few rounds.
 
@@ -377,7 +377,7 @@ L2's per-request cap. Operates on the **full message list** at `ModelRequestNode
 
 **Span.** `tool_budget.spill_largest_tool_results` — emitted by tracer `co-cli.tool_budget` on every call. Attributes: `budget.context_window_tokens`, `request.threshold_tokens / tokens_before / local_tokens / static_floor_tokens / tail_start / tail_protected_count / tokens_after / candidates_count / spillable_count / spilled_count / spill_errors / spill_fired (bool) / skip_reason`.
 
-**Threshold.** `deps.spill_threshold_tokens = int(spill_ratio × model_max_ctx)`, computed once at bootstrap and cached on `CoDeps`. The `compaction.spill_ratio` knob is validated `≤ compaction_ratio` so post-spill aggregate falls below proactive's trigger and proactive fast-paths. (Runtime side effect on `current_request_tokens_estimate`: see §1.5.)
+**Threshold.** `deps.spill_threshold_tokens = int(spill_ratio × model_max_context_tokens)`, computed once at bootstrap and cached on `CoDeps`. The `compaction.spill_ratio` knob is validated `≤ compaction_ratio` so post-spill aggregate falls below proactive's trigger and proactive fast-paths. (Runtime side effect on `current_request_tokens_estimate`: see §1.5.)
 
 **Worked example.** Multi-batch turn: history contains three `ModelRequest`s carrying tool returns of 24K chars (≈ 6K tokens) each, plus a small head. Threshold = 6K tokens.
 
@@ -428,7 +428,7 @@ proactive_window_processor — full path
           marker, fall through to STEP 3; never skips the trim)
 
   ─ STEP 3: boundary planner (plan_compaction_boundaries) ────────
-    budget         = resolve_compaction_budget(deps)    (= model_max_ctx)
+    budget         = resolve_compaction_budget(deps)    (= model_max_context_tokens)
     head_end       = find_first_run_end(messages) + 1
     groups         = group_by_turn(messages)            e.g., [G0, G1, G2, G3]
     usable_trigger = max(0, int(compaction_ratio × budget) − static_floor_tokens)
@@ -508,7 +508,7 @@ All STEPs above live inside `proactive_window_processor` — the trigger gates (
 - `deps.static_floor_tokens` — bootstrap-measured floor: the full delivered instruction floor — `estimate_text_tokens(build_base_instructions(config))` + `estimate_text_tokens(build_toolset_guidance(tool_catalog))` + `estimate_text_tokens(load_soul_critique(personality))` (the three static builders the orchestrator joins) — plus ALWAYS-visibility tool-schema tokens (measured by `measure_always_schema_budget`). Immutable after bootstrap, like `spill_threshold_tokens`. Because it is measured live from config + toolset, it auto-updates when rules, guidance, critique, or tools change. The ALWAYS tool-schema half is a budgeted, ceiling-guarded floor — deferring an episodic tool shrinks it; see the [tool-schema prefill floor](tools.md#tool-schema-prefill-floor--the-always-vs-deferred-budget) in tools.md.
 - `effective_request_tokens(deps, messages)` — `static_floor_tokens + estimate_message_tokens(messages)`; the floor-inclusive realtime-local estimate that **is** the L2 and L3 trigger (no provider-reported floor), so the static prefill floor cannot undercount live size by one floor (see §1.5).
 
-**Budget resolution.** `resolve_compaction_budget(deps)` returns `deps.model_max_ctx` (Ollama probe capped by `config.llm.max_ctx`, set at bootstrap).
+**Budget resolution.** `resolve_compaction_budget(deps)` returns `deps.model_max_context_tokens` (Ollama probe capped by `config.llm.max_context_tokens`, set at bootstrap).
 
 **Boundary planner invariant.** `_MIN_RETAINED_TURN_GROUPS = 1` is non-configurable: the last turn group is retained unconditionally even when its tokens alone exceed the floor-aware `tail_budget`. Since `group_by_turn` splits at every `UserPromptPart`, this also guarantees `tail_start ≤ latest_user_idx` — active-user anchoring needs no explicit step. This unconditional retention is exactly what STEP 7's no-progress guard backstops: when the retained last group alone keeps `tokens_after ≥ token_count`, the proactive pass escalates to recovery rather than re-firing.
 
@@ -699,7 +699,7 @@ Peer parity: hermes embeds an inline `Use file tools to read the full file.` in 
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `llm.max_ctx` | — | `65536` | Ceiling on the Ollama-probed context window; `deps.model_max_ctx = min(probe, max_ctx)`. Used as the compaction budget. |
+| `llm.max_context_tokens` | — | `65536` | Ceiling on the Ollama-probed context window; `deps.model_max_context_tokens = min(probe, max_context_tokens)`. Used as the compaction budget. |
 
 **Compaction tuning** (`CompactionSettings` in `co_cli/config/compaction.py`):
 
@@ -753,7 +753,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `proactive_window_processor(ctx, messages) -> list[ModelMessage]` | `co_cli/context/compaction.py` | History processor — L3 LLM compaction at compaction_ratio with anti-thrash + circuit-breaker policy |
 | `recover_overflow_history(ctx, messages) -> list[ModelMessage] \| None` | `co_cli/context/compaction.py` | Async — HTTP 400/413 strip-then-summarize recovery; returns `None` if planner cannot find bounds |
 | `summarize_messages(deps, messages, focus=None, prior_summary=None) -> str` | `co_cli/context/summarization.py` | Async — LLM summarizer (no tools); structured `_SUMMARIZE_PROMPT` template |
-| `resolve_compaction_budget(deps) -> int` | `co_cli/context/summarization.py` | Returns `deps.model_max_ctx` (Ollama-probe-capped at bootstrap) |
+| `resolve_compaction_budget(deps) -> int` | `co_cli/context/summarization.py` | Returns `deps.model_max_context_tokens` (Ollama-probe-capped at bootstrap) |
 | `estimate_message_tokens(messages) -> int` | `co_cli/context/summarization.py` | `total_chars // CHARS_PER_TOKEN` over text parts and JSON-serialized `ToolCallPart.args` (message list only) |
 | `effective_request_tokens(deps, messages) -> int` | `co_cli/context/summarization.py` | `deps.static_floor_tokens + estimate_message_tokens(messages)` — floor-inclusive local estimate for the L2/L3 triggers |
 | `measure_always_schema_budget(deps) -> AlwaysSchemaBudget` | `co_cli/bootstrap/schema_budget.py` | Async — measures the ALWAYS-visibility tool-schema chars; shared by bootstrap (`static_floor_tokens`) and the schema-budget guard |
@@ -803,7 +803,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `co_cli/tools/tool_io.py` | `spill_if_oversized`: `spill_if_oversized`, `tool_output`, `check_tool_results_size`; `SPILL_THRESHOLD_CHARS`, `TOOL_RESULT_PREVIEW_CHARS`. |
 | `co_cli/tools/files/read.py` | `file_read` per-tool `spill_threshold_chars=math.inf` override (never spills). |
 | `co_cli/tools/tool_call_limit.py` | `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `MaxToolCallsExceededPayload`, `make_exceeded_payload`. |
-| `co_cli/config/llm.py` | `max_ctx` (Ollama probe ceiling). |
+| `co_cli/config/llm.py` | `max_context_tokens` (Ollama probe ceiling). |
 | `co_cli/context/assembly.py` | Prompt assembly: `build_base_instructions`. |
 | `co_cli/context/rules/` | Base system prompt rule files (identity, safety, reasoning, tool protocol, workflow). |
 | `evals/eval_compaction_proactive.py` | Proactive compaction end-to-end eval. |
@@ -848,7 +848,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `estimate_message_tokens` scales with content length; returns 0 for empty list | `tests/test_flow_compaction_summarization.py` |
 | `effective_request_tokens` adds `static_floor_tokens` to the message-list estimate; default floor (0) equals `estimate_message_tokens` | `tests/test_flow_compaction_summarization.py` |
 | `deps.static_floor_tokens` set at bootstrap from the measured full instruction floor (base + guidance + critique) + ALWAYS-schema floor (not a literal) | `tests/test_orchestrator_schema_budget.py` |
-| `resolve_compaction_budget` returns `deps.model_max_ctx` | `tests/test_flow_compaction_summarization.py` |
+| `resolve_compaction_budget` returns `deps.model_max_context_tokens` | `tests/test_flow_compaction_summarization.py` |
 | Summarizer from-scratch branch: returns non-empty structured text | `tests/test_flow_compaction_summarization.py` |
 | Prior summary fed via a dedicated `PRIOR SUMMARY` slot (above the opaque turns block) and excluded from the serialized turns; carry-forward clause emitted iff a prior summary is present | `tests/test_flow_compaction_proactive.py` |
 | `static_marker` / `summary_marker` proactive shape (has_tail=True): "preserved verbatim" in marker text | `tests/test_flow_compaction_summarization.py` |

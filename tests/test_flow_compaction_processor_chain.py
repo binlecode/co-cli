@@ -37,7 +37,9 @@ from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
 
-def _make_deps(tmp_path: Path, *, spill_threshold_tokens: int, model_max_ctx: int) -> CoDeps:
+def _make_deps(
+    tmp_path: Path, *, spill_threshold_tokens: int, model_max_context_tokens: int
+) -> CoDeps:
     """Real CoDeps with model=None (proactive uses static-marker fallback, no LLM)."""
     return CoDeps(
         shell=ShellBackend(),
@@ -45,7 +47,7 @@ def _make_deps(tmp_path: Path, *, spill_threshold_tokens: int, model_max_ctx: in
         session=CoSessionState(),
         runtime=CoRuntimeState(),
         tool_results_dir=tmp_path,
-        model_max_ctx=model_max_ctx,
+        model_max_context_tokens=model_max_context_tokens,
         spill_threshold_tokens=spill_threshold_tokens,
         model=None,
     )
@@ -128,7 +130,7 @@ async def test_spill_resolves_pressure_proactive_fast_paths(tmp_path: Path):
         _tool_call("shell_exec", "tc3"),
         _tool_return("shell_exec", "tc3", content),
     ]
-    deps = _make_deps(tmp_path, spill_threshold_tokens=400, model_max_ctx=800)
+    deps = _make_deps(tmp_path, spill_threshold_tokens=400, model_max_context_tokens=800)
 
     out = await _run_chain(_ctx(deps), messages)
 
@@ -158,7 +160,7 @@ async def test_text_pressure_unspillable_proactive_fires(tmp_path: Path):
         _assistant_text(big),
         _user("latest user turn"),
     ]
-    deps = _make_deps(tmp_path, spill_threshold_tokens=400, model_max_ctx=800)
+    deps = _make_deps(tmp_path, spill_threshold_tokens=400, model_max_context_tokens=800)
 
     out = await _run_chain(_ctx(deps), messages)
 

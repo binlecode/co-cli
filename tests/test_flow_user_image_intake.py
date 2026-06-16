@@ -67,7 +67,7 @@ def _make_deps(
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_path=sessions_dir / "2026-06-14T120000.000-abcd1234.jsonl"),
         agent_vision_capable=agent_vision_capable,
-        model_max_ctx=_CONFIG_NO_MCP.llm.max_ctx,
+        model_max_context_tokens=_CONFIG_NO_MCP.llm.max_context_tokens,
         workspace_dir=_REPO_ROOT,
         file_search_roots=[_REPO_ROOT],
         sessions_dir=sessions_dir,

@@ -305,7 +305,7 @@ Compaction behavior:
 - `proactive_window_processor()` gathers side-channel context via `gather_compaction_context()` (active session todos only — ≤10 items, capped at 1,500 chars; file paths and prior summaries are recoverable LLM-side and intentionally omitted; see [self-planning.md](self-planning.md)), then calls `summarize_messages()` inline with a structured template when compaction triggers
 - it compacts when token count exceeds `cfg.compaction_ratio` (0.50) of the budget
 - token count is `effective_request_tokens` — the floor-inclusive realtime-local estimate (`deps.static_floor_tokens + estimate_message_tokens()`, where the message estimate counts `ToolCallPart.args` and `(dict, list)` content); no provider-reported floor (peer-aligned with hermes/openclaw). Adding the bootstrap-measured static-instruction + ALWAYS-schema floor keeps the trigger from undercounting live size by one floor (see [compaction.md](compaction.md) §1.5)
-- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: returns `deps.model_max_ctx` directly (Ollama probe result capped by `llm.max_ctx`, set at bootstrap)
+- the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: returns `deps.model_max_context_tokens` directly (Ollama probe result capped by `llm.max_context_tokens`, set at bootstrap)
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
 - a circuit breaker (`deps.runtime.compaction_skip_count`) trips at `_COMPACTION_BREAKER_TRIP` (3) consecutive failures; tripped state uses static markers but probes the LLM once every `_COMPACTION_BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
@@ -336,7 +336,7 @@ Error matrix:
 Output-limit diagnostics happen only after a successful final run:
 
 1. if `latest_result.response.finish_reason == "length"`, show a truncation status message
-2. if `deps.model_max_ctx` is set, compare `latest_result.response.usage.input_tokens / deps.model_max_ctx` — the provider's real input count for the final request, re-sourced on demand from the last `ModelResponse` (not carried as a runtime status var)
+2. if `deps.model_max_context_tokens` is set, compare `latest_result.response.usage.input_tokens / deps.model_max_context_tokens` — the provider's real input count for the final request, re-sourced on demand from the last `ModelResponse` (not carried as a runtime status var)
 3. emit an overflow message when `ratio >= 1.0`, or a context-pressure warning when `ratio >= compaction.compaction_ratio` and proactive compaction has stalled (`consecutive_low_yield_proactive_compactions >= compaction.proactive_thrash_window`)
 
 Interrupt handling is conservative:

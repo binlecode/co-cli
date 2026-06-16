@@ -71,7 +71,7 @@ async def test_tool_error_emits_error_span_and_clears_stack(tmp_path: Path) -> N
         config=SETTINGS_NO_MCP,
         session=CoSessionState(),
         runtime=CoRuntimeState(),
-        model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
+        model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
     )
     ctx = RunContext(deps=deps, model=None, usage=RunUsage(), run_step=1)
     tool = (await routing.get_tools(ctx))["boom"]

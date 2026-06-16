@@ -129,12 +129,12 @@ def resolve_summary_budget(messages: list[ModelMessage]) -> int:
 def resolve_compaction_budget(deps: CoDeps) -> int:
     """Resolve the token budget used as the compaction trigger baseline.
 
-    Single source of truth — never None. ``deps.model_max_ctx`` is set unconditionally at
-    bootstrap (Ollama probe capped by max_ctx, with max_ctx fallback on probe failure or
+    Single source of truth — never None. ``deps.model_max_context_tokens`` is set unconditionally at
+    bootstrap (Ollama probe capped by max_context_tokens, with max_context_tokens fallback on probe failure or
     non-Ollama providers). The ratio multiplier is NOT applied here — callers apply their
     own trigger policy.
     """
-    return deps.model_max_ctx
+    return deps.model_max_context_tokens
 
 
 def effective_request_tokens(deps: CoDeps, messages: list[ModelMessage]) -> int:

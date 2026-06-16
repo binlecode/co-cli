@@ -52,12 +52,12 @@ def context_pct(deps: "CoDeps") -> float | None:
     schemas) is always resident — so a live session reports that baseline, never None.
     Shared by the footer snapshot and the /status report so the calc cannot drift.
     """
-    if deps.model_max_ctx <= 0:
+    if deps.model_max_context_tokens <= 0:
         return None
     estimate = deps.runtime.current_request_tokens_estimate
     if estimate is None:
         estimate = deps.static_floor_tokens
-    return estimate / deps.model_max_ctx
+    return estimate / deps.model_max_context_tokens
 
 
 @dataclass(frozen=True)

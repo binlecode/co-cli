@@ -251,7 +251,7 @@ def _inflation_target_messages(deps: Any) -> int:
     Starting N is 10 per the plan; the trigger depends on the configured
     ``compaction_ratio`` and the live prompt size. Compaction reads the
     realtime-local ``effective_request_tokens`` estimate against
-    ``compaction_ratio * model_max_ctx``. With default ``compaction_ratio=0.5``
+    ``compaction_ratio * model_max_context_tokens``. With default ``compaction_ratio=0.5``
     and a 32k context, a fresh agent on a warm 35B local emits ~10-15k prompt
     tokens per response, so 8-12 brief turns reliably crosses the threshold.
     The exact value is logged in ``CaseResult.reason`` for re-tuning.

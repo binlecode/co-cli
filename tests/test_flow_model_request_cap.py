@@ -74,7 +74,7 @@ def _make_capped_deps(max_model_requests: int) -> CoDeps:
         shell=ShellBackend(),
         config=config,
         session=CoSessionState(),
-        model_max_ctx=config.llm.max_ctx,
+        model_max_context_tokens=config.llm.max_context_tokens,
     )
 
 

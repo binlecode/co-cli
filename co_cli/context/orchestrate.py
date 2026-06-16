@@ -580,18 +580,18 @@ def _check_output_limits(
         )
     latest_input = latest_result.response.usage.input_tokens or 0
     if latest_input > 0:
-        ratio = latest_input / deps.model_max_ctx
+        ratio = latest_input / deps.model_max_context_tokens
         current_span().add_event(
             "ctx_overflow_check",
             {
                 "ctx.input_tokens": latest_input,
-                "ctx.max_ctx": deps.model_max_ctx,
+                "ctx.max_context_tokens": deps.model_max_context_tokens,
                 "ctx.ratio": ratio,
             },
         )
         if ratio >= 1.0:
             frontend.on_status(
-                f"Context limit reached ({latest_input:,} / {deps.model_max_ctx:,} tokens)"
+                f"Context limit reached ({latest_input:,} / {deps.model_max_context_tokens:,} tokens)"
                 " — prompt may have been truncated. Use /compact or /new."
             )
         elif ratio >= deps.config.compaction.compaction_ratio:
@@ -601,7 +601,7 @@ def _check_output_limits(
             thrash_count = deps.runtime.consecutive_low_yield_proactive_compactions
             if thrash_count >= deps.config.compaction.proactive_thrash_window:
                 frontend.on_status(
-                    f"Context {ratio:.0%} full ({latest_input:,} / {deps.model_max_ctx:,} tokens)."
+                    f"Context {ratio:.0%} full ({latest_input:,} / {deps.model_max_context_tokens:,} tokens)."
                     " Auto-compaction paused — try /compact for one more pass or /new for a fresh session."
                 )
 

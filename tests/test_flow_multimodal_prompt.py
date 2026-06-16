@@ -48,7 +48,7 @@ def _make_deps() -> CoDeps:
         config=_CONFIG_NO_MCP,
         session=CoSessionState(),
         agent_vision_capable=_AGENT_VISION_CAPABLE,
-        model_max_ctx=_CONFIG_NO_MCP.llm.max_ctx,
+        model_max_context_tokens=_CONFIG_NO_MCP.llm.max_context_tokens,
     )
 
 

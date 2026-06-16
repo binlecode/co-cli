@@ -111,7 +111,7 @@ def _make_routing_deps(tool_results_dir: Path) -> CoDeps:
         runtime=CoRuntimeState(),
         tool_results_dir=tool_results_dir,
         tool_catalog={"mcp_test_tool": mcp_info, "native_test_tool": native_info},
-        model_max_ctx=SETTINGS_NO_MCP.llm.max_ctx,
+        model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
     )
 
 

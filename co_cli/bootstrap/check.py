@@ -117,12 +117,12 @@ def probe_ollama_model(host: str, model: str) -> OllamaModelProbe:
 
 
 def validate_ollama_num_ctx(config: "Settings") -> None:
-    """Raise ValueError if the per-call num_ctx exceeds the configured max_ctx ceiling."""
+    """Raise ValueError if the per-call num_ctx exceeds the configured max_context_tokens ceiling."""
     required_num_ctx = config.llm.ollama_num_ctx()
-    if required_num_ctx is not None and required_num_ctx > config.llm.max_ctx:
+    if required_num_ctx is not None and required_num_ctx > config.llm.max_context_tokens:
         raise ValueError(
             f"Model {config.llm.model!r} requests num_ctx={required_num_ctx:,} per call "
-            f"but max_ctx={config.llm.max_ctx:,}. Raise max_ctx in settings or lower "
+            f"but max_context_tokens={config.llm.max_context_tokens:,}. Raise max_context_tokens in settings or lower "
             f"num_ctx in _LLM_SETTINGS."
         )
 

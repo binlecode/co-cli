@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.370]
+
+### Refactor: rename the context-window family `max_ctx` → `max_context_tokens`
+
+- **Config field + JSON key renamed `max_ctx` → `max_context_tokens`.** **Breaking config change (zero-backward-compat, no alias):** if your `~/.co-cli/settings.json` sets `"max_ctx"`, rename the key to `"max_context_tokens"` — the old key is no longer read. The value (default `65536`) and all ceiling/floor/compaction-budget behavior are byte-for-byte unchanged.
+- **Companion renames:** constant `DEFAULT_MAX_CTX` → `MAX_CONTEXT_TOKENS` (drops the `DEFAULT_` prefix — it names a control limit, not a fallback default); runtime `model_max_ctx` → `model_max_context_tokens`; eval settings `EVAL_MAX_CTX` → `EVAL_MAX_CONTEXT_TOKENS` and `eval_max_ctx()` → `eval_max_context_tokens()`.
+- **Telemetry key:** the span attribute `"ctx.max_ctx"` (`ctx_overflow_check` event) renames to `"ctx.max_context_tokens"`; external trace parsers keyed on the old string must update.
+- **Rationale:** the codebase names token quantities with a `_tokens` suffix (`spill_threshold_tokens`, `static_floor_tokens`, `peak_input_tokens`); `max_ctx` was the lone unit-less, abbreviation-laden outlier. `num_ctx` (Ollama's own API parameter) is a distinct concept and is untouched.
+- **Zero behavior change.** Pure identifier/key rename.
+
 ## [0.8.368]
 
 ### Refactor: tighten the turn-level model-request cap (90 → 40)

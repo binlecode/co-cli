@@ -36,7 +36,7 @@ def _make_deps() -> CoDeps:
         tool_catalog=_TOOL_INDEX,
         config=_CONFIG_NO_MCP,
         session=CoSessionState(),
-        model_max_ctx=_CONFIG_NO_MCP.llm.max_ctx,
+        model_max_context_tokens=_CONFIG_NO_MCP.llm.max_context_tokens,
     )
 
 

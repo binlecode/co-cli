@@ -66,7 +66,7 @@ def _resp(content: str) -> ModelResponse:
 
 
 def _tight_settings():
-    """Settings used with model_max_ctx=200 → budget=200, token_threshold≈130, tail_budget≈40.
+    """Settings used with model_max_context_tokens=200 → budget=200, token_threshold≈130, tail_budget≈40.
 
     Each message part uses 160 chars = 40 tokens. A 4-turn history (8 messages)
     totals 320 tokens >> threshold. The head-guard keeps only group[3] in the
@@ -121,7 +121,7 @@ async def test_processor_returns_messages_unchanged_when_below_threshold() -> No
 async def test_processor_applies_compaction_when_above_threshold() -> None:
     """Processor compacts and returns a shorter list when token count is above threshold.
 
-    Uses tight budget (max_ctx=200, token_threshold≈130) against a 4-turn history
+    Uses tight budget (max_context_tokens=200, token_threshold≈130) against a 4-turn history
     of ~320 tokens. Makes a real LLM summarizer call.
     Failure mode: above-threshold history is silently passed through → context
     window exhaustion, no proactive compaction ever fires.
@@ -131,7 +131,7 @@ async def test_processor_applies_compaction_when_above_threshold() -> None:
         model=_TIGHT_MODEL,
         config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=200,
+        model_max_context_tokens=200,
     )
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
     messages = _above_threshold_messages()
@@ -172,7 +172,7 @@ async def test_anti_thrash_gate_falls_back_to_static_marker() -> None:
         model=_TIGHT_MODEL,
         config=settings,
         session=CoSessionState(),
-        model_max_ctx=200,
+        model_max_context_tokens=200,
     )
     # Trip the anti-thrash gate to exactly the trip threshold.
     deps.runtime.consecutive_low_yield_proactive_compactions = (
@@ -218,7 +218,7 @@ async def test_anti_thrash_gate_falls_back_to_static_marker() -> None:
 async def test_floor_aware_trigger_fires_on_static_floor() -> None:
     """Trigger fires on the floor-inclusive realtime size, not the message list alone.
 
-    model_max_ctx=700 → threshold=350. The 4-turn history is ~320 message-only tokens (below
+    model_max_context_tokens=700 → threshold=350. The 4-turn history is ~320 message-only tokens (below
     threshold, so the floor-blind local would NOT fire), but the static prefill floor is real
     input. A floor-aware local sees static_floor + 320 > 350 and compacts. Without the floor,
     this history grows uncounted.
@@ -228,7 +228,7 @@ async def test_floor_aware_trigger_fires_on_static_floor() -> None:
         model=_TIGHT_MODEL,
         config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=700,
+        model_max_context_tokens=700,
         static_floor_tokens=100,
     )
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
@@ -256,7 +256,7 @@ async def test_small_realtime_no_compaction_despite_high_provider_usage() -> Non
         model=_TIGHT_MODEL,
         config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=700,
+        model_max_context_tokens=700,
         static_floor_tokens=100,
     )
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
@@ -366,7 +366,7 @@ async def test_no_progress_escalates_to_recovery_once(monkeypatch) -> None:
         model=None,
         config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=200,
+        model_max_context_tokens=200,
     )
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
     messages = _no_progress_messages()
@@ -394,7 +394,7 @@ async def test_no_progress_recovery_none_is_fail_open(monkeypatch) -> None:
         model=None,
         config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=200,
+        model_max_context_tokens=200,
     )
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
     messages = _no_progress_messages()
@@ -505,7 +505,7 @@ async def test_successful_compaction_resets_skip_count() -> None:
         model=_TIGHT_MODEL,
         config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=200,
+        model_max_context_tokens=200,
     )
     # Below trip threshold (< 3) so the gate remains open for the LLM call.
     deps.runtime.compaction_skip_count = 2
@@ -535,7 +535,7 @@ async def test_l3_fastpaths_after_l2_spill_fits_payload(tmp_path: Path) -> None:
     removed ``max(.., reported)`` floor used to read). No provider-reported floor
     keeps L3 firing after the spill already fit the payload.
 
-    model_max_ctx=4000 → L3 threshold=2000; spill_threshold=2000. One ~10k-token
+    model_max_context_tokens=4000 → L3 threshold=2000; spill_threshold=2000. One ~10k-token
     tool return spills to a ~400-token persisted-output stub, landing under both.
     """
     big_content = "data: " + "y" * 40_000
@@ -554,7 +554,7 @@ async def test_l3_fastpaths_after_l2_spill_fits_payload(tmp_path: Path) -> None:
         model=_TIGHT_MODEL,
         config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=4000,
+        model_max_context_tokens=4000,
         spill_threshold_tokens=2000,
         tool_results_dir=tmp_path,
     )
@@ -597,7 +597,7 @@ async def test_closing_callback_fires_compacted_on_success() -> None:
         model=_TIGHT_MODEL,
         config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=200,
+        model_max_context_tokens=200,
     )
     captured: list[str] = []
     deps.runtime.status_callback = captured.append
@@ -624,7 +624,7 @@ async def test_closing_callback_fires_unavailable_when_no_model() -> None:
         model=None,
         config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=200,
+        model_max_context_tokens=200,
     )
     captured: list[str] = []
     deps.runtime.status_callback = captured.append
@@ -649,7 +649,7 @@ async def test_closing_callback_fires_failed_when_breaker_tripped() -> None:
         model=_TIGHT_MODEL,
         config=_tight_settings(),
         session=CoSessionState(),
-        model_max_ctx=200,
+        model_max_context_tokens=200,
     )
     deps.runtime.compaction_skip_count = _COMPACTION_BREAKER_TRIP
     captured: list[str] = []

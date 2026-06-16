@@ -26,7 +26,7 @@ DEFAULT_LLM_MODELS: dict[str, str] = {
     "gemini": "gemini-3-flash-preview",
 }
 
-DEFAULT_MAX_CTX = 65_536
+MAX_CONTEXT_TOKENS = 65_536
 
 MAX_MODEL_REQUESTS_PER_TURN: int = 40
 
@@ -230,10 +230,10 @@ class LlmSettings(BaseModel):
     # api_key from this LlmSettings; only the model name differs. When None, the
     # judge falls back to ``model`` and CaseResult.reason carries [judge_model_same_as_agent].
     judge_model: str | None = Field(default=None)
-    # Contract pivot for Ollama context: static num_ctx in _LLM_SETTINGS must be <= max_ctx
-    # (ceiling check); probed Modelfile num_ctx must be >= max_ctx (floor check).
-    # Both checks use max_ctx as the reference — they do not compare against each other.
-    max_ctx: int = Field(default=DEFAULT_MAX_CTX)
+    # Contract pivot for Ollama context: static num_ctx in _LLM_SETTINGS must be <= max_context_tokens
+    # (ceiling check); probed Modelfile num_ctx must be >= max_context_tokens (floor check).
+    # Both checks use max_context_tokens as the reference — they do not compare against each other.
+    max_context_tokens: int = Field(default=MAX_CONTEXT_TOKENS)
     # 0 = disabled (no cap on model requests per turn).
     max_model_requests_per_turn: int = Field(default=MAX_MODEL_REQUESTS_PER_TURN, ge=0)
 
