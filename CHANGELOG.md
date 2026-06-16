@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.364]
+
+### Feature: `/reasoning` with no argument opens an interactive picker
+
+- Bare `/reasoning` now renders a list picker (off / collapsed / full) with the current mode pre-highlighted, navigable with up/down and selected with enter (escape/q cancels). Previously it only printed the current mode.
+- Falls back to printing the current mode when no interactive frontend is present. Explicit-token (`/reasoning full`) and `next`/`cycle` paths are unchanged.
+
 ## [0.8.363]
 
 ### Fix: bump pydantic-ai 1.81.0 → 1.92.0 to fix MCP cancel-scope crash

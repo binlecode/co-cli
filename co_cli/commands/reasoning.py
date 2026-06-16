@@ -13,6 +13,17 @@ async def _cmd_reasoning(ctx: CommandContext, args: str) -> None:
     """Show or set the reasoning display mode for this session."""
     token = args.strip().lower()
     if not token:
+        if ctx.frontend is not None:
+            choice = await ctx.frontend.prompt_selection(
+                _REASONING_CYCLE,
+                title="Reasoning display",
+                current=ctx.deps.session.reasoning_display,
+            )
+            if choice is None:
+                return None
+            ctx.deps.session.reasoning_display = choice
+            console.print(f"Reasoning display: [highlight]{choice}[/highlight]")
+            return None
         console.print(
             f"Reasoning display: [highlight]{ctx.deps.session.reasoning_display}[/highlight]"
         )
