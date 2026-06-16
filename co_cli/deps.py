@@ -148,6 +148,10 @@ class CoSessionState:
     session_approval_rules: list[SessionApprovalRule] = field(default_factory=list)
     session_todos: list[TodoItem] = field(default_factory=list)
     session_path: Path = field(default_factory=Path)
+    # Human-readable session label for the footer, derived from the first user message.
+    # None until the first turn persists (pre-first-message placeholder state); frozen
+    # once set so the label survives in-place compaction that may drop the first message.
+    session_title: str | None = None
     background_tasks: dict[str, BackgroundTaskState] = field(default_factory=dict)
     # User-preference: set at session start from CLI/config, mutable via /reasoning command.
     reasoning_display: str = DEFAULT_REASONING_DISPLAY

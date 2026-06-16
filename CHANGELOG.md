@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.372]
+
+### Feature: semantic session label in the status footer
+
+- **The status footer now shows a human-readable session label instead of the opaque 8-char id.** Before the first message the footer reads `(new session)`; once the first turn persists it flips to the first-user-message title (truncated to 30 chars with `…`), matching what the `/resume` picker already shows.
+- **`_extract_title` promoted to public `extract_title`** (`co_cli/session/browser.py`) so the live-session label reuses the same derivation as the picker.
+- **New `CoSessionState.session_title`** caches the label — set once after the first successful persist (frozen thereafter, so it survives in-place compaction that may drop the original first message), and populated immediately on `/resume` from the selected session's title.
+- **`(untitled)` is unchanged** — it remains the parse-failure fallback for a persisted session whose first user-prompt can't be read, distinct from the pre-first-message `(new session)` placeholder.
+
 ## [0.8.370]
 
 ### Refactor: rename the context-window family `max_ctx` → `max_context_tokens`

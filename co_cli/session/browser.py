@@ -29,7 +29,7 @@ class SessionSummary:
     created_at: datetime
 
 
-def _extract_title(path: Path, max_bytes: int = 4096) -> str:
+def extract_title(path: Path, max_bytes: int = 4096) -> str:
     """Extract the first user-prompt content from a JSONL transcript head."""
     try:
         raw = path.read_bytes()[:max_bytes].decode("utf-8", errors="replace")
@@ -81,7 +81,7 @@ def list_sessions(sessions_dir: Path) -> list[SessionSummary]:
         if parsed is None:
             continue
         session_id, created_at = parsed[0], parsed[1]
-        title = _extract_title(path)
+        title = extract_title(path)
         try:
             st = path.stat()
             last_modified = datetime.fromtimestamp(st.st_mtime, tz=UTC)

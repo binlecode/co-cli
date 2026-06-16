@@ -2,7 +2,6 @@
 
 import asyncio
 from collections import deque
-from pathlib import Path
 
 import pytest
 from tests._settings import SETTINGS_NO_MCP
@@ -336,11 +335,11 @@ def test_update_status_invalidates():
 # ── _build_status_snapshot ────────────────────────────────────────────────
 
 
-def test_build_status_snapshot_empty_session_path_produces_dash():
+def test_build_status_snapshot_no_title_shows_new_session_placeholder():
     deps = _deps()
-    assert deps.session.session_path == Path()
+    assert deps.session.session_title is None
     snapshot = _build_status_snapshot(deps, "idle", deque())
-    assert snapshot.session_label == "—"
+    assert snapshot.session_label == "(new session)"
 
 
 def test_build_status_snapshot_no_estimate_reports_static_floor_baseline():
@@ -357,11 +356,19 @@ def test_build_status_snapshot_zero_max_context_tokens_produces_none_context_pct
     assert snapshot.context_pct is None
 
 
-def test_build_status_snapshot_session_label_from_path_stem():
+def test_build_status_snapshot_session_label_from_title():
     deps = _deps()
-    deps.session.session_path = Path("/sessions/2026-05-01_a1b2c3d4.jsonl")
+    deps.session.session_title = "fix the resume picker"
     snapshot = _build_status_snapshot(deps, "idle", deque())
-    assert snapshot.session_label == "a1b2c3d4"
+    assert snapshot.session_label == "fix the resume picker"
+
+
+def test_build_status_snapshot_long_title_truncated_with_ellipsis():
+    deps = _deps()
+    deps.session.session_title = "x" * 60
+    snapshot = _build_status_snapshot(deps, "idle", deque())
+    assert snapshot.session_label.endswith("…")
+    assert len(snapshot.session_label) == 30
 
 
 def test_build_status_snapshot_context_pct_from_realtime_estimate():

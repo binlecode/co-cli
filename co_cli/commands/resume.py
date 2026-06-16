@@ -92,5 +92,6 @@ async def _cmd_resume(ctx: CommandContext, args: str) -> ReplaceTranscript | Non
         console.print("[dim]Could not load transcript (empty or too large).[/dim]")
         return None
     ctx.deps.session.session_path = selected.path
+    ctx.deps.session.session_title = selected.title
     ctx.deps.session.session_todos = _rehydrate_todos(messages)
     return ReplaceTranscript(history=messages)

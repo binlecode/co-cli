@@ -53,6 +53,7 @@ from co_cli.display.core import (
     set_theme,
 )
 from co_cli.observability.setup import setup_observability
+from co_cli.session.browser import extract_title
 from co_cli.session.persistence import persist_session_history
 from co_cli.session.usage import ORIGIN_SESSION, append_turn
 from co_cli.skills.lifecycle import cleanup_skill_run_state
@@ -137,6 +138,8 @@ async def _finalize_turn(
             history_compacted=deps.runtime.compaction_applied_this_turn,
         )
         deps.runtime.persisted_message_count = len(turn_result.messages)
+        if deps.session.session_title is None:
+            deps.session.session_title = extract_title(deps.session.session_path)
     except OSError as e:
         frontend.on_status(
             f"Session write failed — conversation may not be saved. Check disk space. ({e})"
@@ -503,13 +506,23 @@ def _queue_head_preview(queue: deque[str]) -> str | None:
     return head[: _QUEUE_PREVIEW_BUDGET - 1] + "…"
 
 
+_SESSION_LABEL_BUDGET = 30
+
+
+def _session_label(title: str | None) -> str:
+    """Footer label: a placeholder before the first message, else the truncated title."""
+    if title is None:
+        return "(new session)"
+    if len(title) <= _SESSION_LABEL_BUDGET:
+        return title
+    return title[: _SESSION_LABEL_BUDGET - 1] + "…"
+
+
 def _build_status_snapshot(
     deps: CoDeps, mode: Literal["idle", "active"], queue: deque[str]
 ) -> StatusSnapshot:
-    stem = deps.session.session_path.stem
-    session_label = stem[-8:] if stem else "—"
     return StatusSnapshot(
-        session_label=session_label,
+        session_label=_session_label(deps.session.session_title),
         mode=mode,
         context_pct=context_pct(deps),
         background_task_count=len(deps.session.background_tasks),
