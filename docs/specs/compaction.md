@@ -17,7 +17,7 @@ run_turn() (orchestrate.py:run_turn)
   ├── reset_for_turn()                # clears: status_callback, compaction_applied_this_turn,
   │                                   #          current_request_tokens_estimate
   └── while True:
-        await _execute_stream_segment(...)
+        await _execute_run(...)
           │
           ▼  pydantic-ai Agent.run_stream_events
           │

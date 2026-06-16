@@ -1,13 +1,13 @@
 """Stream rendering state machine — text/thinking buffering and flush policy.
 
-StreamRenderer owns all text/thinking buffer state for one stream segment.
-It is instantiated once per _execute_stream_segment() call and is not shared
-across segments or turns.
+StreamRenderer owns all text/thinking buffer state for one run.
+It is instantiated once per _execute_run() call and is not shared
+across runs or turns.
 
 Ownership contract:
 - append_text / append_thinking: accumulate content, throttle live renders at 20 FPS
 - flush_for_tool_output: commit all buffers before a tool surface renders
-- finish: commit remaining buffers at normal segment completion
+- finish: commit remaining buffers at normal run completion
 
 Reasoning display modes:
 - off: thinking stream is silently dropped
@@ -42,7 +42,7 @@ _TICK_INTERVAL = 1.0  # wall-clock repaint cadence for the live thinking counter
 
 
 class StreamRenderer:
-    """Text/thinking buffer state machine for one stream segment.
+    """Text/thinking buffer state machine for one run.
 
     Accepts a Frontend and emits display events to it. The renderer
     tracks whether visible text was streamed (streamed_text property), which
@@ -141,7 +141,7 @@ class StreamRenderer:
             self._ticker_task = None
 
     def close(self) -> None:
-        """Stop the live ticker — idempotent; called on segment teardown (all paths)."""
+        """Stop the live ticker — idempotent; called on run teardown (all paths)."""
         self._stop_ticker()
 
     def flush_for_tool_output(self) -> None:
@@ -151,9 +151,9 @@ class StreamRenderer:
         self._commit_text()
 
     def finish(self) -> bool:
-        """Commit remaining buffers at normal segment completion.
+        """Commit remaining buffers at normal run completion.
 
-        Returns streamed_text — True if visible text was emitted this segment.
+        Returns streamed_text — True if visible text was emitted this run.
         """
         if self._thinking_active or self._thinking_buffer:
             self._flush_thinking()

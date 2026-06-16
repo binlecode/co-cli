@@ -1,7 +1,7 @@
 """Span-tree emission via a real run_turn, plus the routing-wrapper error path.
 
 The agent/model/tool spans are emitted on the seams co owns after the capability
-removal: the agent span at the run call site (_execute_stream_segment), the chat
+removal: the agent span at the run call site (_execute_run), the chat
 span in SurrogateRecoveryModel, and the tool span in _CallSeamToolset. This proves
 the co tail / co trace tree is preserved at parity end-to-end.
 """

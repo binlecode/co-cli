@@ -265,7 +265,7 @@ def tool_output(
     return ToolReturn(return_value=display, metadata=metadata or None)
 
 
-# Shared type alias for Frontend.on_tool_complete, _run_stream_segment dispatch,
+# Shared type alias for Frontend.on_tool_complete, _execute_run dispatch,
 # and TerminalFrontend._render_tool_panel — one edit point if a new result type is added.
 ToolResultPayload = str | ToolReturn | None
 

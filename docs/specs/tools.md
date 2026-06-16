@@ -19,7 +19,7 @@ graph LR
     subgraph Orchestrator
         D -->|"toolset"| E["Orchestrator Agent"]
         E --> F["_CallSeamToolset.call_tool\ntool span + co.tool.*\nper-request cap\nMCP-result spill"]
-        F -->|"DeferredToolRequests"| G["Approval Loop\n_collect_deferred_tool_approvals\n+ resume segment"]
+        F -->|"DeferredToolRequests"| G["Approval Loop\n_collect_deferred_tool_approvals\n+ resume run"]
     end
 ```
 
@@ -235,7 +235,7 @@ tool_name in tool_catalog? ──► span ← co.tool.source, co.tool.requires_a
 pop span   (ERROR + re-raise if the tool raised)
 ```
 
-The consecutive-over-cap streak (`consecutive_tool_cap_violations`) increments immediately at the `(cap+1)`-th call and resets on the next request when the prior one behaved; the orchestrator finalizes the last request's reset at the segment boundary before the hard-stop check. See [core-loop.md](core-loop.md) for the hard-stop consumer.
+The consecutive-over-cap streak (`consecutive_tool_cap_violations`) increments immediately at the `(cap+1)`-th call and resets on the next request when the prior one behaved; the orchestrator finalizes the last request's reset at the run boundary before the hard-stop check. See [core-loop.md](core-loop.md) for the hard-stop consumer.
 
 ### Approval Loop
 
@@ -265,12 +265,12 @@ The consecutive-over-cap streak (`consecutive_tool_cap_violations`) increments i
                     │                           └─ always   ──► session rule
                     │           │
                     │           ▼
-                    │     resume segment(deferred_tool_results=approvals)
+                    │     resume run(deferred_tool_results=approvals)
                     │     [skips ModelRequestNode — no new model prompt]
                     └─────────────────────────────────────────────────────
 ```
 
-Resume segments skip `ModelRequestNode` — no new model prompt is sent just to execute approved tools.
+Resume runs skip `ModelRequestNode` — no new model prompt is sent just to execute approved tools.
 
 ### Concurrency Safety
 

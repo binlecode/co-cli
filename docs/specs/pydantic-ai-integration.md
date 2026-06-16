@@ -157,7 +157,7 @@ call_tool(name, args, ctx, tool):
     return result
 ```
 
-The cap streak feeds the orchestrator's hard-stop (`TOOL_CAP_HARD_STOP_CONSECUTIVE`); the segment boundary finalizes the last request's reset.
+The cap streak feeds the orchestrator's hard-stop (`TOOL_CAP_HARD_STOP_CONSECUTIVE`); the run boundary finalizes the last request's reset.
 
 ### 2.5 Agent build & run lifecycle — `agent/build.py`, `context/orchestrate.py`, `agent/run.py`
 
@@ -176,7 +176,7 @@ build_orchestrator(spec, deps) -> SessionAgent:          # SessionAgent = Agent[
     for per_turn in spec.per_turn_instructions: agent.instructions(per_turn)   # dynamic InstructionPart
 ```
 
-**Orchestrator run** (`run_turn` → `_execute_stream_segment`): streams via `async with agent.run_stream_events(...) as stream:` then `async for event in stream:` — the context-manager form guarantees stream cleanup on cancellation (required since 1.92; direct iteration is deprecated). Uses `usage_limits=UsageLimits(request_limit=None)` — **intentionally unbounded** (the human drives turn count). This is load-bearing: the SDK default `request_limit` is 50, so the explicit `None` is required, not ceremony. The sibling `metadata={"request_limit": None}` is observability only. Stream events (`PartStart/Delta/End`, `FunctionToolCall/ResultEvent`, `FinalResultEvent`, `AgentRunResultEvent`) drive rendering; the final `AgentRunResult.output` (str or `DeferredToolRequests`) drives the approval branch.
+**Orchestrator run** (`run_turn` → `_execute_run`): streams via `async with agent.run_stream_events(...) as stream:` then `async for event in stream:` — the context-manager form guarantees stream cleanup on cancellation (required since 1.92; direct iteration is deprecated). Uses `usage_limits=UsageLimits(request_limit=None)` — **intentionally unbounded** (the human drives turn count). This is load-bearing: the SDK default `request_limit` is 50, so the explicit `None` is required, not ceremony. The sibling `metadata={"request_limit": None}` is observability only. Stream events (`PartStart/Delta/End`, `FunctionToolCall/ResultEvent`, `FinalResultEvent`, `AgentRunResultEvent`) drive rendering; the final `AgentRunResult.output` (str or `DeferredToolRequests`) drives the approval branch.
 
 **Task agents** (`build_task_agent` + `run_standalone`): a fresh `FunctionToolset` (selected tools, all `requires_approval=False`) wrapped in its own `_CallSeamToolset` for span/cap/spill parity. `output_type = spec.output_type` (genuinely variable per spec — stays `Agent[CoDeps, Any]`). Run via `agent.run(prompt, usage_limits=UsageLimits(request_limit=budget))` — task agents keep a **real** request limit (unlike the orchestrator).
 
@@ -210,17 +210,17 @@ request_stream(...) (async context manager):
 co drives the entire approval loop; the SDK contributes the pause (`DeferredToolRequests` output), the resume payload shape (`DeferredToolResults`), and the decision carriers.
 
 ```
-segment result.output is DeferredToolRequests:
+run result.output is DeferredToolRequests:
     approvals = _collect_deferred_tool_approvals(result, deps, frontend):
         decisions = DeferredToolResults()
         for each pending call:
             if auto-approved or user approves: decisions.approvals[id] = True (or ToolApproved())
             if user denies:                    decisions.approvals[id] = ToolDenied(reason)
         return decisions
-    resume: _execute_stream_segment(..., deferred_tool_results=approvals)   # next segment executes the tools
+    resume: _execute_run(..., deferred_tool_results=approvals)   # next run executes the tools
 ```
 
-Approval decisions carry **no** tool execution — execution and `ToolReturnPart` output happen in the resumed segment. `QuestionRequired` (an `ApprovalRequired` subclass) carries `metadata={"questions": ...}`; clarify answers are threaded via `runtime.clarify_answers` (keyed by `tool_call_id`) rather than `ToolApproved.override_args`, to keep `user_answers` out of the model-facing schema.
+Approval decisions carry **no** tool execution — execution and `ToolReturnPart` output happen in the resumed run. `QuestionRequired` (an `ApprovalRequired` subclass) carries `metadata={"questions": ...}`; clarify answers are threaded via `runtime.clarify_answers` (keyed by `tool_call_id`) rather than `ToolApproved.override_args`, to keep `user_answers` out of the model-facing schema.
 
 ### 2.8 Message/part type system — `context/`, `observability/serialize.py`, `session/persistence.py`
 

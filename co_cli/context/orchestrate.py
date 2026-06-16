@@ -56,8 +56,8 @@ TurnOutcome = Literal["continue", "error"]
 
 logger = logging.getLogger(__name__)
 
-_LLM_SEGMENT_WARN_SECS: int = 90
-"""Slow-segment warning threshold."""
+_LLM_RUN_WARN_SECS: int = 90
+"""Slow-run warning threshold."""
 
 _LENGTH_RETRY_CEILING = 16_384
 """Max output tokens ceiling for length-continuation auto-retry. Doublings from 4096 → 8192 → 16384."""
@@ -68,7 +68,7 @@ _LENGTH_RETRY_BOOST = 2
 assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for retry to terminate"
 
 from co_cli.config.llm import cap_output_tokens
-from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
+from co_cli.context._timeouts import LLM_RUN_TIMEOUT_SECS
 from co_cli.context.compaction import is_context_overflow, recover_overflow_history
 from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt
@@ -107,8 +107,8 @@ class TurnResult:
     # usage is forwarded opaquely to span attributes.
     usage: Any = None
     streamed_text: bool = False
-    # Count of ModelResponses across all segments in this turn.
-    # Sourced from the per-segment accumulator on _TurnState; consumed by the
+    # Count of ModelResponses across all runs in this turn.
+    # Sourced from the per-run accumulator on _TurnState; consumed by the
     # post-turn skill-review hook to gate background firing.
     model_requests: int = 0
 
@@ -127,14 +127,14 @@ class _TurnState:
 
     Phase ownership:
       pre-turn (run_turn init):
-        current_input         — user text or None for approval-resume segments
+        current_input         — user text or None for approval-resume runs
         current_history       — REPL-owned message list at turn entry
         tool_reformat_budget  — app-level budget for 400 tool-call reformulation (not HTTP retry)
-      in-turn (per segment, updated by _execute_stream_segment / _run_approval_loop):
-        latest_result         — AgentRunResult from the most recent segment
-        latest_streamed_text  — whether the last segment streamed visible text
-        latest_usage          — usage from the most recent segment (payload for TurnResult)
-        tool_approval_decisions — deferred approvals to pass to the next segment resume
+      in-turn (per run, updated by _execute_run / _run_approval_loop):
+        latest_result         — AgentRunResult from the most recent run
+        latest_streamed_text  — whether the last run streamed visible text
+        latest_usage          — usage from the most recent run (payload for TurnResult)
+        tool_approval_decisions — deferred approvals to pass to the next run resume
       cross-turn (accumulates during the turn):
         outcome               — set on error exit; read by run_turn() return and span
         interrupted           — set on CancelledError; drives _build_interrupted_turn_result
@@ -150,7 +150,7 @@ class _TurnState:
     tool_reformat_budget: int = 2
     # Overflow recovery: one-shot flag — emergency compact attempted at most once per turn.
     overflow_recovery_attempted: bool = False
-    # in-turn (updated after each segment)
+    # in-turn (updated after each run)
     latest_result: SessionRunResult | None = None
     latest_streamed_text: bool = False
     # latest_usage: pydantic-ai RunUsage object. Kept Any: forwarded opaquely to
@@ -160,9 +160,9 @@ class _TurnState:
     # cross-turn outcome flags
     outcome: TurnOutcome = "continue"
     interrupted: bool = False
-    # Accumulator across all segments in this turn — counts every ModelResponse,
+    # Accumulator across all runs in this turn — counts every ModelResponse,
     # regardless of whether it contains tool calls. Compaction (which replaces
-    # current_history) does not reset this; the accumulator is segment-level state.
+    # current_history) does not reset this; the accumulator is run-level state.
     model_requests: int = 0
     # Set by _run_approval_loop when consecutive_tool_cap_violations crosses the threshold.
     # Read by run_turn to drive the hard-stop exit.
@@ -186,10 +186,10 @@ async def _collect_deferred_tool_approvals(
       - user denies                    → approvals.approvals[id] = ToolDenied(...)
 
     Returns a DeferredToolResults (ToolApprovalDecisions) object consumed by the
-    next _execute_stream_segment() call as deferred_tool_results=.
+    next _execute_run() call as deferred_tool_results=.
 
     Important: this payload carries approval decisions only. Actual tool execution
-    and ToolReturnPart output happen after the resumed segment completes.
+    and ToolReturnPart output happen after the resumed run completes.
     """
     output = result.output
     if not isinstance(output, DeferredToolRequests):
@@ -268,7 +268,7 @@ async def _collect_deferred_tool_approvals(
 
 
 # ---------------------------------------------------------------------------
-# _execute_stream_segment — run one segment and update _TurnState in-place
+# _execute_run — execute one run and update _TurnState in-place
 # ---------------------------------------------------------------------------
 
 
@@ -336,7 +336,7 @@ def _handle_stream_event(
     return None
 
 
-async def _execute_stream_segment(
+async def _execute_run(
     turn_state: _TurnState,
     agent: SessionAgent,
     deps: CoDeps,
@@ -344,11 +344,11 @@ async def _execute_stream_segment(
     frontend: Frontend,
     message_history: list[ModelMessage] | None = None,
 ) -> None:
-    """Run one stream segment and update turn state in-place.
+    """Execute one run and update turn state in-place.
 
     Uses ``message_history`` when provided (preflight-extended history from
     _run_model_preflight); falls back to turn_state.current_history for
-    approval-resume segments. Reads turn_state.current_input,
+    approval-resume runs. Reads turn_state.current_input,
     tool_approval_decisions, and latest_usage. After the call:
     - latest_result holds the AgentRunResult
     - latest_streamed_text reflects whether text was streamed
@@ -375,7 +375,7 @@ async def _execute_stream_segment(
     )
     try:
         try:
-            async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):
+            async with asyncio.timeout(LLM_RUN_TIMEOUT_SECS):
                 async with agent.run_stream_events(
                     turn_state.current_input,
                     deps=deps,
@@ -408,16 +408,14 @@ async def _execute_stream_segment(
         pop_span(status="ERROR", status_msg=str(exc))
         raise
     elapsed = time.monotonic() - _t0
-    logger.debug("LLM segment elapsed: %.1fs", elapsed)
-    if elapsed >= _LLM_SEGMENT_WARN_SECS:
-        logger.warning(
-            "LLM segment slow: %.1fs (warn threshold %ds)", elapsed, _LLM_SEGMENT_WARN_SECS
-        )
+    logger.debug("LLM run elapsed: %.1fs", elapsed)
+    if elapsed >= _LLM_RUN_WARN_SECS:
+        logger.warning("LLM run slow: %.1fs (warn threshold %ds)", elapsed, _LLM_RUN_WARN_SECS)
 
     if result is None:
-        pop_span(status="ERROR", status_msg="segment ended without AgentRunResultEvent")
+        pop_span(status="ERROR", status_msg="run ended without AgentRunResultEvent")
         raise RuntimeError(
-            "_execute_stream_segment: stream ended without AgentRunResultEvent — segment contract violated"
+            "_execute_run: stream ended without AgentRunResultEvent — run contract violated"
         )
     turn_state.latest_result = result
     turn_state.model_requests += sum(
@@ -438,8 +436,8 @@ async def _execute_stream_segment(
         },
     )
 
-    # Segment-boundary cap finalize (idempotent with the in-wrapper transition reset):
-    # if the last model request of this segment stayed within the cap, clear the streak
+    # Run-boundary cap finalize (idempotent with the in-wrapper transition reset):
+    # if the last model request of this run stayed within the cap, clear the streak
     # so the orchestrate.py hard-stop check sees only genuinely-consecutive violations.
     if deps.runtime.tool_calls_in_model_request <= MAX_TOOL_CALLS_PER_MODEL_REQUEST:
         deps.runtime.consecutive_tool_cap_violations = 0
@@ -452,10 +450,10 @@ async def _run_approval_loop(
     model_settings: ModelSettings | None,
     frontend: Frontend,
 ) -> None:
-    """Run approval-resume segments until no deferred tool requests remain.
+    """Run approval-resume runs until no deferred tool requests remain.
 
-    Each iteration: collect approvals → prepare resume → execute segment.
-    Resume segments run on the main agent directly — the SDK skips
+    Each iteration: collect approvals → prepare resume → execute run.
+    Resume runs run on the main agent directly — the SDK skips
     ModelRequestNode entirely on the deferred_tool_results path, so zero
     tokens are sent to the model regardless of which agent runs.
     Exits when latest_result.output is no longer DeferredToolRequests.
@@ -472,7 +470,7 @@ async def _run_approval_loop(
         turn_state.current_input = None
         turn_state.current_history = latest_result.all_messages()
         turn_state.tool_approval_decisions = approvals
-        await _execute_stream_segment(turn_state, agent, deps, model_settings, frontend)
+        await _execute_run(turn_state, agent, deps, model_settings, frontend)
         if deps.runtime.consecutive_tool_cap_violations >= TOOL_CAP_HARD_STOP_CONSECUTIVE:
             turn_state.tool_cap_hard_stop = True
             break
@@ -782,7 +780,7 @@ async def run_turn(
         active_settings: ModelSettings | None = model_settings
         while True:
             try:
-                await _execute_stream_segment(
+                await _execute_run(
                     turn_state,
                     agent,
                     deps,
@@ -866,8 +864,8 @@ async def run_turn(
         # Record the turn's FINAL cumulative usage exactly once, here at the sole
         # point that catches every return path (success, cap hard-stop, HTTP/API/
         # malformed errors, interrupt). RunUsage is cumulative within a turn — the
-        # orchestrator carries prior segments forward via run_stream_events(usage=...),
-        # so recording per-segment would double-count; recording latest_usage once
+        # orchestrator carries prior runs forward via run_stream_events(usage=...),
+        # so recording per-run would double-count; recording latest_usage once
         # does not. Forked subagent/summarizer tokens roll into the same accumulator
         # via their own once-per-run boundaries.
         if turn_state.latest_usage is not None:

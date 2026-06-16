@@ -155,7 +155,7 @@ class _CallSeamToolset(WrapperToolset[CoDeps]):
         # all tools of one assistant message share it. Immediate increment of the
         # consecutive-violation streak at the (cap+1)-th call, delayed reset on the
         # next request when the prior request stayed within the cap. The orchestrator
-        # finalizes the last request's reset at the segment boundary.
+        # finalizes the last request's reset at the run boundary.
         if ctx.run_step != runtime.tool_call_limit_run_step:
             if (
                 runtime.tool_call_limit_run_step != -1

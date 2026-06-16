@@ -7,6 +7,8 @@ For top-level architecture and startup sequencing, see [01-system.md](01-system.
 
 This doc describes one complete foreground turn, from prompt input to post-turn finalization.
 
+**Vocabulary — `turn ⊇ run ⊇ model request`.** A **turn** (one user message) contains one or more **runs**; a **run** (one `agent.run_stream_events()` call → one `AgentRunResult`) contains one or more model **requests** (one request/response exchange with the LLM). A turn spans multiple runs only at two boundaries — tool approval (a run ends with `DeferredToolRequests` and resumes in a fresh run) and length-continuation retry; a run spans multiple model requests whenever the model emits tool calls and the SDK loops to feed results back. This three-level containment is pydantic-ai's own model (see [pydantic-ai-integration.md](pydantic-ai-integration.md)).
+
 Cross-subsystem overview — one full turn crosses every subsystem; detailed behavior at each step lives in the linked specs:
 
 ```mermaid
@@ -59,8 +61,8 @@ flowchart TD
 
     F --> H
     H --> I["run_turn(): deps.runtime.reset_for_turn(); frontend.on_status('Co is thinking...'); init _TurnState; start co.turn span"]
-    I --> J["_execute_stream_segment() via agent.run_stream_events(...)"]
-    J --> K{"segment result / exception"}
+    I --> J["_execute_run() via agent.run_stream_events(...)"]
+    J --> K{"run result / exception"}
 
     K -->|DeferredToolRequests| L["_run_approval_loop()"]
     L --> M["set resume_tool_names; collect approvals; current_input=None; current_history=latest_result.all_messages(); deferred_tool_results=approvals"]
@@ -91,7 +93,7 @@ Execution owners:
 | `_chat_loop()` | prompt input, blank/exit handling, slash dispatch, transcript replacement, and skill-env setup |
 | `_run_foreground_turn()` | `run_turn()`, guaranteed skill-env cleanup, and post-turn finalization |
 | `run_turn()` | one orchestrated LLM turn, including status updates, retries, approval resumes, output checks, and interrupt handling |
-| `_execute_stream_segment()` | one `agent.run_stream_events(...)` segment plus frontend event delivery and usage merge |
+| `_execute_run()` | one `agent.run_stream_events(...)` run plus frontend event delivery and usage merge |
 | `_run_approval_loop()` | same-turn approval-resume cycle until output is no longer `DeferredToolRequests` |
 | `_finalize_turn()` | transcript persistence/branching and generic error banner |
 
@@ -113,23 +115,23 @@ Two boundary rules keep the loop legible:
 | `interrupted` | whether the turn ended due to interrupt/cancellation |
 | `messages` | next transcript snapshot for the REPL |
 | `output` | final model output object |
-| `usage` | latest segment usage payload |
+| `usage` | latest run usage payload |
 | `streamed_text` | whether visible assistant text was streamed live |
-| `model_requests` | count of `ModelResponse`s across all segments this turn |
+| `model_requests` | count of `ModelResponse`s across all runs this turn |
 
 Turn-scoped mutable state is explicit in `_TurnState`:
 
 | `_TurnState` field | Owner |
 | --- | --- |
 | `current_input` | current prompt text, or `None` for resume/retry hops |
-| `current_history` | message list for the next segment call |
+| `current_history` | message list for the next run call |
 | `tool_reformat_budget` | HTTP 400 reformulation budget (app logic, not transport retry) |
-| `latest_result` | most recent `AgentRunResult` from a completed segment |
-| `latest_streamed_text` | last-segment streaming signal |
-| `latest_usage` | last-segment usage payload |
+| `latest_result` | most recent `AgentRunResult` from a completed run |
+| `latest_streamed_text` | last-run streaming signal |
+| `latest_usage` | last-run usage payload |
 | `tool_approval_decisions` | `DeferredToolResults` consumed by the next resume hop |
 | `outcome` / `interrupted` | final turn outcome flags |
-| `model_requests` | `ModelResponse` count accumulator across all segments this turn |
+| `model_requests` | `ModelResponse` count accumulator across all runs this turn |
 | `tool_cap_hard_stop` | set by `_run_approval_loop` when consecutive violations reach threshold; drives hard-stop exit in `run_turn` |
 
 Cross-cutting turn state that lives on `deps.runtime` instead:
@@ -137,16 +139,16 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 | `deps.runtime` field | Why it is not in `_TurnState` |
 | --- | --- |
 | `current_request_tokens_estimate` | realtime-local request size written by `spill_largest_tool_results` each request; read for the status-line context % and compaction-trigger telemetry |
-| `safety_state` | updated by the `safety_prompt` dynamic instruction before each model-bound segment |
+| `safety_state` | updated by the `safety_prompt` dynamic instruction before each model-bound run |
 | `tool_progress_callback` | owned by `StreamRenderer` and active tool surfaces |
-| `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume segment; cleared after the loop exits; read by `_approval_resume_filter` |
+| `resume_tool_names` | set by `_run_approval_loop()` before each approval-resume run; cleared after the loop exits; read by `_approval_resume_filter` |
 | `compaction_skip_count` | cross-turn circuit breaker for inline compaction (>= 3 trips breaker; every 10 skips a probe is attempted) |
 | `active_skill_name` | cross-function skill dispatch marker cleared after the turn |
-| `consecutive_tool_cap_violations` | incremented by `_CallSeamToolset.call_tool` immediately at the `(cap+1)`-th call of a model request that exceeds `MAX_TOOL_CALLS_PER_MODEL_REQUEST`; reset on the next request when the prior one behaved, finalized at the segment boundary in `_execute_stream_segment`, and zeroed by `reset_for_turn()` |
+| `consecutive_tool_cap_violations` | incremented by `_CallSeamToolset.call_tool` immediately at the `(cap+1)`-th call of a model request that exceeds `MAX_TOOL_CALLS_PER_MODEL_REQUEST`; reset on the next request when the prior one behaved, finalized at the run boundary in `_execute_run`, and zeroed by `reset_for_turn()` |
 
-### 2.2 Stream Segment Contract
+### 2.2 Run Contract
 
-`_execute_stream_segment()` owns exactly one `agent.run_stream_events(...)` call.
+`_execute_run()` owns exactly one `agent.run_stream_events(...)` call.
 
 Inputs:
 
@@ -167,13 +169,13 @@ Per-event handling:
 | `FunctionToolResultEvent` | flush buffers, clear progress callback, render tool result panel when a `ToolReturnPart` exists |
 | `AgentRunResultEvent` | store the final `AgentRunResult` object |
 
-The event loop is wrapped in `asyncio.timeout(_LLM_SEGMENT_HANG_TIMEOUT_SECS)`. A `TimeoutError` from the guard propagates to `run_turn()`, which returns `TurnResult(outcome='error')` — no retry is attempted.
+The event loop is wrapped in `asyncio.timeout(LLM_RUN_TIMEOUT_SECS)`. A `TimeoutError` from the guard propagates to `run_turn()`, which returns `TurnResult(outcome='error')` — no retry is attempted.
 
 Normal-exit contract:
 
 1. `renderer.finish()` flushes remaining thinking/text buffers.
 2. `frontend.cleanup()` always runs in `finally`.
-3. `turn_state.latest_result` must be non-`None`, otherwise `_execute_stream_segment()` raises `RuntimeError`.
+3. `turn_state.latest_result` must be non-`None`, otherwise `_execute_run()` raises `RuntimeError`.
 4. `turn_state.latest_usage = result.usage()`
 5. `turn_state.tool_approval_decisions = None`
 
@@ -189,9 +191,9 @@ Reasoning display is purely a frontend concern:
 
 Approval deferral uses the native Pydantic-AI objects directly:
 
-- `DeferredToolRequests` pauses a segment on approval-gated tool calls
+- `DeferredToolRequests` pauses a run on approval-gated tool calls
 - `_collect_deferred_tool_approvals()` turns those pending calls into `DeferredToolResults`
-- `_run_approval_loop()` feeds that decision payload into the next segment
+- `_run_approval_loop()` feeds that decision payload into the next run
 
 Approval collection sequence (per pending call):
 
@@ -223,7 +225,7 @@ Approval subject scopes:
 Resume-loop behavior:
 
 ```text
-# run_turn() — before first segment
+# run_turn() — before first run
 # No explicit filter setup needed — _tool_visibility_filter hides DEFERRED
 # tools (until loaded via tool_view) and narrows on resume; no SDK loader.
 
@@ -236,7 +238,7 @@ while latest_result.output is DeferredToolRequests:
   current_input = None
   current_history = latest_result.all_messages()
   tool_approval_decisions = approvals
-  run next segment with main agent
+  execute next run with main agent
 clear deps.runtime.resume_tool_names
 ```
 
@@ -279,7 +281,7 @@ Processor roles:
 | `spill_largest_tool_results` | force-spills the largest unspilled `ToolReturnPart`s across the full message list when total tokens exceed `deps.spill_threshold_tokens`; the cheap (non-LLM) path that fires before `proactive_window_processor` |
 | `proactive_window_processor` | replaces the middle of long histories with an inline LLM summary (with context enrichment) or static marker (circuit-breaker fallback) |
 
-Preflight is called before every model-bound segment but not on approval-resume segments (SDK skips `ModelRequestNode` on resume, so preflight would inject into a non-model path). Preflight injections are ephemeral — they are not stored back to `turn_state.current_history`, so retry iterations always start from the clean history without accumulated injections.
+Preflight is called before every model-bound run but not on approval-resume runs (SDK skips `ModelRequestNode` on resume, so preflight would inject into a non-model path). Preflight injections are ephemeral — they are not stored back to `turn_state.current_history`, so retry iterations always start from the clean history without accumulated injections.
 
 Ordering rationale:
 
@@ -315,11 +317,11 @@ Error matrix:
 | HTTP 400 with reformat budget left (not context overflow) | append a reflection request describing the rejected tool call, set `current_input=None`, retry (app-level reformulation, not transport retry) |
 | HTTP 400 with budget exhausted, or other terminal HTTP errors | set `outcome='error'`; record `provider_error` span event (`http.status_code`, `error.body` capped at 500 chars) on the `co.turn` span; return `_build_error_turn_result()` |
 | `ModelAPIError` (network errors exhausted by SDK) | set `outcome='error'` and return `_build_error_turn_result()` |
-| `TimeoutError` (segment hang guard) | no retry; set `outcome='error'` and return `_build_error_turn_result()` |
+| `TimeoutError` (run hang guard) | no retry; set `outcome='error'` and return `_build_error_turn_result()` |
 | `UnexpectedModelBehavior` | no retry; surface as a user-facing status message, set `outcome='error'` and return `_build_error_turn_result()` |
 | `KeyboardInterrupt` / `CancelledError` | return `_build_interrupted_turn_result()` |
 
-Output-limit diagnostics happen only after a successful final segment:
+Output-limit diagnostics happen only after a successful final run:
 
 1. if `latest_result.response.finish_reason == "length"`, show a truncation status message
 2. if `deps.model_max_ctx` is set, compare `latest_result.response.usage.input_tokens / deps.model_max_ctx` — the provider's real input count for the final request, re-sourced on demand from the last `ModelResponse` (not carried as a runtime status var)
@@ -360,7 +362,7 @@ The foreground loop still matches the common 2026 CLI-agent shape more than it d
 | Common pattern | `co` today | Design read |
 | --- | --- | --- |
 | one owned foreground turn executor | `run_turn()` | aligned |
-| event-stream-driven rendering | `_execute_stream_segment()` + `StreamRenderer` | aligned |
+| event-stream-driven rendering | `_execute_run()` + `StreamRenderer` | aligned |
 | approvals outside most tool bodies | `_collect_deferred_tool_approvals()` / `_run_approval_loop()` | aligned |
 | command-specific shell trust boundary | shell tool classifies allow/deny/ask itself | aligned and strong |
 | error handling and interrupts owned by the loop | `run_turn()` | aligned |
@@ -391,7 +393,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async — single foreground-turn entrypoint; owns stream segments, approval resumes, retries, and interrupt handling |
+| `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async — single foreground-turn entrypoint; owns runs, approval resumes, retries, and interrupt handling |
 | `TurnResult` | `co_cli/context/orchestrate.py` | Frozen dataclass — `outcome` (`"continue"` / `"error"`), `interrupted`, `messages`, `output`, `usage`, `streamed_text` |
 | `_TurnState` | `co_cli/context/orchestrate.py` | Module-private mutable turn state; not exported |
 

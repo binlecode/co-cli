@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.366]
+
+### Refactor: drop the "segment" term — align co's vocabulary to pydantic-ai's "run"
+
+- **Vocabulary now `turn ⊇ run ⊇ model request`.** co's coined "segment" was a 1:1 synonym for pydantic-ai's native **run** (one `agent.run_stream_events()` → one `AgentRunResult`). Removed the redundant third noun so the orchestration model matches the SDK's own.
+- **Renames (zero-backward-compat, no aliases):** `_execute_stream_segment` → `_execute_run`; `LLM_SEGMENT_TIMEOUT_SECS` → `LLM_RUN_TIMEOUT_SECS`; `_LLM_SEGMENT_WARN_SECS` → `_LLM_RUN_WARN_SECS`; test `test_multi_segment_turn_records_final_usage_once` → `test_multi_run_turn_records_final_usage_once`. Run-sense comments, docstrings, and the 4 observability string literals (log/span/exception) swept to "run".
+- **Specs aligned:** added the canonical `turn ⊇ run ⊇ model request` hierarchy to `core-loop.md`, swept ~40 run-sense refs across 9 specs, and fixed a pre-existing drift (`core-loop.md` cited the non-existent `_LLM_SEGMENT_HANG_TIMEOUT_SECS`; now `LLM_RUN_TIMEOUT_SECS`).
+- **Zero behavior change.** Pure rename; constant values unchanged (120s / 90s). The three unrelated "segment" meanings (SIGSEGV, tool-name `_`-split, compaction text-split) left intact.
+
 ## [0.8.364]
 
 ### Feature: `/reasoning` with no argument opens an interactive picker

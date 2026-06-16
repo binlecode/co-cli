@@ -179,7 +179,7 @@ async def test_clarify_resume_returns_answers_as_tool_output() -> None:
     a RetryPromptPart and the answers never reach the model. The deps-injection design
     (bare ToolApproved + runtime.clarify_answers) preserves the original args, so the
     tool re-runs approved and emits a clean ToolReturnPart. This drives the real two-
-    segment deferred flow through the production clarify tool, no LLM.
+    run deferred flow through the production clarify tool, no LLM.
     """
     tool_call_id = "clarify-resume"
     call_count = {"n": 0}
@@ -206,7 +206,7 @@ async def test_clarify_resume_returns_answers_as_tool_output() -> None:
     agent.tool(clarify)
     deps = _fresh_deps()
 
-    # Segment 1: model calls clarify → QuestionRequired → deferred approval request.
+    # Run 1: model calls clarify → QuestionRequired → deferred approval request.
     result = await agent.run("ask me", deps=deps)
     assert isinstance(result.output, DeferredToolRequests)
     assert [c.tool_name for c in result.output.approvals] == ["clarify"]
@@ -216,7 +216,7 @@ async def test_clarify_resume_returns_answers_as_tool_output() -> None:
     approvals = DeferredToolResults()
     approvals.approvals[tool_call_id] = ToolApproved()
 
-    # Segment 2: resume must run the tool body and return the answers as output.
+    # Run 2: resume must run the tool body and return the answers as output.
     result2 = await agent.run(
         message_history=result.all_messages(),
         deps=deps,

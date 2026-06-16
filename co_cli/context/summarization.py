@@ -27,7 +27,7 @@ from pydantic_ai.messages import (
 
 from co_cli.config.llm import cap_output_tokens
 from co_cli.config.observability import redact_text
-from co_cli.context._timeouts import LLM_SEGMENT_TIMEOUT_SECS
+from co_cli.context._timeouts import LLM_RUN_TIMEOUT_SECS
 from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.llm.call import llm_call
@@ -409,9 +409,9 @@ async def summarize_messages(
         )
     else:
         user_message = f"TURNS TO SUMMARIZE:\n{serialized}"
-    # Needed only for the /compact command path, which has no outer segment timeout.
-    # On the proactive path the segment timeout already caps this call.
-    async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):
+    # Needed only for the /compact command path, which has no outer run timeout.
+    # On the proactive path the run timeout already caps this call.
+    async with asyncio.timeout(LLM_RUN_TIMEOUT_SECS):
         return await llm_call(
             deps,
             user_message,

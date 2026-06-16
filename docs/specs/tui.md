@@ -35,7 +35,7 @@ flowchart TD
 | Slash-command registry and dispatch | `co_cli/commands/` | `dispatch`, `BUILTIN_COMMANDS`, `SlashCommand`, `CommandContext`, `SlashOutcome` variants |
 | Frontend contract + terminal implementation | `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `render_to_ansi`, `StatusSnapshot`, `console` |
 | No-op frontend for evals/tests | `co_cli/display/headless.py` | `HeadlessFrontend` — full protocol implementation, stores `last_status_snapshot` |
-| Per-segment streaming buffer | `co_cli/display/stream_renderer.py` | `StreamRenderer` — text/thinking buffering and flush policy |
+| Per-run streaming buffer | `co_cli/display/stream_renderer.py` | `StreamRenderer` — text/thinking buffering and flush policy |
 
 A single `prompt_toolkit.Application` owns the inline terminal. Rich is demoted to a stateless
 renderable→ANSI bridge (`render_to_ansi`): committed output is printed to scrollback via
@@ -223,7 +223,7 @@ Usage:
 - `/reasoning off|collapsed|full` — set directly
 
 The mode is stored on `deps.session.reasoning_display` (a `CoSessionState` field, default
-`"collapsed"`). It is read by `_execute_stream_segment()` at stream start via
+`"collapsed"`). It is read by `_execute_run()` at stream start via
 `StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)`. Changes take
 effect on the next turn; any in-flight stream uses the mode it started with. Delegation agent
 turns inherit the mode via `fork_deps()`, which copies `base.session.reasoning_display` into the
@@ -269,7 +269,7 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 | `render_to_ansi(renderable, *, width) -> str` | `co_cli/display/core.py` | The sole Rich renderable→ANSI-string primitive; stateless, width supplied by the caller |
 | `console`, `set_theme(name)`, `PROMPT_CHAR` | `co_cli/display/core.py` | Shared console instance, theme switcher, prompt glyph |
 | `build_repl_app(...)`, `build_key_bindings(...)`, `_ReplRuntime` | `co_cli/display/_app.py` | Inline-REPL Application factory, Esc/Ctrl+C/Ctrl+D key bindings, and the single turn-state holder — holds the turn-task reference and the input `queue` |
-| `StreamRenderer(frontend, reasoning_display)` | `co_cli/display/stream_renderer.py` | Per-segment text/thinking buffering and flush policy |
+| `StreamRenderer(frontend, reasoning_display)` | `co_cli/display/stream_renderer.py` | Per-run text/thinking buffering and flush policy |
 | `QuestionPrompt(question, options, multiple)` | `co_cli/display/core.py` | Clarify-path prompt for tool-issued questions |
 | `StatusSnapshot(session_label, mode, context_pct, background_task_count, approval_count, queue_depth=0, queue_head_preview=None)` | `co_cli/display/core.py` | Typed contract for bottom-toolbar footer content; pushed via `update_status` (which repaints via `_invalidate`); when `queue_depth > 0`, renders `{n} queued: "<preview>"` between `mode` and `ctx`; omitted at 0 |
 | `TerminalFrontend.render_footer_toolbar()` | `co_cli/display/core.py` | Plain-text footer string consumed by the toolbar `Window` in the Application layout |
@@ -314,7 +314,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 | `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `render_to_ansi`, `StatusSnapshot`, `QuestionPrompt`, `console`, `set_theme`, `PROMPT_CHAR` |
 | `co_cli/display/_app.py` | `build_repl_app`, `build_key_bindings`, `_ReplRuntime` — the single-owner inline-REPL Application factory |
 | `co_cli/display/headless.py` | `HeadlessFrontend` — full `Frontend` protocol implementation for evals and tests |
-| `co_cli/display/stream_renderer.py` | `StreamRenderer` — text/thinking buffering and flush policy per segment |
+| `co_cli/display/stream_renderer.py` | `StreamRenderer` — text/thinking buffering and flush policy per run |
 | `co_cli/deps.py` | `CoSessionState` (user-preference + tool-visible state), `CoRuntimeState` (orchestration state) |
 | `co_cli/config/core.py` | `VALID_REASONING_DISPLAY_MODES`, `DEFAULT_REASONING_DISPLAY`, mode constants |
 | `co_cli/skills/skill_types.py` | `SkillInfo` — skill metadata including body, env vars, invocability flags |

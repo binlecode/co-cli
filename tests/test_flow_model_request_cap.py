@@ -83,18 +83,18 @@ def _make_capped_deps(max_model_requests: int) -> CoDeps:
 #
 # Strategy: build a stub agent with one approval-required tool. The model
 # returns that tool call twice (model requests 1 and 2), triggering the approval
-# loop to run two resume segments. On the third model call, it returns text.
+# loop to run two resume runs. On the third model call, it returns text.
 # With max_model_requests_per_turn=3, the cap fires after the approval loop.
 # ---------------------------------------------------------------------------
 
 
 def _make_model_request_cap_agent() -> Agent:
-    """Agent that accumulates 3 model requests via approval-loop resume segments.
+    """Agent that accumulates 3 model requests via approval-loop resume runs.
 
     Protocol:
-      model call 1 — yield approval-required tool call (initial segment)
-      model call 2 — yield approval-required tool call (resume segment 1)
-      model call 3 — yield text "done" (resume segment 2)
+      model call 1 — yield approval-required tool call (initial run)
+      model call 2 — yield approval-required tool call (resume run 1)
+      model call 3 — yield text "done" (resume run 2)
 
     Total = 3 ModelResponse messages.  With max_model_requests_per_turn=3, the cap
     fires after _run_approval_loop returns without the hard-stop being set.
@@ -131,7 +131,7 @@ async def test_model_request_cap_fires_after_approval_loop() -> None:
     """run_turn with max_model_requests_per_turn=3 must stop after 3 model requests.
 
     The stub model returns approval-required tool calls twice, driving two
-    approval-resume segments. After model request 3 (resume segment 2's final
+    approval-resume runs. After model request 3 (resume run 2's final
     model call), the cap fires before the turn can return successfully.
     """
     deps = _make_capped_deps(max_model_requests=3)
@@ -158,8 +158,8 @@ async def test_model_request_cap_fires_after_approval_loop() -> None:
 # ---------------------------------------------------------------------------
 # Integration (c): tool-call-cap hard-stop via run_turn
 #
-# Strategy: one approval-required tool (initial segment), then 3 rounds of
-# MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1 noop calls in the resume segment.
+# Strategy: one approval-required tool (initial run), then 3 rounds of
+# MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1 noop calls in the resume run.
 # Each over-cap round increments the streak in the routing wrapper.  After 3
 # consecutive violations, _run_approval_loop sets tool_cap_hard_stop and breaks.
 # ---------------------------------------------------------------------------
@@ -169,7 +169,7 @@ def _make_hard_stop_agent() -> Agent:
     """Agent that causes 3 consecutive tool-cap violations inside the approval loop.
 
     Protocol:
-      model call 1 — approval-required call (initial segment → DeferredToolRequests)
+      model call 1 — approval-required call (initial run → DeferredToolRequests)
       model calls 2-4 — each streams MAX_TOOL_CALLS_PER_MODEL_REQUEST+1 noop calls
                         (one over cap → violation each round)
       model call 5+  — stream text "done"
@@ -221,8 +221,8 @@ async def test_hard_stop_fires_after_consecutive_violations() -> None:
     """run_turn must return outcome='error' with hard-stop status after 3 consecutive violations.
 
     Flow:
-      initial segment — model streams approval-required tool → DeferredToolRequests
-      resume segment  — 3 rounds of MAX_TOOL_CALLS_PER_MODEL_REQUEST+1 noop calls trigger
+      initial run — model streams approval-required tool → DeferredToolRequests
+      resume run  — 3 rounds of MAX_TOOL_CALLS_PER_MODEL_REQUEST+1 noop calls trigger
                         3 consecutive tool-cap violations → _run_approval_loop hard-stops
       _check_turn_caps → outcome='error', status 'Tool-call cap exceeded'
     """
@@ -248,12 +248,12 @@ def _make_over_then_under_cap_agent() -> Agent:
     """Agent: one over-cap request followed by an under-cap request, then text.
 
     Protocol:
-      model call 1 — approval-required call (initial segment → DeferredToolRequests)
+      model call 1 — approval-required call (initial run → DeferredToolRequests)
       model call 2 — MAX_TOOL_CALLS_PER_MODEL_REQUEST+1 noop calls (one over cap)
       model call 3 — exactly 1 noop call (under cap → request behaves)
       model call 4 — text "done"
 
-    The under-cap final tool request must reset the streak at the segment boundary,
+    The under-cap final tool request must reset the streak at the run boundary,
     so the hard-stop never fires and the turn completes normally.
     """
     call_count = {"n": 0}
@@ -299,7 +299,7 @@ def _make_over_then_under_cap_agent() -> Agent:
 async def test_under_cap_request_after_over_cap_does_not_hard_stop() -> None:
     """A single over-cap request followed by an under-cap one must NOT hard-stop.
 
-    Proves per-request granularity: the streak is finalized to 0 at the segment
+    Proves per-request granularity: the streak is finalized to 0 at the run
     boundary because the last tool-issuing request stayed within the cap.
     """
     deps = _make_capped_deps(max_model_requests=90)

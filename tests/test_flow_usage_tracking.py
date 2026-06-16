@@ -63,9 +63,9 @@ def _ledger_lines(path: Path) -> list[dict]:
 def _make_approval_then_text_agent(approval_requests: int) -> Agent:
     """Agent that issues ``approval_requests`` approval-tool calls, then text.
 
-    Each approval call ends a segment with DeferredToolRequests; the approval loop
+    Each approval call ends a run with DeferredToolRequests; the approval loop
     resumes for the next. Drives ``approval_requests + 1`` model requests across as
-    many segments, with cumulative RunUsage carried forward between them.
+    many runs, with cumulative RunUsage carried forward between them.
     """
     call_count = {"n": 0}
 
@@ -95,9 +95,9 @@ def _make_approval_then_text_agent(approval_requests: int) -> Agent:
 
 
 @pytest.mark.asyncio
-async def test_multi_segment_turn_records_final_usage_once(tmp_path: Path) -> None:
-    """A 2-segment approval-resume turn records the turn's FINAL cumulative usage
-    once. Because RunUsage is cumulative, recording per-segment would push the
+async def test_multi_run_turn_records_final_usage_once(tmp_path: Path) -> None:
+    """A 2-run approval-resume turn records the turn's FINAL cumulative usage
+    once. Because RunUsage is cumulative, recording per-run would push the
     accumulator above the final usage — so accumulator == turn.usage proves no
     double-count."""
     deps = _make_deps(tmp_path)

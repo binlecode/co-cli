@@ -69,7 +69,7 @@ def test_last_turn_group_always_retained_even_over_tail_budget() -> None:
     """Last turn group lands in tail even when its token count alone exceeds tail_budget.
 
     Failure mode: last user turn silently dropped from context → model loses
-    the current request on the next segment.
+    the current request on the next run.
     """
     large_content = "x" * 2000  # ~500 tokens at 4 chars/token
     # budget=100, tail_fraction=0.4 → tail_budget=40; last turn is ~500 >> 40

@@ -170,7 +170,7 @@ async def test_deny_emits_no_side_effect(co_home: Path, tmp_path: Path) -> None:
     async def stream_fn(
         messages: list[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str | DeltaToolCalls]:
-        # Model call 1: emit the approval-gated delete (initial segment →
+        # Model call 1: emit the approval-gated delete (initial run →
         # DeferredToolRequests). After the denial resumes, model call 2 closes
         # the turn with text.
         call_count["n"] += 1

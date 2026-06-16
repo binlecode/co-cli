@@ -55,7 +55,7 @@ async def test_length_retry_completes_truncated_noreason_response() -> None:
     Ollama ignores max_completion_tokens (pydantic-ai's mapping of max_tokens) but honors
     max_tokens injected via extra_body (the openai client merges extra_body at the request
     root). Constrain output to 80 tokens — well below any reasonable essay response —
-    so the first segment is reliably truncated regardless of model verbosity. The retry
+    so the first run is reliably truncated regardless of model verbosity. The retry
     doubles max_tokens each pass (80→160→320→…) until the model completes.
 
     Asserts the turn succeeds and history shows ≥2 ModelResponse entries.
@@ -88,7 +88,7 @@ async def test_length_retry_completes_truncated_noreason_response() -> None:
     assert turn.outcome == "continue"
     model_responses = [m for m in turn.messages if isinstance(m, ModelResponse)]
     assert len(model_responses) >= 2, (
-        f"expected at least one length-retry segment; "
+        f"expected at least one length-retry run; "
         f"got {len(model_responses)} ModelResponse(s) in history"
     )
 
