@@ -514,7 +514,7 @@ class TerminalFrontend:
         for idx, name in enumerate(self._selection_items):
             marker = " *" if name == self._selection_current else ""
             if idx == self._selection_index:
-                lines.append(Text(f"❯ {name}{marker}", style="accent"))
+                lines.append(Text(f"▸ {name}{marker}", style="accent"))
             else:
                 lines.append(Text(f"  {name}{marker}"))
         return Group(*lines)
