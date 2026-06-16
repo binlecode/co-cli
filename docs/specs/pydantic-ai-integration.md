@@ -2,7 +2,7 @@
 
 How `co-cli` consumes the **pydantic-ai** SDK: the integration surface, the seams where co wraps or extends the SDK, and the processing logic at each seam. This is a cross-cutting runtime spec — it documents how the shipped agent uses the SDK, not how the SDK is built. Component-owned behavior (the turn loop, compaction, prompt assembly) lives in its own spec; this doc owns the *contract with the SDK*.
 
-**Pinned version:** `pydantic-ai==1.81.0` (`pyproject.toml`). co is a deep structural consumer — version bumps must be validated against every seam below.
+**Pinned version:** `pydantic-ai==1.92.0` (`pyproject.toml`). co is a deep structural consumer — version bumps must be validated against every seam below.
 
 **Integration philosophy:** co owns the *policy*; the SDK provides the *plumbing*. Tool deferral, approval decisions, the per-call cap, MCP-result spill, JSON repair, surrogate sanitization, and schema-budget accounting are all co-implemented around SDK primitives. The SDK contributes the agent graph, message/part types, toolset composition, the model-request transport, and the pause/resume mechanics for deferred tools. Where co diverges from an SDK feature (e.g. `defer_loading`/`search_tools`), the divergence is deliberate and documented in §7.
 
@@ -169,14 +169,14 @@ build_orchestrator(spec, deps) -> SessionAgent:          # SessionAgent = Agent[
           deps_type = CoDeps,
           instructions = join(spec.static_instruction_builders(deps)),
           model_settings = deps.model.settings,
-          retries = config.tool_retries,
+          tool_retries = config.tool_retries,
           output_type = [str, DeferredToolRequests],      # fixed union — drives approval pause
           history_processors = spec.history_processors,
           toolsets = [deps.toolset])                       # the assembled _CallSeamToolset
     for per_turn in spec.per_turn_instructions: agent.instructions(per_turn)   # dynamic InstructionPart
 ```
 
-**Orchestrator run** (`run_turn` → `_execute_stream_segment`): streams via `agent.run_stream_events(...)` with `usage_limits=UsageLimits(request_limit=None)` — **intentionally unbounded** (the human drives turn count). This is load-bearing: the SDK default `request_limit` is 50, so the explicit `None` is required, not ceremony. The sibling `metadata={"request_limit": None}` is observability only. Stream events (`PartStart/Delta/End`, `FunctionToolCall/ResultEvent`, `FinalResultEvent`, `AgentRunResultEvent`) drive rendering; the final `AgentRunResult.output` (str or `DeferredToolRequests`) drives the approval branch.
+**Orchestrator run** (`run_turn` → `_execute_stream_segment`): streams via `async with agent.run_stream_events(...) as stream:` then `async for event in stream:` — the context-manager form guarantees stream cleanup on cancellation (required since 1.92; direct iteration is deprecated). Uses `usage_limits=UsageLimits(request_limit=None)` — **intentionally unbounded** (the human drives turn count). This is load-bearing: the SDK default `request_limit` is 50, so the explicit `None` is required, not ceremony. The sibling `metadata={"request_limit": None}` is observability only. Stream events (`PartStart/Delta/End`, `FunctionToolCall/ResultEvent`, `FinalResultEvent`, `AgentRunResultEvent`) drive rendering; the final `AgentRunResult.output` (str or `DeferredToolRequests`) drives the approval branch.
 
 **Task agents** (`build_task_agent` + `run_standalone`): a fresh `FunctionToolset` (selected tools, all `requires_approval=False`) wrapped in its own `_CallSeamToolset` for span/cap/spill parity. `output_type = spec.output_type` (genuinely variable per spec — stays `Agent[CoDeps, Any]`). Run via `agent.run(prompt, usage_limits=UsageLimits(request_limit=budget))` — task agents keep a **real** request limit (unlike the orchestrator).
 
@@ -278,7 +278,7 @@ discover_mcp_tools: connect all servers concurrently; list_tools(); register nam
 | `llm.provider` / `llm.model` / `llm.host` / `llm.api_key` | `config/llm.py` | Selects `OpenAIChatModel`+`OllamaProvider` vs `GoogleModel`+`GoogleProvider`; sets `repair_tool_args` |
 | `llm.judge_model` | `config/llm.py` | Builds a distinct judge model handle |
 | reasoning/noreason `ModelSettings` | `config/llm.py` | `LlmModel.settings` / `.settings_noreason` |
-| `tool_retries` | `config/core.py` | `Agent(retries=…)` and per-tool `ModelRetry` budget |
+| `tool_retries` | `config/core.py` | `Agent(tool_retries=…)` and per-tool `ModelRetry` budget |
 | `mcp_servers` (url / command / args / env / prefix / approval / timeout) | `config/core.py` | `_build_mcp_toolsets` transport + `approval_required()` + discovery timeout |
 | HTTP timeouts (connect/read/write/pool) | `llm/factory.py` constants | Ollama `httpx.AsyncClient` |
 | `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `TOOL_CAP_HARD_STOP_CONSECUTIVE` | `tools/tool_call_limit.py` | Call-seam cap + hard-stop |
@@ -350,7 +350,7 @@ Package-private (not callable cross-package, listed for the map): `_CallSeamTool
 
 ## 7. SDK Coupling Boundaries (do-not-touch rationale)
 
-Load-bearing, intentional, or rejected couplings — recorded so they are not re-litigated. (Verified against `pydantic-ai==1.81.0`.)
+Load-bearing, intentional, or rejected couplings — recorded so they are not re-litigated. (Verified against `pydantic-ai==1.92.0`.)
 
 **Intentional divergences from SDK features:**
 - **No `defer_loading`/`search_tools`.** co owns deferral via `_tool_visibility_filter` + `tool_view` + `runtime.revealed_tools`, uniformly over native and MCP tools (§2.3). Registering tools with `defer_loading=True` would re-engage the SDK keyword loader and split the mechanism.

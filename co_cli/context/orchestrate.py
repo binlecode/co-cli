@@ -376,7 +376,7 @@ async def _execute_stream_segment(
     try:
         try:
             async with asyncio.timeout(LLM_SEGMENT_TIMEOUT_SECS):
-                async for event in agent.run_stream_events(
+                async with agent.run_stream_events(
                     turn_state.current_input,
                     deps=deps,
                     message_history=message_history
@@ -395,10 +395,11 @@ async def _execute_stream_segment(
                         "role": "orchestrator",
                         "request_limit": None,
                     },
-                ):
-                    event_result = _handle_stream_event(event, renderer, deps, frontend)
-                    if event_result is not None:
-                        result = event_result
+                ) as stream:
+                    async for event in stream:
+                        event_result = _handle_stream_event(event, renderer, deps, frontend)
+                        if event_result is not None:
+                            result = event_result
                 renderer.finish()
         finally:
             renderer.close()

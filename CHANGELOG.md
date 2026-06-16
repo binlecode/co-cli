@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.363]
+
+### Fix: bump pydantic-ai 1.81.0 → 1.92.0 to fix MCP cancel-scope crash
+
+- **Cancel-scope crash fixed.** Turns cancelled mid-stream (Esc / timeout) while a stdio MCP server was connected intermittently raised `RuntimeError: Attempted to exit a cancel scope that isn't the current task's current cancel scope`. pydantic-ai v1.92.0 ships the upstream fixes (PR #4514 — MCP session in a dedicated task; PR #5313 — streaming-response cleanup on cancellation). Verified across 6 consecutive `eval_multistep_plan` runs with zero occurrences.
+- **API drift adapted (zero-backward-compat, no shims).** `Agent(retries=…)` → `Agent(tool_retries=…)` (PR #5075 deprecation) at `agent/build.py`; `run_stream_events` direct iteration → `async with … as stream:` at `context/orchestrate.py` (the context-manager form is the cancellation-cleanup mechanism).
+- **Transitive deps held at floor** (mcp 1.26.0, anyio 4.12.1) — no downgrade.
+
 ## [0.8.362]
 
 ### Refactor: reasoning display — drop `summary`, adopt `Thinking… Ns` / `Thought for Ns`

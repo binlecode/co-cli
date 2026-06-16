@@ -43,7 +43,7 @@ def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> SessionAgent:
         deps_type=CoDeps,
         instructions=static_instructions,
         model_settings=llm_settings,
-        retries=deps.config.tool_retries,
+        tool_retries=deps.config.tool_retries,
         output_type=[str, DeferredToolRequests],
         history_processors=list(spec.history_processors),
         toolsets=[deps.toolset],
@@ -102,7 +102,7 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
         deps_type=CoDeps,
         output_type=spec.output_type,
         instructions=instructions,
-        retries=deps.config.tool_retries,
+        tool_retries=deps.config.tool_retries,
         toolsets=[_CallSeamToolset(toolset)],
     )
     return agent
