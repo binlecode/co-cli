@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.8.374]
+
+Batch of ad-hoc cross-team work.
+
+### Fix: atomic session-transcript writes
+
+- `append_messages` / `_write_messages` now create the JSONL file via `os.open(..., 0o600)` with `O_CREAT|O_APPEND` / `O_CREAT|O_TRUNC`, so the file is created with owner-only permissions atomically — closing the window where the transcript was briefly group/other-readable between `open()` and the old `chmod(0o600)`.
+
+### Feature: status glyphs in list commands
+
+- `/filescope`, `/skills`, `/tools` now render aligned tables with status glyphs: ✓/✗ root existence, ✓/✗ user-invocable vs model-only, ●/○ always-loaded vs deferred tool visibility.
+
+### Docs
+
+- Added the code regulation model (Tier-0/1/2 enforcement; prose rules re-litigated ≥3× must graduate to fitness functions or retire) and the clarity-by-subtraction ruleset to `.agent_docs/review.md`; wired `clean-tests` and `review-impl` skills to it.
+- Synced `tools.md` (drop removed `requires_config` gate; `check_fn` sole per-turn gate; `approval` → `is_approval_required`) and `code-conventions.md` (IndexStore transaction) to current code.
+
 ## [0.8.372]
 
 ### Feature: semantic session label in the status footer

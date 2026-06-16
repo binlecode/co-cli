@@ -11,6 +11,7 @@ No TTL on transcripts — permanent until user deletes manually.
 """
 
 import logging
+import os
 from pathlib import Path
 
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
@@ -26,21 +27,23 @@ def append_messages(path: Path, messages: list[ModelMessage]) -> None:
     if not messages:
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        for msg in messages:
-            line = ModelMessagesTypeAdapter.dump_json([msg])
-            f.write(line.decode("utf-8") + "\n")
-    path.chmod(0o600)
+    payload = "".join(
+        ModelMessagesTypeAdapter.dump_json([msg]).decode("utf-8") + "\n" for msg in messages
+    )
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        f.write(payload)
 
 
 def _write_messages(path: Path, messages: list[ModelMessage]) -> None:
     """Overwrite the transcript file with the given messages."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for msg in messages:
-            line = ModelMessagesTypeAdapter.dump_json([msg])
-            f.write(line.decode("utf-8") + "\n")
-    path.chmod(0o600)
+    payload = "".join(
+        ModelMessagesTypeAdapter.dump_json([msg]).decode("utf-8") + "\n" for msg in messages
+    )
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(payload)
 
 
 def persist_session_history(
