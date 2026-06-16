@@ -20,12 +20,14 @@ def _cmd_skills_list(ctx: CommandContext) -> None:
     if not ctx.deps.skill_catalog:
         console.print("[dim]No skills loaded.[/dim]")
         return
-    table = make_table("Name", "Description", "User-Invocable")
-    for skill in ctx.deps.skill_catalog.values():
+    console.print("[dim]✓ user-invocable   ✗ model-only[/dim]")
+    table = make_table("Invocable", "Index", "Name", "Description")
+    for i, skill in enumerate(ctx.deps.skill_catalog.values()):
         table.add_row(
+            "[success]✓[/success]" if skill.user_invocable else "[dim]✗[/dim]",
+            f"[accent]{i + 1}.[/accent]",
             skill.name,
             skill.description or "",
-            "✓" if skill.user_invocable else "✗",
         )
     console.print(table)
 
