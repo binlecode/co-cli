@@ -107,6 +107,10 @@ Two **objective** detectors find bloat without reading. Run them only on **pure-
 
 What these **do not** catch: a low-criticality test can have unique coverage *and* kill unique mutants (a distinct-but-trivial branch). Mechanical signals detect noise and subsumption; the **Criticality gate** is still the only filter for real-but-low-value tests. Treat all three as candidate-generators — the deletion test and same-branch proof decide.
 
+### 0g — Graduation to fitness functions (close the loop)
+
+This skill is a Tier-1 enforcer (prose rules applied by hand). Per the Code Regulation Model in `.agent_docs/review.md`, a hand-applied rule that recurs is a signal to **graduate the mechanically-checkable subset to a Tier-2 fitness function** so it stops re-accreting between runs. While scanning, flag any *grep-decidable, absolute* violation class that you are deleting yet again — the prime candidates: Rule 1 (mock/patch ban), Rule 7 (backward-compat imports in tests), and the `test_flow_*` file-naming policy. For each, record a **Graduation candidate** in the summary (rule + current violation count + whether it would land green or needs a baseline-and-ratchet DEBT allowlist). Do not author the gate inside this run — surface it; authoring is a separate plan task. This is what converts "delete the same class for the 26th time" into "delete it once, then a test keeps it dead."
+
 ---
 
 ## Pass 1 — Per-test audit
@@ -303,6 +307,7 @@ Zero-coverage surfaces backfilled: N — [list]
 Coverage depth gaps fixed: N — [list]
 Coverage gaps remaining: N — [list with waivers]
 Separate-cleanup candidates: N — [list]
+Graduation candidates (Tier-2 fitness functions): N — [rule + violation count + lands-green or needs-allowlist]
 LLM non-determinism events: N — [test + run count]
 New/modified tests: N passed, 0 failed
 Suite: N passed, 0 failed (or: skipped per policy)

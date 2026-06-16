@@ -58,7 +58,7 @@ Any violation is a blocking finding. Carry into findings list.
 
 ### Per-task evidence (parallel subagents)
 
-Spawn **one subagent per `✓ DONE` task** in parallel. Declare tools: `Read, Bash, Grep`. Each subagent receives the task description, `done_when`, `files:` list, and the Engineering Rules section from CLAUDE.md.
+Spawn **one subagent per `✓ DONE` task** in parallel. Declare tools: `Read, Bash, Grep`. Each subagent receives the task description, `done_when`, `files:` list, the Engineering Rules section from CLAUDE.md, **and the full text of `.agent_docs/review.md`** — read it once in the orchestrator and pass it by value into every subagent prompt so the rules are guaranteed present in each reviewer's context (do not pass a bare file pointer).
 
 Each subagent runs:
 
@@ -92,6 +92,8 @@ Check every file listed in `files:` against CLAUDE.md's Engineering Rules. Each 
 - **API shape**: parameter order, return types, signature width — consistent with existing callers and peer public APIs
 - **Modular structure**: logic placed in the wrong module or layer; cohesion/coupling violations
 - **Anti-patterns**: module-level mutable state (global state); speculative abstractions (helpers or wrappers with a single caller)
+
+- **Clarity by subtraction**: apply the full ruleset in `.agent_docs/review.md` (delete one-sided members; collapse redundant same-lifecycle state; flatten wrapper bags; module home = owning domain; underscore visibility both directions; no import-time side effects; flags only after success; renames are hard and total). Flag any violation introduced or left by the change as blocking.
 
 Each subagent returns a structured findings list: task ID, requirement or rule, verdict (pass/fail), file:line evidence for every entry.
 
