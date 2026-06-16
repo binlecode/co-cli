@@ -37,9 +37,9 @@ See `docs/specs/01-system.md` for architecture, `CoDeps`, capability surface, an
 
 ### Memory and Session
 
-Five operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability), **memory** (long-term declarative memory items: user preferences, rules, articles, notes), and **session** (past conversation transcripts; FTS5 chunk-cited on recall).
+Five operational tiers: **doctrine** (canon, soul seed, mindsets — auto-injected via the personality system; never queryable), **tools** (callable primitives), **skills** (procedural capability), **memory** (long-term declarative memory items: user preferences, rules, articles, notes), and **session** (past conversation transcripts; ripgrep line-cited on recall).
 
-Storage: flat `~/.co-cli/memory/*.md` files with YAML frontmatter for memory items; JSONL transcripts in `~/.co-cli/sessions/`; FTS5 (BM25) search in `~/.co-cli/co-cli-search.db` indexed by the shared `IndexStore` infrastructure facade (memory + session + canon, source-discriminated). Canon is indexed there for personality auto-injection but never returned by any model-callable tool. Skills are discovered via the `<available_skills>` manifest injected into the static prompt.
+Storage: flat `~/.co-cli/memory/*.md` files with YAML frontmatter for memory items; JSONL transcripts in `~/.co-cli/sessions/`; FTS5 (BM25) search in `~/.co-cli/co-cli-search.db` indexed by the shared `IndexStore` infrastructure facade (memory + canon, source-discriminated). Sessions are NOT indexed — `session_search` is lexical ripgrep over the raw JSONL files. Canon is indexed there for personality auto-injection but never returned by any model-callable tool. Skills are discovered via the `<available_skills>` manifest injected into the static prompt.
 
 Architecture: `co_cli/index/` (infrastructure facade — `IndexStore` public; retrieval, embedding, providers private) sits below two domain modules `co_cli/memory/` (`MemoryStore` — kinds, decay, dream) and `co_cli/session/` (`SessionStore` — transcripts, append-only). Tool surface at `co_cli/tools/memory/` (`memory_search`, `memory_view`, `memory_manage`) and `co_cli/tools/session/` (`session_search`, `session_view`).
 
