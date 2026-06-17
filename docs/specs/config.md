@@ -183,8 +183,6 @@ user-configurable — they live in `_LLM_SETTINGS` keyed by provider/model/mode.
 | `memory.rerank_score_floor` | `CO_MEMORY_RERANK_SCORE_FLOOR` | `0.2` | Min TEI reranker score to keep a reranked hit (unbounded range) |
 | `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | Token size per memory chunk |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Token overlap between chunks |
-| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | Minimum item age before decay eligibility |
-| `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | Recent-recall window that protects an aged item from decay |
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for write-time dedup and daemon merge |
 
 ### Compaction (`compaction.*`)

@@ -61,12 +61,15 @@ class MemoryStore:
     def sync_dir(
         self,
         memory_dir: Path,
-        glob: str = "**/*.md",
+        glob: str = "*.md",
     ) -> int:
         """Incrementally index a directory of memory artifacts.
 
         Hash-skip per file; removes stale entries for deleted files.
         Returns the number of files newly indexed (or re-indexed).
+
+        Default glob is top-level ``*.md`` only — mirroring ``load_memory_items``
+        so ``_archive/`` is never traversed and archived items stay out of the index.
         """
         if not memory_dir.exists():
             return 0
@@ -152,7 +155,7 @@ class MemoryStore:
     def remove(self, path: Path) -> None:
         self._index.remove(MEMORY_SOURCE, str(path))
 
-    def rebuild(self, memory_dir: Path, glob: str = "**/*.md") -> int:
+    def rebuild(self, memory_dir: Path, glob: str = "*.md") -> int:
         """Wipe all memory rows and re-index from scratch."""
         self._index.rebuild_source(MEMORY_SOURCE)
         return self.sync_dir(memory_dir, glob)

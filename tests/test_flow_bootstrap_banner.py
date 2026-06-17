@@ -43,6 +43,23 @@ def test_grep_backend_omits_counts() -> None:
     assert "sessions:" not in result
 
 
+def test_memory_count_over_tripwire_renders_yellow_warning() -> None:
+    """Active count past MEMORY_ITEM_COUNT_WARN flags the count yellow (warn-only)."""
+    from co_cli.config.memory import MEMORY_ITEM_COUNT_WARN
+
+    result = build_memory_line(
+        backend="hybrid",
+        backend_label="hybrid",
+        memory_degradation=None,
+        memory_count=MEMORY_ITEM_COUNT_WARN + 1,
+        session_count=3,
+    )
+    assert (
+        f"[yellow]⚠ memory: {MEMORY_ITEM_COUNT_WARN + 1} (over count tripwire)[/yellow]" in result
+    )
+    assert "sessions: 3" in result
+
+
 def _render(deps: CoDeps) -> str:
     """Render the banner at a forced-wide width (so a long path never wraps) and
     flatten the rich Panel (drop borders, collapse whitespace) so assertions are

@@ -135,10 +135,36 @@ def test_fts5_search_finds_indexed_entry(tmp_path: Path) -> None:
     memory = MemoryStore(index=index, config=config)
     try:
         memory.sync_dir(memory_dir)
-        results = index.search("Finch robot", sources=[MEMORY_SOURCE], limit=5)
+        results, _ = index.search("Finch robot", sources=[MEMORY_SOURCE], limit=5)
         assert len(results) > 0, "FTS5 search returned no results for a synced artifact"
         assert results[0].path == str(expected_path), (
             f"expected result path {expected_path!s}, got {results[0].path!r}"
         )
+    finally:
+        index.close()
+
+
+def test_rebuild_excludes_archived_items(tmp_path: Path) -> None:
+    """rebuild indexes top-level items only — _archive/ is never traversed.
+
+    Archived items (merge-originals, explicit forgets) are soft-deleted under
+    _archive/. They must stay out of the index so recall never resurfaces them.
+    Failure mode: a glob that recursed into _archive/ re-indexed archived files.
+    """
+    memory_dir = tmp_path / "memory"
+    (memory_dir / "_archive").mkdir(parents=True)
+    active_path = memory_dir / "001-active.md"
+    archived_path = memory_dir / "_archive" / "002-archived.md"
+    _write_memory_file(active_path, body="distinctword shared marker")
+    _write_memory_file(archived_path, body="distinctword shared marker")
+
+    index = _make_index(tmp_path)
+    memory = MemoryStore(index=index, config=_STORE_CONFIG)
+    try:
+        memory.rebuild(memory_dir)
+        hits, _ = index.search("distinctword marker", sources=[MEMORY_SOURCE], limit=10)
+        paths = {r.path for r in hits}
+        assert str(active_path) in paths, "active top-level item must be indexed"
+        assert str(archived_path) not in paths, "archived item must not be indexed"
     finally:
         index.close()

@@ -291,7 +291,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 | `/tools` | — | List registered agent tools with descriptions | `None` |
 | `/filescope` | — | Show file search roots (read scope) and the workspace write anchor; flags missing roots | `None` |
 | `/skills` | `[name]` | List loaded skills; show detail for named skill | `None` |
-| `/memory` | `list\|count\|forget\|dream\|restore\|decay-review\|stats [args] [flags]` | Manage memory items; dream lifecycle details live in [dream.md](dream.md) | `None` |
+| `/memory` | `list\|count\|forget\|dream\|restore\|stats [args] [flags]` | Manage memory items; dream lifecycle details live in [dream.md](dream.md) | `None` |
 | `/approvals` | `list\|clear\|...` | View and manage session approval rules | `None` |
 | `/background` | `<command>` | Run a shell command in the background | `None` |
 | `/tasks` | `[status-filter \| task-id]` | List background tasks; pass a 12-hex-char task ID to show detail | `None` |

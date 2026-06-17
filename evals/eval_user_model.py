@@ -72,8 +72,10 @@ _FIXTURE_NAME = "user_model_baseline"
 # this artifact and checks whether the dream cycle archives it.
 _TERSE_PREF_STEM = "pref_terse"
 
-# Age (days) to stamp onto the terse preference for W10.C — past the default
-# 90-day decay window (``co_cli/config/memory.py`` decay_after_days=90).
+# Age (days) to stamp onto the terse preference for W10.C. Memory is no longer
+# decayed by age/recall (see docs/specs/dream.md §2.4), so the aged artifact is
+# now always preserved — the case can only SOFT_PASS. The age stamp is retained
+# only so the scenario still exercises the age path without gating.
 _DECAY_AGE_DAYS = 95
 
 

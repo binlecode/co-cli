@@ -18,13 +18,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from co_cli.config.dream import DreamSettings
+from co_cli.config.memory import MEMORY_ITEM_COUNT_WARN
 from co_cli.daemons.dream.state import (
     HousekeepingState,
     save_housekeeping_state,
 )
 from co_cli.llm.call import llm_call
 from co_cli.memory.archive import archive_artifacts
-from co_cli.memory.decay import find_decay_candidates
 from co_cli.memory.frontmatter import parse_frontmatter
 from co_cli.memory.item import (
     MemoryItem,
@@ -34,7 +34,7 @@ from co_cli.memory.item import (
 )
 from co_cli.memory.service import save_memory_item
 from co_cli.memory.similarity import token_jaccard
-from co_cli.observability.tracing import trace
+from co_cli.observability.tracing import current_span, trace
 from co_cli.session.filename import parse_session_filename
 from co_cli.skills.usage import read_record
 
@@ -213,16 +213,13 @@ async def merge_memory(deps: CoDeps, state: HousekeepingState) -> int:
     return merged_count
 
 
-@trace("co.housekeeping.decay")
-def decay_memory(deps: CoDeps, state: HousekeepingState) -> int:
-    """Archive decay-eligible memory items; return the count archived."""
-    candidates = find_decay_candidates(deps.memory_dir, deps.config.memory)
-    if not candidates:
-        return 0
-    batch = candidates[:_MAX_DECAY_PER_CYCLE]
-    archived = archive_artifacts(batch, deps.memory_dir, deps.memory_store)
-    state.stats.memory_decayed += archived
-    return archived
+def memory_count_over_cap(items: list[MemoryItem], warn_at: int = MEMORY_ITEM_COUNT_WARN) -> bool:
+    """Warn-only tripwire: True when the active item count exceeds ``warn_at``.
+
+    Pure count check — never archives. Crossing the threshold signals a write
+    loop / runaway agent / fixture pollution, not normal use.
+    """
+    return len(items) > warn_at
 
 
 @dataclass(frozen=True)
@@ -553,16 +550,19 @@ def prune_sessions(
 async def run_housekeeping(
     deps: CoDeps, cfg: DreamSettings, state: HousekeepingState
 ) -> HousekeepingState:
-    """Run one full housekeeping pass — memory + skill merge then decay.
+    """Run one full housekeeping pass — memory + skill merge, then skill decay.
+
+    Memory is never decayed by age/recall: storage is unconstrained and recall
+    precision is a query-time concern, so the only automated memory curation is
+    similarity-based merge. Skills still decay (manifest-budget cost).
 
     ``cfg.max_pass_seconds`` bounds the merge phase only (LLM-driven, async).
-    Decay is synchronous, bounded by ``_MAX_DECAY_PER_CYCLE`` filesystem moves,
-    and always runs — wrapping it in the timeout would let a slow merge starve
-    decay of its chance to archive aged candidates. On merge timeout, partial
-    merge counters are persisted, decay still runs, and ``last_housekeeping_at``
-    is set to now so the next tick fires on schedule. Retention pruning of
-    queue/done and orphaned snapshots is likewise synchronous and runs outside
-    the merge timeout.
+    Skill decay is synchronous, bounded by ``_MAX_DECAY_PER_CYCLE`` filesystem
+    moves, and always runs — wrapping it in the timeout would let a slow merge
+    starve it. On merge timeout, partial merge counters are persisted, skill
+    decay still runs, and ``last_housekeeping_at`` is set to now so the next
+    tick fires on schedule. Retention pruning of queue/done and orphaned
+    snapshots is likewise synchronous and runs outside the merge timeout.
     """
     from co_cli.config.core import (
         DREAM_DAEMON_DIR,
@@ -580,8 +580,22 @@ async def run_housekeeping(
             cfg.max_pass_seconds,
         )
 
-    decay_memory(deps, state)
     decay_skills(deps, state)
+
+    active_items = load_memory_items(deps.memory_dir)
+    if memory_count_over_cap(active_items):
+        logger.warning(
+            "housekeeping.memory_count: %d active memory items exceeds warn threshold "
+            "(%d) — investigate for a write loop, runaway agent, or fixture pollution; "
+            "nothing is archived",
+            len(active_items),
+            MEMORY_ITEM_COUNT_WARN,
+        )
+        current_span().add_event(
+            "co.housekeeping.memory_count_warn",
+            {"count": len(active_items), "warn_at": MEMORY_ITEM_COUNT_WARN},
+        )
+
     prune_done_and_snapshots(
         cfg,
         done_dir=DREAM_QUEUE_DONE_DIR,

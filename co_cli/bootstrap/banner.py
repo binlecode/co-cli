@@ -48,12 +48,24 @@ def build_memory_line(
     memory_count: int,
     session_count: int,
 ) -> str:
-    """Build the Memory: status line for the welcome banner."""
+    """Build the Memory: status line for the welcome banner.
+
+    When the active item count exceeds ``MEMORY_ITEM_COUNT_WARN``, the count is
+    flagged yellow — mirroring the warn-only housekeeping tripwire (memory is
+    never auto-evicted; crossing the threshold signals a write loop / runaway /
+    pollution to investigate). See [dream.md](../../docs/specs/dream.md) §2.4.
+    """
+    from co_cli.config.memory import MEMORY_ITEM_COUNT_WARN
+
     line = f"    Memory: [accent]{backend_label}[/accent]"
     if memory_degradation:
         line += f"  [yellow]({memory_degradation})[/yellow]"
     if backend != "grep":
-        line += f"  memory: {memory_count}  sessions: {session_count}"
+        if memory_count > MEMORY_ITEM_COUNT_WARN:
+            line += f"  [yellow]⚠ memory: {memory_count} (over count tripwire)[/yellow]"
+        else:
+            line += f"  memory: {memory_count}"
+        line += f"  sessions: {session_count}"
     return line
 
 

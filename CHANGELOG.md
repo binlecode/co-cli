@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.394]
+
+Memory items are no longer phased out by age or recall frequency — recall-time ranking signals are no longer repurposed as deletion triggers. Storage is unconstrained and recall precision is a query-time concern (top-k + score-floor gated), so the only automated memory curation is now similarity-based merge.
+
+- Removed memory decay end to end: `co_cli/memory/decay.py`, the daemon `decay_memory` housekeeping phase (and its `co.housekeeping.decay` span), the `memory.decay_after_days` / `memory.recall_protection_days` config keys + env vars, and the `HousekeepingStats.memory_decayed` counter. Zero-backward-compat — an explicit `settings.json` carrying the removed keys now fails config load (`extra="forbid"`); shell env vars degrade silently.
+- Validity/supersession (retiring a now-false fact) is the agent's explicit `memory_manage` action; skills decay is unchanged (manifest-budget cost).
+- Fixed an archive re-index leak: `MemoryStore.sync_dir`/`rebuild` now index top-level `*.md` only (mirroring `load_memory_items`), so `_archive/` is never traversed and archived items stay out of the index.
+- Added a warn-only safety-net tripwire (`MEMORY_ITEM_COUNT_WARN = 10_000`): an over-cap active store emits a log warning + `co.housekeeping.memory_count_warn` span event and flags the `/memory` and banner count yellow — never evicts. Crossing it signals a write loop / runaway / pollution to investigate.
+
 ## [0.8.393]
 
 Dream daemon failures are no longer silent. The daemon runs detached with stdout/stderr at DEVNULL, so its JSONL log is the only durable error channel — and two paths bypassed it.

@@ -19,7 +19,6 @@ from co_cli.daemons.dream._housekeeping import (
 )
 from co_cli.daemons.dream._loop import scheduled_tick_due
 from co_cli.daemons.dream.state import HousekeepingState
-from co_cli.memory.decay import find_decay_candidates
 from co_cli.memory.item import MemoryItem
 
 
@@ -222,78 +221,16 @@ def test_consolidated_write_honors_configured_threshold(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# find_decay_candidates — recall_protection_days window
+# memory count tripwire — warn-only, never evicts
 # ---------------------------------------------------------------------------
 
 
-def _mem_cfg(**overrides) -> MemorySettings:
-    return MemorySettings(**overrides)
+def test_memory_count_over_cap_warns_but_never_archives(tmp_path: Path, monkeypatch) -> None:
+    """An over-cap store emits the warn span event and archives zero items.
 
-
-def test_decay_aged_and_never_recalled_archives(tmp_path: Path):
-    """Item with age > decay_after_days AND last_recalled_at is None → archive."""
-    memory_dir = tmp_path / "memory"
-    old = (datetime.now(UTC) - timedelta(days=120)).isoformat()
-    _write_md(memory_dir, _item(content="aged", created_at=old, last_recalled_at=None))
-    cfg = _mem_cfg(decay_after_days=90, recall_protection_days=30)
-    candidates = find_decay_candidates(memory_dir, cfg)
-    assert len(candidates) == 1
-    assert candidates[0].content == "aged"
-
-
-def test_decay_aged_but_recently_recalled_protects(tmp_path: Path):
-    """Item with age > decay_after_days BUT recalled within recall_protection_days → protect."""
-    memory_dir = tmp_path / "memory"
-    old = (datetime.now(UTC) - timedelta(days=120)).isoformat()
-    recent_recall = (datetime.now(UTC) - timedelta(days=5)).isoformat()
-    _write_md(
-        memory_dir,
-        _item(content="aged-but-recalled", created_at=old, last_recalled_at=recent_recall),
-    )
-    cfg = _mem_cfg(decay_after_days=90, recall_protection_days=30)
-    candidates = find_decay_candidates(memory_dir, cfg)
-    assert candidates == [], "recent recall must protect from decay"
-
-
-def test_decay_protected_overrides_age_and_recall(tmp_path: Path):
-    """decay_protected=True (pin) wins even when aged + zero recall."""
-    memory_dir = tmp_path / "memory"
-    old = (datetime.now(UTC) - timedelta(days=200)).isoformat()
-    _write_md(
-        memory_dir,
-        _item(content="pinned", created_at=old, last_recalled_at=None, decay_protected=True),
-    )
-    cfg = _mem_cfg(decay_after_days=90, recall_protection_days=30)
-    candidates = find_decay_candidates(memory_dir, cfg)
-    assert candidates == [], "pinned item must be immune to decay"
-
-
-def test_decay_recall_outside_protection_window_archives(tmp_path: Path):
-    """Item recalled long ago (outside protection window) still decays when aged."""
-    memory_dir = tmp_path / "memory"
-    old = (datetime.now(UTC) - timedelta(days=120)).isoformat()
-    stale_recall = (datetime.now(UTC) - timedelta(days=60)).isoformat()
-    _write_md(
-        memory_dir,
-        _item(content="stale-recall", created_at=old, last_recalled_at=stale_recall),
-    )
-    cfg = _mem_cfg(decay_after_days=90, recall_protection_days=30)
-    candidates = find_decay_candidates(memory_dir, cfg)
-    assert len(candidates) == 1
-    assert candidates[0].content == "stale-recall"
-
-
-# ---------------------------------------------------------------------------
-# co dream tidy — sentinel + daemon-not-running path
-# ---------------------------------------------------------------------------
-
-
-def test_run_housekeeping_decay_runs_after_merge_timeout(tmp_path: Path, monkeypatch) -> None:
-    """Merge phase timing out must not starve decay — the spec invariant.
-
-    Wraps merge under ``asyncio.timeout(cfg.max_pass_seconds)``, but decay is
-    synchronous and bounded; it runs unconditionally after merge even when
-    merge raised ``TimeoutError``.
+    The tripwire is a safety net, not an evictor: crossing the threshold must
+    surface a warning without deleting/archiving anything on count grounds.
+    Failure mode: re-introducing value-blind eviction under a different name.
     """
     import asyncio
     import importlib
@@ -308,13 +245,15 @@ def test_run_housekeeping_decay_runs_after_merge_timeout(tmp_path: Path, monkeyp
     importlib.reload(housekeeping_mod)
 
     memory_dir = tmp_path / "memory"
-    old = (datetime.now(UTC) - timedelta(days=120)).isoformat()
-    _write_md(memory_dir, _item(content="aged", created_at=old, last_recalled_at=None))
+    for n in range(3):
+        _write_md(memory_dir, _item(content=f"item-{n}", title=f"t{n}"))
 
-    async def _merge_timeout(_deps, _state):
-        raise TimeoutError("simulated merge wall-clock cap")
+    monkeypatch.setattr(housekeeping_mod, "MEMORY_ITEM_COUNT_WARN", 2)
 
-    monkeypatch.setattr(housekeeping_mod, "merge_memory", _merge_timeout)
+    async def _noop_merge(_deps, _state):
+        return 0
+
+    monkeypatch.setattr(housekeeping_mod, "merge_memory", _noop_merge)
 
     from co_cli.config.skills import SkillsSettings
 
@@ -323,21 +262,33 @@ def test_run_housekeeping_decay_runs_after_merge_timeout(tmp_path: Path, monkeyp
         memory_store=None,
         user_skills_dir=tmp_path / "user-skills",
         sessions_dir=tmp_path / "sessions",
-        config=SimpleNamespace(
-            memory=MemorySettings(decay_after_days=90, recall_protection_days=30),
-            skills=SkillsSettings(),
-        ),
+        config=SimpleNamespace(memory=MemorySettings(), skills=SkillsSettings()),
     )
     state = HousekeepingState()
     cfg = DreamSettings(max_pass_seconds=60)
 
     core_mod.DREAM_DAEMON_DIR.mkdir(parents=True, exist_ok=True)
-    result = asyncio.run(housekeeping_mod.run_housekeeping(deps, cfg, state))
+    asyncio.run(housekeeping_mod.run_housekeeping(deps, cfg, state))
 
-    assert result.stats.memory_decayed == 1, "decay must run even when merge times out"
-    assert (memory_dir / "_archive").exists(), "archive dir must be created by decay"
-    assert result.last_housekeeping_at is not None, "scheduled-tick clock must advance"
-    assert result.stats.skill_decayed == 0, "no user skills present → no skill decay"
+    md_files = list(memory_dir.glob("*.md"))
+    assert len(md_files) == 3, "over-cap tripwire must not archive any item"
+    archive_dir = memory_dir / "_archive"
+    archived = list(archive_dir.glob("*.md")) if archive_dir.exists() else []
+    assert archived == [], "nothing may be archived on count grounds"
+
+
+def test_memory_count_under_cap_does_not_warn(tmp_path: Path) -> None:
+    """Below the threshold, the helper reports not-over-cap (no false fire)."""
+    items = [_item(content=f"c{n}") for n in range(3)]
+    from co_cli.daemons.dream._housekeeping import memory_count_over_cap
+
+    assert memory_count_over_cap(items, warn_at=4) is False
+    assert memory_count_over_cap(items, warn_at=2) is True
+
+
+# ---------------------------------------------------------------------------
+# co dream tidy — sentinel + daemon-not-running path
+# ---------------------------------------------------------------------------
 
 
 def test_dream_tidy_errors_when_daemon_not_running(tmp_path: Path, monkeypatch) -> None:

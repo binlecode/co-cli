@@ -17,6 +17,14 @@ DEFAULT_RERANK_TEXT_CHAR_BUDGET = 512
 DEFAULT_MEMORY_VECTOR_SIMILARITY_FLOOR = 0.02
 DEFAULT_MEMORY_RERANK_SCORE_FLOOR = 0.2
 
+# Warn-only safety-net tripwire (not an evictor). Memory is recall-gated and
+# storage is unconstrained, so there is no capacity-driven decay; this only flags
+# a store grown far past any plausible legit size (~500x current real usage),
+# signalling a write loop / runaway agent / fixture pollution for the operator
+# to investigate. Crossing it never archives anything. Not a settings.json knob —
+# it tunes nothing about curation; the helper takes a warn_at override for tests.
+MEMORY_ITEM_COUNT_WARN = 10_000
+
 
 MEMORY_ENV_MAP: dict[str, str] = {
     "search_backend": "CO_MEMORY_SEARCH_BACKEND",
@@ -32,8 +40,6 @@ MEMORY_ENV_MAP: dict[str, str] = {
     "chunk_tokens": "CO_MEMORY_CHUNK_TOKENS",
     "chunk_overlap_tokens": "CO_MEMORY_CHUNK_OVERLAP_TOKENS",
     "consolidation_similarity_threshold": "CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD",
-    "decay_after_days": "CO_MEMORY_DECAY_AFTER_DAYS",
-    "recall_protection_days": "CO_MEMORY_RECALL_PROTECTION_DAYS",
 }
 
 
@@ -64,5 +70,3 @@ class MemorySettings(BaseModel):
     chunk_tokens: int = Field(default=DEFAULT_MEMORY_CHUNK_TOKENS, ge=0)
     chunk_overlap_tokens: int = Field(default=DEFAULT_MEMORY_CHUNK_OVERLAP_TOKENS, ge=0)
     consolidation_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
-    decay_after_days: int = Field(default=90, ge=1)
-    recall_protection_days: int = Field(default=30, ge=1)

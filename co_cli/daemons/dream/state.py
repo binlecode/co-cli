@@ -43,7 +43,6 @@ class HousekeepingStats(BaseModel):
     """Cumulative counters across every housekeeping pass."""
 
     memory_merged: int = 0
-    memory_decayed: int = 0
     skill_merged: int = 0
     skill_decayed: int = 0
 

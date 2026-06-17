@@ -82,8 +82,8 @@ Each candidate's text sent to the reranker is truncated to `rerank_text_char_bud
 | `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | paragraph-aware chunking budget for memory items |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | chunk overlap |
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | token-Jaccard threshold for write-time dedup and daemon merge clusters |
-| `memory.decay_after_days` | `CO_MEMORY_DECAY_AFTER_DAYS` | `90` | minimum age before an item is eligible for decay |
-| `memory.recall_protection_days` | `CO_MEMORY_RECALL_PROTECTION_DAYS` | `30` | recent-recall window that protects an aged item from decay |
+
+Memory items are never decayed by age or recall frequency (storage is unconstrained; recall is top-k + score-floor gated), so there are no `decay_after_days`/`recall_protection_days` knobs. The only automated curation is similarity-based merge.
 
 Session search is file-based (ripgrep) and has no configurable settings; the `memory.*` knobs above govern the memory/canon hybrid index only. See [sessions.md](sessions.md) for the session tier.
 
@@ -164,7 +164,6 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 | `co_cli/memory/item.py` | `MemoryItem`, `MemoryKindEnum`, `IndexSourceEnum` |
 | `co_cli/memory/frontmatter.py` | YAML frontmatter parse/render |
 | `co_cli/memory/similarity.py` | Jaccard dedup for write-time consolidation and daemon merge |
-| `co_cli/memory/decay.py` | Decay candidate identification (consumed by daemon housekeeping) |
 | `co_cli/memory/archive.py` | Archive / restore memory item files |
 
 ### Tool surface (`co_cli/tools/memory/`)
@@ -242,9 +241,9 @@ Inline curation is a doctrine-level discipline (see `co_cli/context/rules/07_mem
 
 `memory_review` and `skill_review` (see [dream.md](dream.md)) operate over the session transcript as substrate, extracting durable facts and procedural updates. The session itself is **not** promoted to a first-class memory object — session boundaries are user-defined and arbitrary (lunch, Ctrl+C, task-switch). Reviewer-extracted items are tagged `source_type='session_review'`. See [sessions.md](sessions.md) for the transcript tier and [core-loop.md](core-loop.md) for turn orchestration that triggers session-end kicks.
 
-### Merge and decay (closing the loop)
+### Merge (closing the loop)
 
-Dream housekeeping (see [dream.md](dream.md)) collapses note/rule duplicates via Jaccard clustering and archives aged items past `decay_after_days`. Articles are excluded from merge (RAG integrity); recent recall within `recall_protection_days` protects an aged item from decay.
+Dream housekeeping (see [dream.md](dream.md)) collapses note/rule duplicates via Jaccard clustering — the only automated memory curation. Articles are excluded from merge (RAG integrity). Memory items are never decayed by age or recall frequency; retiring a now-false fact is the agent's explicit `memory_manage` action.
 
 ### `source_type` taxonomy
 
