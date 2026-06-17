@@ -7,6 +7,7 @@ chunks_fts/chunks_vec) and the embedding service. Never writes.
 from __future__ import annotations
 
 import dataclasses
+import enum
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -42,6 +43,18 @@ SELECT c.source, c.doc_path AS path,
   JOIN docs d ON d.source = c.source AND d.path = c.doc_path
  WHERE chunks_fts MATCH ?
 """
+
+
+class RecallDegradation(enum.Enum):
+    """A way a hybrid recall answered in a materially weaker mode than intended.
+
+    Carried out of ``RetrievalService.search`` as a (possibly empty) frozenset —
+    both modes can co-occur in one query (embedder down forces FTS-only, and the
+    reranker can also be unavailable on that same query). Empty set = healthy.
+    """
+
+    SEMANTIC_UNAVAILABLE = "semantic_unavailable"
+    RERANK_UNAVAILABLE = "rerank_unavailable"
 
 
 @dataclass
@@ -191,21 +204,28 @@ class RetrievalService:
         created_after: str | None = None,
         created_before: str | None = None,
         limit: int = 5,
-    ) -> list[SearchResult]:
-        """Ranked search over the index. Empty / stopword-only queries return []."""
+    ) -> tuple[list[SearchResult], frozenset[RecallDegradation]]:
+        """Ranked search over the index. Empty / stopword-only queries return [].
+
+        Returns the results together with the set of degradation modes that
+        applied to this query (empty = healthy hybrid recall).
+        """
         fts_query = sanitize_fts5_query(query)
         if not fts_query:
-            return []
+            return [], frozenset()
 
+        degraded: set[RecallDegradation] = set()
         if self._backend == "hybrid":
-            return self._hybrid_search(
+            results = self._hybrid_search(
                 fts_query,
                 sources=sources,
                 kinds=kinds,
                 created_after=created_after,
                 created_before=created_before,
                 limit=limit,
+                degraded=degraded,
             )
+            return results, frozenset(degraded)
         fetch_limit = (
             limit * FTS_CANDIDATE_MULTIPLIER if self._reranker_provider != "none" else limit
         )
@@ -217,7 +237,7 @@ class RetrievalService:
             created_before=created_before,
             limit=fetch_limit,
         )
-        return self._rerank(query, results, limit)
+        return self._rerank(query, results, limit, degraded=degraded), frozenset(degraded)
 
     def _hybrid_search(
         self,
@@ -228,6 +248,7 @@ class RetrievalService:
         created_after: str | None,
         created_before: str | None,
         limit: int,
+        degraded: set[RecallDegradation],
     ) -> list[SearchResult]:
         """Hybrid BM25 + vector with chunk-level RRF; falls back to FTS5 on vec error."""
         fts_chunks = self._fts_chunks_raw(
@@ -251,15 +272,16 @@ class RetrievalService:
                         limit=limit * VECTOR_CANDIDATE_MULTIPLIER,
                     )
                     merged = self._hybrid_merge(fts_chunks, vec_chunks)
-                    return self._rerank(fts_query, merged, limit)
+                    return self._rerank(fts_query, merged, limit, degraded=degraded)
         except Exception as e:
             logger.warning(f"Vector search failed, falling back to FTS: {e}")
 
+        degraded.add(RecallDegradation.SEMANTIC_UNAVAILABLE)
         current_span().add_event(
             "index.hybrid_degraded_to_fts",
             {"co.index.backend": self._backend},
         )
-        return self._rerank(fts_query, _dedup_by_path(fts_chunks), limit)
+        return self._rerank(fts_query, _dedup_by_path(fts_chunks), limit, degraded=degraded)
 
     def _fts_search(
         self,
@@ -486,11 +508,14 @@ class RetrievalService:
         query: str,
         candidates: list[SearchResult],
         limit: int,
+        *,
+        degraded: set[RecallDegradation],
     ) -> list[SearchResult]:
         if self._reranker_provider == "none" or not candidates:
             return candidates[:limit]
         if self._rerank_breaker is not None and self._rerank_breaker.is_open():
             logger.debug("rerank circuit breaker open — skipping TEI call")
+            degraded.add(RecallDegradation.RERANK_UNAVAILABLE)
             return candidates[:limit]
         try:
             result = self._tei_rerank(query, candidates, limit)
@@ -501,6 +526,7 @@ class RetrievalService:
             if self._rerank_breaker is not None:
                 self._rerank_breaker.on_failure(e)
             logger.warning(f"Reranking failed (tei), using unranked: {e}")
+            degraded.add(RecallDegradation.RERANK_UNAVAILABLE)
             return candidates[:limit]
 
     def _fetch_reranker_texts(self, candidates: list[SearchResult]) -> list[str]:

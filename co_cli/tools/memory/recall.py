@@ -8,6 +8,7 @@ from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.index.store import RecallDegradation
 from co_cli.memory.item import MemoryItem, MemoryKind, load_memory_items
 from co_cli.observability.tracing import current_span
 from co_cli.tools.agent_tool import agent_tool
@@ -17,6 +18,22 @@ logger = logging.getLogger(__name__)
 
 _SNIPPET_DISPLAY_CHARS = 100
 """Maximum chars shown from an artifact snippet in formatted output."""
+
+_DEGRADATION_NOTES = {
+    RecallDegradation.SEMANTIC_UNAVAILABLE: "lexical-only (semantic search down — a miss is not proof of absence)",
+    RecallDegradation.RERANK_UNAVAILABLE: "unranked (reranker down — results not relevance-filtered)",
+}
+"""One terse status fragment per degradation mode (see RecallDegradation).
+
+A compact structured line, peer-aligned with openclaw's effectiveMode/fallback field — not
+prose directives. The model reads it as recall provenance, not as commands.
+"""
+
+
+def _degradation_note(degraded: frozenset[RecallDegradation]) -> str:
+    """A single terse `recall: ...` status line for the active modes; '' when healthy."""
+    parts = [_DEGRADATION_NOTES[mode] for mode in RecallDegradation if mode in degraded]
+    return f"recall: {'; '.join(parts)}" if parts else ""
 
 
 def grep_recall(
@@ -88,14 +105,18 @@ def _search_memory_items(
     query: str,
     kinds: list[str] | None,
     limit: int,
-) -> list[dict]:
-    """Two-pass FTS recall via MemoryStore; falls back to grep when store is None."""
+) -> tuple[list[dict], frozenset[RecallDegradation]]:
+    """Two-pass FTS recall via MemoryStore; falls back to grep when store is None.
+
+    Returns the result dicts together with the recall degradation set (empty when
+    healthy, or when the grep fallback ran — grep has no hybrid/rerank path).
+    """
     store = ctx.deps.memory_store
     if store is None:
-        return _grep_memory_items_fallback(ctx, query, kinds, limit)
+        return _grep_memory_items_fallback(ctx, query, kinds, limit), frozenset()
 
-    hits = store.search_memory_items(query, kinds, limit)
-    return [
+    hits, degraded = store.search_memory_items(query, kinds, limit)
+    results = [
         _result_dict(
             kind=r.kind,
             title=r.title,
@@ -105,6 +126,7 @@ def _search_memory_items(
         )
         for r in hits
     ]
+    return results, degraded
 
 
 def _grep_memory_items_fallback(
@@ -205,13 +227,20 @@ async def memory_search(
             "\n".join(lines), ctx=ctx, count=len(item_results), results=item_results
         )
 
-    memory_results = _search_memory_items(ctx, query, kinds, limit)
+    memory_results, degraded = _search_memory_items(ctx, query, kinds, limit)
+    note = _degradation_note(degraded)
     if not memory_results:
-        return tool_output(f"No results found for '{query}'.", ctx=ctx, count=0, results=[])
+        text = f"No results found for '{query}'."
+        if note:
+            text = f"{text}\n{note}"
+        return tool_output(text, ctx=ctx, count=0, results=[])
     item_paths = [Path(r["path"]) for r in memory_results if r.get("path")]
     _record_memory_recall(ctx.deps, item_paths)
+    text = _format_memory_results(query, memory_results)
+    if note:
+        text = f"{text}\n\n{note}"
     return tool_output(
-        _format_memory_results(query, memory_results),
+        text,
         ctx=ctx,
         count=len(memory_results),
         results=memory_results,

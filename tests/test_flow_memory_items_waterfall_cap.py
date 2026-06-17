@@ -58,7 +58,7 @@ def test_waterfall_count_cap(tmp_path: Path) -> None:
     index, memory = _make_stores(tmp_path)
     try:
         memory.sync_dir(memory_dir)
-        results = memory.search_memory_items(_KEYWORD, kinds=["rule"], limit=100)
+        results, _ = memory.search_memory_items(_KEYWORD, kinds=["rule"], limit=100)
         assert len(results) <= _WATERFALL_CHUNK_CAP, (
             f"expected at most {_WATERFALL_CHUNK_CAP} waterfall results, got {len(results)}"
         )

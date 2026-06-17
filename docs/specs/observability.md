@@ -170,12 +170,11 @@ One JSON object per closed span, one line per record. Schema version 1:
 | `tool_budget.resolved` | `co` | `budget.context_window_tokens`, `budget.spill_ratio`, `budget.tool_call_limit`, `budget.spill_threshold_chars`, `budget.spill_threshold_tokens` — emitted once at bootstrap by `@trace("tool_budget.resolved")` on `_emit_tool_budget_span()`. |
 | `sync_memory` | `co` | `count`, `backend`, `status` — `@trace("sync_memory")` on `_sync_memory_domain()`. |
 | `restore_session` | `co` | `status` (`restored`/`new`), `session_id` — `@trace("restore_session")` on `restore_session()`. |
-| `co.housekeeping.pass` | `co` | whole-pass envelope — `@trace("co.housekeeping.pass")` on `run_housekeeping()`. Wraps merge + decay under `asyncio.timeout(max_pass_seconds)`. |
+| `co.housekeeping.pass` | `co` | whole-pass envelope — `@trace("co.housekeeping.pass")` on `run_housekeeping()`. Wraps merge under `asyncio.timeout(max_pass_seconds)`; carries the `co.housekeeping.memory_count_warn` event when the active memory count exceeds `MEMORY_ITEM_COUNT_WARN`. |
 | `co.housekeeping.merge` | `co` | merge phase — `@trace("co.housekeeping.merge")` on `merge_memory()`. |
-| `co.housekeeping.decay` | `co` | decay phase — `@trace("co.housekeeping.decay")` on `decay_memory()`. |
 | `co.memory.{memory_create,memory_mutate,memory_delete}` | `co` | `memory.memory_kind`, `memory.filename_stem`, `memory.action` — `@trace(...)` on `_handle_{create,mutate,delete}()`. |
 | `compaction.proactive_check` | `co` | `compaction.msgs`, `compaction.token_count`, `compaction.threshold`, `compaction.budget`, `compaction.fired` (bool), `compaction.skip_reason`, `compaction.tokens_after`, `compaction.savings_pct`, etc. — `@trace("compaction.proactive_check")` on `proactive_window_processor()`. |
-| `index.search` | `co` | `co.index.query_len`, `co.index.sources`, `co.index.kinds`, `co.index.limit`, `co.index.hits` — emitted per `IndexStore.search()` invocation (`co_cli/index/store.py`) so recall work (FTS5/BM25 + embedding + hybrid merge) is attributable under the `memory_search`/`session_search` tool span. `co.index.hits` is THIS invocation's returned count: a kinds-filtered `memory_search` calls `search()` twice → one span each, neither being the tool's final merged/capped list. |
+| `index.search` | `co` | `co.index.query_len`, `co.index.sources`, `co.index.kinds`, `co.index.limit`, `co.index.hits`, `co.index.degraded` (sorted recall-degradation modes for this query — `semantic_unavailable` / `rerank_unavailable`; empty = healthy) — emitted per `IndexStore.search()` invocation (`co_cli/index/store.py`) so recall work (FTS5/BM25 + embedding + hybrid merge) is attributable under the `memory_search`/`session_search` tool span. `co.index.hits` is THIS invocation's returned count: a kinds-filtered `memory_search` calls `search()` twice → one span each, neither being the tool's final merged/capped list. |
 
 ### Events on existing spans
 

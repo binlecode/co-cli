@@ -128,7 +128,7 @@ async def test_artifact_manage_delete_removes_from_index(tmp_path: Path) -> None
             chunk_overlap_tokens=80,
         )
 
-        hits_before = store.search("uniquetoken_to_find_in_index")
+        hits_before, _ = store.search("uniquetoken_to_find_in_index")
         assert any(saved.filename_stem in h.path for h in hits_before), (
             "precondition: memory item must be findable in index before delete"
         )
@@ -137,7 +137,7 @@ async def test_artifact_manage_delete_removes_from_index(tmp_path: Path) -> None
         ctx = _make_ctx(deps)
         await memory_delete(ctx, filename_stem=saved.filename_stem)
 
-        hits_after = store.search("uniquetoken_to_find_in_index")
+        hits_after, _ = store.search("uniquetoken_to_find_in_index")
         assert not any(saved.filename_stem in h.path for h in hits_after), (
             "memory item must not appear in FTS5 index after delete"
         )

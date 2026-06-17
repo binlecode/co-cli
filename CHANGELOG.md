@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.396]
+
+Recall degradation is now visible to both the operator and the model. A hybrid query can silently answer in a weaker mode — embedder unreachable (semantic leg lost → FTS-only) or reranker unavailable (breaker open / TEI fails → the `rerank_score_floor` never runs) — and previously nothing surfaced that the answer was degraded.
+
+- `IndexStore.search` now returns `(results, frozenset[RecallDegradation])` — `semantic_unavailable` / `rerank_unavailable`; empty = healthy. Both can co-occur. `MemoryStore.search_memory_items` propagates the union over its two passes; the grep fallback reports none.
+- *Operator channel:* the `co.index.degraded` attribute on the `index.search` span (alongside the existing `index.hybrid_degraded_to_fts` event), surfaced in `co tail` / `co trace`.
+- *Model channel:* `memory_search` appends a terse `recall: …` status line naming the active degraded modes, so the agent can treat a miss as inconclusive or weak hits as unfiltered.
+
 ## [0.8.394]
 
 Memory items are no longer phased out by age or recall frequency — recall-time ranking signals are no longer repurposed as deletion triggers. Storage is unconstrained and recall precision is a query-time concern (top-k + score-floor gated), so the only automated memory curation is now similarity-based merge.

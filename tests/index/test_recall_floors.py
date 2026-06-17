@@ -84,10 +84,10 @@ def test_no_match_query_returns_nothing_real_lexical_hit_survives(tmp_path: Path
             body="sensor telemetry ingestion columnar storage temperature humidity compaction.",
         )
 
-        no_match = index.search("airline flight booking itinerary", limit=10)
+        no_match, _ = index.search("airline flight booking itinerary", limit=10)
         assert no_match == [], f"expected no junk hits, got {[r.path for r in no_match]}"
 
-        lexical = index.search("deployment rollback", limit=10)
+        lexical, _ = index.search("deployment rollback", limit=10)
         assert any("deploy" in r.path for r in lexical), "real lexical hit must survive the floor"
     finally:
         index.close()
@@ -117,7 +117,7 @@ def test_reranker_floor_culls_by_score(tmp_path: Path) -> None:
     try:
         for title, body in docs:
             _seed(tmp_path / "lo_memory", default_index, title=title, body=body)
-        default_hits = default_index.search(query, limit=10)
+        default_hits, _ = default_index.search(query, limit=10)
     finally:
         default_index.close()
 
@@ -125,7 +125,7 @@ def test_reranker_floor_culls_by_score(tmp_path: Path) -> None:
     try:
         for title, body in docs:
             _seed(tmp_path / "hi_memory", high_index, title=title, body=body)
-        high_hits = high_index.search(query, limit=10)
+        high_hits, _ = high_index.search(query, limit=10)
     finally:
         high_index.close()
 
@@ -174,7 +174,7 @@ def test_fts5_mode_never_calls_the_reranker(tmp_path: Path) -> None:
                 title="note",
                 body="event pipeline columnar analytics review ledger",
             )
-            hits = index.search("event pipeline", limit=5)
+            hits, _ = index.search("event pipeline", limit=5)
             assert hits, "expected a lexical hit"
         finally:
             index.close()

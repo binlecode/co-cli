@@ -62,7 +62,7 @@ def test_save_memory_item_straight_save_creates_file_and_indexes(tmp_path):
             chunk_overlap_tokens=80,
         )
 
-        hits = store.search("pytest testing")
+        hits, _ = store.search("pytest testing")
         paths = [h.path for h in hits]
         assert any(str(result.path) in p for p in paths), (
             f"memory item not found in FTS5 index after save; indexed paths: {paths}"

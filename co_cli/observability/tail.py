@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.text import Text
 
 from co_cli.config.core import LOGS_DIR
+from co_cli.display.core import console
 
 _SPANS_LOG = LOGS_DIR / "co-cli-spans.jsonl"
 
@@ -338,7 +339,6 @@ def run_tail(
     detail: bool = False,
 ) -> None:
     """Main tail loop — print last N records, then follow new records via append + rotation."""
-    console = Console()
     path = log_path or _SPANS_LOG
 
     if not path.exists():

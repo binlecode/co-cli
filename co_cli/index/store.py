@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from co_cli.config.core import SEARCH_DB
 from co_cli.index._embedding import EmbeddingService
 from co_cli.index._providers import build_embedder
-from co_cli.index._retrieval import RetrievalService, SearchResult
+from co_cli.index._retrieval import RecallDegradation, RetrievalService, SearchResult
 from co_cli.index.chunk import Chunk
 from co_cli.index.schema import SCHEMA_SQL
 from co_cli.index.search_util import kind_clause
@@ -127,7 +127,7 @@ class IndexStore:
         store = IndexStore(config=settings)
         store.upsert(source='memory', path='...', kind='user', ...)
         store.index_chunks('memory', '...', [Chunk(...), ...])
-        results = store.search('pytest', sources=['memory'])
+        results, degraded = store.search('pytest', sources=['memory'])
         store.close()
     """
 
@@ -514,7 +514,7 @@ class IndexStore:
         created_after: str | None = None,
         created_before: str | None = None,
         limit: int = 5,
-    ) -> list[SearchResult]:
+    ) -> tuple[list[SearchResult], frozenset[RecallDegradation]]:
         """Ranked search facade — delegates to the private RetrievalService.
 
         Emits an ``index.search`` span per invocation so recall work (FTS5/BM25 +
@@ -534,7 +534,7 @@ class IndexStore:
             },
         )
         try:
-            results = self._retrieval.search(
+            results, degraded = self._retrieval.search(
                 query,
                 sources=sources,
                 kinds=kinds,
@@ -545,8 +545,13 @@ class IndexStore:
         except BaseException as exc:
             pop_span(status="ERROR", status_msg=str(exc))
             raise
-        pop_span(attributes={"co.index.hits": len(results)})
-        return results
+        pop_span(
+            attributes={
+                "co.index.hits": len(results),
+                "co.index.degraded": sorted(d.value for d in degraded),
+            }
+        )
+        return results, degraded
 
     def probe(self) -> None:
         """Health check — raises on first error found."""

@@ -25,6 +25,17 @@ _FTS5_CONFIG = SETTINGS.memory.model_copy(
 )
 _TEST_SETTINGS = SETTINGS.model_copy(update={"memory": _FTS5_CONFIG})
 
+_DEAD_URL = "http://127.0.0.1:1"
+_DEGRADED_CONFIG = SETTINGS.memory.model_copy(
+    update={
+        "search_backend": "hybrid",
+        "embedding_provider": "tei",
+        "embed_api_url": _DEAD_URL,
+        "cross_encoder_reranker_url": _DEAD_URL,
+    }
+)
+_DEGRADED_SETTINGS = SETTINGS.model_copy(update={"memory": _DEGRADED_CONFIG})
+
 
 def _make_stores(tmp_path: Path) -> tuple[IndexStore, MemoryStore]:
     index = IndexStore(config=_TEST_SETTINGS, db_path=tmp_path / "search.db")
@@ -248,3 +259,64 @@ async def test_memory_search_disk_scan_fallback_when_no_store(tmp_path: Path) ->
         assert "kind" in r
         assert "path" in r
         assert "filename_stem" in r
+
+
+@pytest.mark.asyncio
+async def test_memory_search_healthy_recall_has_no_degradation_note(tmp_path: Path) -> None:
+    """A normal (non-degraded) memory_search result carries no degradation note."""
+    index, memory = _make_stores(tmp_path)
+    try:
+        _seed(
+            tmp_path / "memory",
+            index,
+            content="healthytoken content about deployment",
+            kind="note",
+            title="healthy",
+        )
+        deps = _make_deps(tmp_path, index, memory)
+        ctx = _ctx(deps)
+
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            result = await memory_search(ctx, query="healthytoken")
+
+        assert "recall:" not in result.return_value, (
+            f"healthy recall must not carry a degradation note: {result.return_value!r}"
+        )
+    finally:
+        index.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_search_degraded_recall_appends_note(tmp_path: Path) -> None:
+    """When the embedder and reranker are unreachable, the result text warns the model."""
+    index = IndexStore(config=_DEGRADED_SETTINGS, db_path=tmp_path / "search.db")
+    memory = MemoryStore(index=index, config=_DEGRADED_SETTINGS)
+    try:
+        _seed(
+            tmp_path / "memory",
+            index,
+            content="degradedtoken content about deployment",
+            kind="note",
+            title="degraded",
+        )
+        deps = CoDeps(
+            shell=ShellBackend(),
+            config=_DEGRADED_SETTINGS,
+            session=CoSessionState(),
+            memory_dir=tmp_path / "memory",
+            index_store=index,
+            memory_store=memory,
+        )
+        ctx = _ctx(deps)
+
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            result = await memory_search(ctx, query="degradedtoken")
+
+        assert "semantic search down" in result.return_value, (
+            f"degraded recall must signal lexical-only results: {result.return_value!r}"
+        )
+        assert "reranker down" in result.return_value, (
+            f"degraded recall must signal unranked results: {result.return_value!r}"
+        )
+    finally:
+        index.close()

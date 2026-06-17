@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.text import Text
 
 from co_cli.config.core import LOGS_DIR
+from co_cli.display.core import console
 
 _SPANS_LOG = LOGS_DIR / "co-cli-spans.jsonl"
 
@@ -173,7 +174,6 @@ def _header(trace_id: str, records: list[dict]) -> Text:
 
 def render_trace(trace_id: str, *, log_path: Path | None = None) -> None:
     """Render one trace as a snapshot tree."""
-    console = Console()
     records = _read_records_for_trace(trace_id, log_path=log_path)
     if not records:
         console.print(f"[yellow]No records for trace {trace_id}[/yellow]")

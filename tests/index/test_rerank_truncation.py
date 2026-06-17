@@ -51,7 +51,7 @@ def test_reranker_input_truncated_to_char_budget(tmp_path: Path) -> None:
         ).fetchone()[0]
         assert max_chunk_chars > budget, "fixture must contain an over-budget chunk"
 
-        hits = index.search("event pipeline", limit=10)
+        hits, _ = index.search("event pipeline", limit=10)
         assert hits, "expected at least one hit"
 
         texts = index._retrieval._fetch_reranker_texts(hits)

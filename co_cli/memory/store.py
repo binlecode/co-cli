@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from co_cli.index.store import SearchResult
+from co_cli.index.store import RecallDegradation, SearchResult
 from co_cli.memory.chunker import chunk_text
 from co_cli.memory.frontmatter import parse_frontmatter
 from co_cli.memory.item import IndexSourceEnum, MemoryKindEnum
@@ -171,7 +171,7 @@ class MemoryStore:
         query: str,
         kinds: list[str] | None,
         limit: int,
-    ) -> list[SearchResult]:
+    ) -> tuple[list[SearchResult], frozenset[RecallDegradation]]:
         """Two-pass search policy: user-kind priority + waterfall over other kinds.
 
         - Pass 1 (priority): user-kind hits up to ``_USER_PRIORITY_CAP``.
@@ -179,35 +179,39 @@ class MemoryStore:
           Returns chunk-level hits capped at ``_WATERFALL_CHUNK_CAP``.
 
         Final list = pass-1 results followed by pass-2 results, truncated to ``limit``.
+        The degradation set is the union over both passes (empty = healthy recall).
         """
         results: list[SearchResult] = []
+        degraded: set[RecallDegradation] = set()
 
         if kinds is None or "user" in kinds:
             try:
-                user_hits = self._index.search(
+                user_hits, user_degraded = self._index.search(
                     query,
                     sources=[MEMORY_SOURCE],
                     kinds=["user"],
                     limit=_USER_PRIORITY_CAP,
                 )
                 results.extend(user_hits)
+                degraded |= user_degraded
             except Exception as e:
                 logger.warning("User-kind priority search failed: %s", e)
 
         waterfall_kinds = list(set(kinds or ["rule", "article", "note"]) - {"user"})
         if waterfall_kinds:
             try:
-                waterfall_hits = self._index.search(
+                waterfall_hits, waterfall_degraded = self._index.search(
                     query,
                     sources=[MEMORY_SOURCE],
                     kinds=waterfall_kinds,
                     limit=_WATERFALL_CHUNK_CAP,
                 )
                 results.extend(waterfall_hits)
+                degraded |= waterfall_degraded
             except Exception as e:
                 logger.warning("Waterfall search failed: %s", e)
 
-        return results[:limit]
+        return results[:limit], frozenset(degraded)
 
     def count(self) -> int:
         return self._index.count_docs(MEMORY_SOURCE)
