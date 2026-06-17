@@ -193,7 +193,7 @@ def _check_agent_llm(config: "Settings") -> CheckResult:
     return CheckResult(ok=True, status="ok", detail="Provider and model configured")
 
 
-def _check_embedder(config: "Settings") -> CheckResult:
+def check_embedder(config: "Settings") -> CheckResult:
     """Check embedding provider availability.
 
     Skipped if provider is "none".
@@ -213,7 +213,7 @@ def _check_embedder(config: "Settings") -> CheckResult:
     return CheckResult(ok=True, status="skipped", detail=f"Unknown provider: {provider}")
 
 
-def _check_cross_encoder(config: "Settings") -> CheckResult:
+def check_cross_encoder(config: "Settings") -> CheckResult:
     """Check TEI cross-encoder reranker availability.
 
     Skipped if no cross-encoder URL is configured.

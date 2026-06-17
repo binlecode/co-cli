@@ -18,7 +18,7 @@ from co_cli.daemons.dream._housekeeping import (
     _select_canonical,
 )
 from co_cli.daemons.dream._loop import scheduled_tick_due
-from co_cli.daemons.dream._state import HousekeepingState
+from co_cli.daemons.dream.state import HousekeepingState
 from co_cli.memory.decay import find_decay_candidates
 from co_cli.memory.item import MemoryItem
 
@@ -493,7 +493,7 @@ def test_run_housekeeping_prunes_sessions_and_persists_counter(
 
     import co_cli.config.core as core_mod
     import co_cli.daemons.dream._housekeeping as housekeeping_mod
-    from co_cli.daemons.dream._state import load_housekeeping_state
+    from co_cli.daemons.dream.state import load_housekeeping_state
 
     importlib.reload(core_mod)
     importlib.reload(housekeeping_mod)

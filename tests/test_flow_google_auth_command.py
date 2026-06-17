@@ -23,7 +23,7 @@ from co_cli.commands.google import (
     _extract_auth_code,
     _write_token,
 )
-from co_cli.tools.google._auth import ALL_GOOGLE_SCOPES
+from co_cli.tools.google.auth import ALL_GOOGLE_SCOPES
 
 
 def test_extract_auth_code_from_bare_code() -> None:

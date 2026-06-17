@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from co_cli.config.dream import DreamSettings
-from co_cli.daemons.dream._state import (
+from co_cli.daemons.dream.state import (
     HousekeepingState,
     save_housekeeping_state,
 )

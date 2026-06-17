@@ -27,7 +27,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import QuestionPrompt, TerminalFrontend
-from co_cli.main import _build_accept_handler, _IterationState
+from co_cli.main import IterationState, _build_accept_handler
 
 
 async def _wait_running(app, *, timeout: float = 10.0) -> None:
@@ -40,7 +40,7 @@ async def _wait_running(app, *, timeout: float = 10.0) -> None:
 
 async def _drive(coro_factory, predicate, keystrokes: list[str]):
     frontend = TerminalFrontend()
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=-3.0))
 
     async def dispatch(*, user_input, eof):
         return None

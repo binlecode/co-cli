@@ -21,7 +21,7 @@ from co_cli.display.app import ReplRuntime, build_key_bindings
 from co_cli.display.core import TerminalFrontend, console
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.factory import build_model
-from co_cli.main import _build_accept_handler, _handle_one_input, _IterationState
+from co_cli.main import IterationState, _build_accept_handler, _handle_one_input
 from co_cli.skills.loader import load_skills
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -66,13 +66,13 @@ def _make_agent(deps: CoDeps):
     return build_orchestrator(ORCHESTRATOR_SPEC, deps)
 
 
-def _fresh_state() -> _IterationState:
-    """Return an initial _IterationState where the interrupt timer has never been set.
+def _fresh_state() -> IterationState:
+    """Return an initial IterationState where the interrupt timer has never been set.
 
     Uses last_interrupt_time=-3.0 so that injected now=0.0 yields a delta of 3.0 > 2.0,
     matching real-world behaviour where time.monotonic() is always large and positive.
     """
-    return _IterationState(message_history=[], last_interrupt_time=-3.0)
+    return IterationState(message_history=[], last_interrupt_time=-3.0)
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ async def test_successful_input_resets_interrupt_timer(tmp_path: Path) -> None:
     frontend = HeadlessFrontend()
     completer = SlashCommandCompleter()
     # Prime the state with a non-zero interrupt timer
-    state = _IterationState(message_history=[], last_interrupt_time=1.0)
+    state = IterationState(message_history=[], last_interrupt_time=1.0)
 
     # Whitespace-only input does NOT reset the timer (it returns early unchanged)
     whitespace_result = await _handle_one_input(
@@ -332,7 +332,7 @@ async def test_slash_command_routes_to_dispatch(tmp_path: Path) -> None:
     agent = _make_agent(deps)
     frontend = HeadlessFrontend()
     completer = SlashCommandCompleter()
-    state = _IterationState(
+    state = IterationState(
         message_history=[ModelRequest(parts=[UserPromptPart(content="prior turn")])],
         last_interrupt_time=-3.0,
     )
@@ -412,7 +412,7 @@ async def test_accept_handler_schedules_turn_task(tmp_path: Path) -> None:
     async def dispatch(*, user_input, eof):
         dispatched.append((user_input, eof))
 
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=-3.0))
     handler = _build_accept_handler(
         runtime, dispatch, lambda: None, _make_deps(tmp_path), TerminalFrontend()
     )
@@ -449,7 +449,7 @@ async def test_typed_ahead_enqueues_and_drains_fifo(tmp_path: Path) -> None:
         order.append(user_input)
         await gate.wait()
 
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=0.0))
     handler = _build_accept_handler(
         runtime,
         dispatch,
@@ -490,7 +490,7 @@ async def test_blank_input_never_enqueues(tmp_path: Path) -> None:
     async def dispatch(*, user_input, eof):
         dispatched.append((user_input, eof))
 
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=0.0))
     handler = _build_accept_handler(
         runtime, dispatch, lambda: None, _make_deps(tmp_path), TerminalFrontend()
     )
@@ -520,7 +520,7 @@ async def test_queue_cap_drops_oldest(tmp_path: Path) -> None:
     async def dispatch(*, user_input, eof):
         pass
 
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=0.0))
     deps = _make_deps_with_repl(tmp_path, queue_cap=2, drop_policy="oldest")
     handler = _build_accept_handler(runtime, dispatch, lambda: None, deps, TerminalFrontend())
 
@@ -551,7 +551,7 @@ async def test_queue_cap_newest_rejects(tmp_path: Path) -> None:
     async def dispatch(*, user_input, eof):
         pass
 
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=0.0))
     deps = _make_deps_with_repl(tmp_path, queue_cap=2, drop_policy="newest")
     handler = _build_accept_handler(runtime, dispatch, lambda: None, deps, TerminalFrontend())
 
@@ -581,7 +581,7 @@ async def test_cap_zero_unbounded(tmp_path: Path) -> None:
     async def dispatch(*, user_input, eof):
         pass
 
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=0.0))
     deps = _make_deps_with_repl(tmp_path, queue_cap=0)
     handler = _build_accept_handler(runtime, dispatch, lambda: None, deps, TerminalFrontend())
 
@@ -618,7 +618,7 @@ async def test_ctrl_c_is_exit_only_double_press() -> None:
     from prompt_toolkit.keys import Keys
 
     exited: list[bool] = []
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=0.0))
 
     async def dispatch(*, user_input, eof):
         runtime.state = await _handle_one_input(
@@ -670,7 +670,7 @@ async def test_queue_command_bypasses_enqueue_mid_turn(tmp_path: Path) -> None:
         # Not reached in this test — the bypass schedules schedule_control, not _arm_turn.
         pass
 
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=0.0))
     handler = _build_accept_handler(
         runtime, dispatch, lambda: None, _make_deps(tmp_path), TerminalFrontend()
     )
@@ -716,7 +716,7 @@ async def test_esc_cancels_turn_and_advances_queue(tmp_path: Path) -> None:
         if user_input == "first":
             await gate.wait()
 
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=0.0))
     handler = _build_accept_handler(
         runtime, dispatch, lambda: None, _make_deps(tmp_path), TerminalFrontend()
     )

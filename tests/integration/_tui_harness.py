@@ -41,7 +41,7 @@ from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import TerminalFrontend, console
-from co_cli.main import _build_accept_handler, _handle_one_input, _IterationState
+from co_cli.main import IterationState, _build_accept_handler, _handle_one_input
 from co_cli.tools.shell_backend import ShellBackend
 
 _SESSION_ID = "abcd1234"
@@ -129,7 +129,7 @@ async def drive_repl(deps: CoDeps, keys: str, *, sentinel: str) -> str:
     """
     completer = SlashCommandCompleter()
     frontend = TerminalFrontend()
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=-3.0))
 
     async def dispatch(*, user_input, eof):
         runtime.state = await _handle_one_input(

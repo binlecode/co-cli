@@ -39,10 +39,10 @@ from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import TerminalFrontend
 from co_cli.llm.factory import build_model
 from co_cli.main import (
+    IterationState,
     _build_accept_handler,
     _build_status_snapshot,
     _handle_one_input,
-    _IterationState,
 )
 from co_cli.skills.loader import load_skills
 from co_cli.tools.shell_backend import ShellBackend
@@ -94,7 +94,7 @@ async def test_typed_ahead_enqueues_and_drains_under_real_turn(tmp_path: Path) -
     agent = _make_agent(deps)
     completer = SlashCommandCompleter()
     frontend = TerminalFrontend()
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=-3.0))
 
     completed: list[str] = []
 

@@ -7,7 +7,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.google._auth import _get_google_service, _google_available
+from co_cli.tools.google.auth import _get_google_service, _google_available
 from co_cli.tools.tool_io import handle_google_api_error, tool_output
 
 _DRIVE_NOT_CONFIGURED = (

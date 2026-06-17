@@ -36,7 +36,7 @@ from co_cli.commands.core import BUILTIN_COMMANDS
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend as SilentFrontend
 from co_cli.llm.factory import build_model
-from co_cli.main import _attach_user_image, _handle_one_input, _IterationState
+from co_cli.main import IterationState, _attach_user_image, _handle_one_input
 from co_cli.skills.skill_types import SkillInfo
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.vision.intake import detect_lone_image_path
@@ -97,8 +97,8 @@ def _final_text(history: list) -> str:
     return texts[-1] if texts else ""
 
 
-def _initial_state() -> _IterationState:
-    return _IterationState(message_history=[], last_interrupt_time=0.0, should_exit=False)
+def _initial_state() -> IterationState:
+    return IterationState(message_history=[], last_interrupt_time=0.0, should_exit=False)
 
 
 @pytest.mark.skipif(

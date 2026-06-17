@@ -18,7 +18,7 @@ import typer
 
 from co_cli.config.core import GOOGLE_TOKEN_PATH
 from co_cli.fileio.atomic import atomic_write_text
-from co_cli.tools.google._auth import ALL_GOOGLE_SCOPES
+from co_cli.tools.google.auth import ALL_GOOGLE_SCOPES
 
 google_app = typer.Typer(
     name="google",

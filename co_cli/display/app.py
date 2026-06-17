@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from prompt_toolkit.buffer import Buffer
     from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 
-    from co_cli.main import _IterationState
+    from co_cli.main import IterationState
 
 # Completion-menu styling — carried over verbatim from the old PromptSession so
 # the slash-completion menu looks identical under the owned Application (CD-m-4).
@@ -63,7 +63,7 @@ class ReplRuntime:
     not a frozen contract — see the plan's HLD.
     """
 
-    state: "_IterationState"
+    state: "IterationState"
     turn_task: "asyncio.Task[None] | None" = None
     control_tasks: "set[asyncio.Task[None]]" = field(default_factory=set)
     queue: "deque[str]" = field(default_factory=deque)

@@ -20,7 +20,7 @@ from tests._settings import make_settings
 from co_cli.agent.core import build_native_toolset
 from co_cli.deps import CoDeps
 from co_cli.tools.agent_tool import TOOL_REGISTRY_BY_NAME
-from co_cli.tools.google._auth import ALL_GOOGLE_SCOPES, _google_available
+from co_cli.tools.google.auth import ALL_GOOGLE_SCOPES, _google_available
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import handle_google_api_error
 

@@ -25,9 +25,9 @@ from co_cli.bootstrap.core import (
     maybe_autospawn_dream,
     start_session,
 )
-from co_cli.commands._queue_control import run_queue_control
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.commands.core import dispatch as dispatch_command
+from co_cli.commands.queue_control import run_queue_control
 from co_cli.commands.registry import build_completer_entries
 from co_cli.commands.status_report import context_pct
 from co_cli.commands.types import CommandContext, DelegateToAgent, ReplaceTranscript
@@ -332,7 +332,7 @@ def _apply_command_outcome(
 
 
 @dataclass
-class _IterationState:
+class IterationState:
     message_history: list[ModelMessage]
     last_interrupt_time: float
     should_exit: bool = False
@@ -365,22 +365,22 @@ def _attach_user_image(
 async def _handle_one_input(
     user_input: str | None,
     eof: bool,
-    state: _IterationState,
+    state: IterationState,
     deps: CoDeps,
     agent: Agent,
     frontend: Frontend,
     completer: SlashCommandCompleter,
     now: float,
     queue: deque[str],
-) -> _IterationState:
+) -> IterationState:
     """Process one iteration of the chat loop given pre-parsed input signals.
 
     user_input=None signals KeyboardInterrupt; eof=True signals EOFError.
     now is an injected clock value for deterministic double-press tests.
-    Returns a new _IterationState.
+    Returns a new IterationState.
     """
     if eof:
-        return _IterationState(
+        return IterationState(
             message_history=state.message_history,
             last_interrupt_time=state.last_interrupt_time,
             should_exit=True,
@@ -389,27 +389,27 @@ async def _handle_one_input(
     if user_input is None:
         # KeyboardInterrupt signal
         if now - state.last_interrupt_time <= 2.0:
-            return _IterationState(
+            return IterationState(
                 message_history=state.message_history,
                 last_interrupt_time=state.last_interrupt_time,
                 should_exit=True,
             )
         console.print("\n[dim]Press Ctrl+C again to exit[/dim]")
-        return _IterationState(
+        return IterationState(
             message_history=state.message_history,
             last_interrupt_time=now,
             should_exit=False,
         )
 
     if user_input.lower() in ("exit", "quit"):
-        return _IterationState(
+        return IterationState(
             message_history=state.message_history,
             last_interrupt_time=0.0,
             should_exit=True,
         )
 
     if not user_input.strip():
-        return _IterationState(
+        return IterationState(
             message_history=state.message_history,
             last_interrupt_time=state.last_interrupt_time,
             should_exit=False,
@@ -437,7 +437,7 @@ async def _handle_one_input(
             frontend=frontend,
         )
         frontend.update_status(_build_status_snapshot(deps, "idle", queue))
-        return _IterationState(
+        return IterationState(
             message_history=updated_history,
             last_interrupt_time=0.0,
             should_exit=False,
@@ -457,7 +457,7 @@ async def _handle_one_input(
             outcome, state.message_history, deps, frontend
         )
         if should_continue:
-            return _IterationState(
+            return IterationState(
                 message_history=new_history,
                 last_interrupt_time=0.0,
                 should_exit=False,
@@ -472,7 +472,7 @@ async def _handle_one_input(
             frontend=frontend,
         )
         frontend.update_status(_build_status_snapshot(deps, "idle", queue))
-        return _IterationState(
+        return IterationState(
             message_history=updated_history,
             last_interrupt_time=0.0,
             should_exit=False,
@@ -488,7 +488,7 @@ async def _handle_one_input(
         frontend=frontend,
     )
     frontend.update_status(_build_status_snapshot(deps, "idle", queue))
-    return _IterationState(
+    return IterationState(
         message_history=updated_history,
         last_interrupt_time=0.0,
         should_exit=False,
@@ -701,7 +701,7 @@ async def _chat_loop(
         # Single owner of turn state, shared by the accept_handler and the key
         # bindings (Esc cancels the active turn) (F7) — created here in loop
         # scope, never a module global.
-        runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+        runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=0.0))
 
         async def _dispatch(*, user_input: str | None, eof: bool) -> None:
             """Run one chat-loop iteration, apply its result, and exit when asked.
@@ -730,7 +730,7 @@ async def _chat_loop(
             except Exception as e:
                 frontend.cleanup()
                 console.print(f"[bold red]Error:[/bold red] {e}")
-                runtime.state = _IterationState(
+                runtime.state = IterationState(
                     message_history=runtime.state.message_history,
                     last_interrupt_time=0.0,
                 )

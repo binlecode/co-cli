@@ -18,7 +18,7 @@ from co_cli.daemons.dream._queue import (
     read_queue_item,
     write_queue_item,
 )
-from co_cli.daemons.dream._state import (
+from co_cli.daemons.dream.state import (
     DaemonState,
     HousekeepingState,
     load_housekeeping_state,

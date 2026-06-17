@@ -8,7 +8,7 @@ from co_cli.commands._utils import _confirm
 from co_cli.commands.types import CommandContext
 from co_cli.display.core import console
 from co_cli.memory.item import filter_memory_items, format_memory_item_row, load_memory_items
-from co_cli.tools.memory.recall import _grep_recall as grep_recall
+from co_cli.tools.memory.recall import grep_recall
 
 _MEMORY_USAGE = (
     "[bold]Usage:[/bold] /memory list|count|forget|restore|decay-review|stats "
@@ -201,7 +201,7 @@ async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None
 async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     """Display knowledge health dashboard: artifact counts, archive size, housekeeping state, decay."""
     from co_cli.config.core import DREAM_DAEMON_DIR
-    from co_cli.daemons.dream._state import load_housekeeping_state
+    from co_cli.daemons.dream.state import load_housekeeping_state
     from co_cli.memory.decay import find_decay_candidates
 
     knowledge_dir = ctx.deps.memory_dir

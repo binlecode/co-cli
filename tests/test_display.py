@@ -29,7 +29,7 @@ async def test_repl_app_builds():
 
     from co_cli.commands.completer import SlashCommandCompleter
     from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
-    from co_cli.main import _IterationState
+    from co_cli.main import IterationState
 
     frontend = TerminalFrontend()
     frontend.update_status(
@@ -47,7 +47,7 @@ async def test_repl_app_builds():
     async def dispatch(*, user_input, eof):
         dispatched.append((user_input, eof))
 
-    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+    runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=0.0))
     kb = build_key_bindings(runtime=runtime, dispatch=dispatch, frontend=frontend)
 
     with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):

@@ -19,7 +19,7 @@ _SNIPPET_DISPLAY_CHARS = 100
 """Maximum chars shown from an artifact snippet in formatted output."""
 
 
-def _grep_recall(
+def grep_recall(
     items: list[MemoryItem],
     query: str,
     max_results: int,
@@ -118,7 +118,7 @@ def _grep_memory_items_fallback(
     if not grep_kinds:
         return []
     items = load_memory_items(ctx.deps.memory_dir, memory_kinds=grep_kinds)
-    matches = _grep_recall(items, query, limit)
+    matches = grep_recall(items, query, limit)
     return [
         _result_dict(
             kind=m.memory_kind,

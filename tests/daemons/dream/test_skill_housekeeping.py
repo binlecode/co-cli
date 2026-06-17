@@ -21,7 +21,7 @@ from co_cli.daemons.dream._housekeeping import (
     _skill_recall_key,
     decay_skills,
 )
-from co_cli.daemons.dream._state import HousekeepingState
+from co_cli.daemons.dream.state import HousekeepingState
 
 
 def _write_skill(user_skills_dir: Path, name: str, body: str, description: str = "test") -> Path:

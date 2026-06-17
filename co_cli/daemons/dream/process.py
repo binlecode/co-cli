@@ -32,7 +32,7 @@ from co_cli.daemons.dream._process import (
     write_pid,
 )
 from co_cli.daemons.dream._queue import list_queue_files
-from co_cli.daemons.dream._state import DaemonState
+from co_cli.daemons.dream.state import DaemonState
 from co_cli.observability.setup import setup_observability
 
 STOP_GRACE_SECONDS = 3.0
@@ -128,7 +128,7 @@ def stop_daemon(co_home: Path, *, force: bool = False) -> None:
 
 def status_daemon(co_home: Path) -> dict:
     """Return a dict describing the current daemon status (file-based, no socket)."""
-    from co_cli.daemons.dream._state import load_pid_state
+    from co_cli.daemons.dream.state import load_pid_state
 
     pid_file = DREAM_PID_FILE
     if not pid_file.exists():

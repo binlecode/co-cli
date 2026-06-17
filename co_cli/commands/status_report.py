@@ -89,8 +89,8 @@ def dream_status(deps: "CoDeps") -> DreamStatus:
         return DreamStatus(enabled=False, running=False, queue_depth=0, last_housekeeping_at=None)
 
     from co_cli.config.core import DREAM_DAEMON_DIR, USER_DIR
-    from co_cli.daemons.dream._state import load_housekeeping_state
     from co_cli.daemons.dream.process import status_daemon
+    from co_cli.daemons.dream.state import load_housekeeping_state
 
     status = status_daemon(USER_DIR)
     return DreamStatus(

@@ -18,7 +18,7 @@ from tests._settings import SETTINGS_NO_MCP
 from co_cli.config.dream import DreamSettings
 from co_cli.daemons.dream import _loop
 from co_cli.daemons.dream._queue import write_queue_item
-from co_cli.daemons.dream._state import DaemonState
+from co_cli.daemons.dream.state import DaemonState
 from co_cli.deps import CoDeps
 from co_cli.session.persistence import append_messages
 from co_cli.tools.shell_backend import ShellBackend

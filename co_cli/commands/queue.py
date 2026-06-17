@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from co_cli.commands._queue_control import run_queue_control
+from co_cli.commands.queue_control import run_queue_control
 from co_cli.commands.types import CommandContext
 
 
