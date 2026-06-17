@@ -421,8 +421,12 @@ async def file_read(
     except (OSError, ValueError):
         refetch_attempt = False
     current_span().set_attribute("co.tool.spill_refetch_attempt", refetch_attempt)
+    # tool_results_dir is an allowed read root so the model can re-fetch its own
+    # spilled tool results (spill_if_oversized writes there and instructs file_read
+    # to read the path back); it is never a file_search root.
+    read_roots = [*ctx.deps.file_search_roots, ctx.deps.tool_results_dir]
     try:
-        resolved, _root = enforce_read_boundary(Path(path), ctx.deps.file_search_roots)
+        resolved, _root = enforce_read_boundary(Path(path), read_roots)
     except ValueError as e:
         return tool_error(str(e), ctx=ctx)
 

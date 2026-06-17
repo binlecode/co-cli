@@ -16,7 +16,7 @@ from co_cli.deps import CoDeps, CoSessionState
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR
 from co_cli.tools.files.read import file_read, file_search
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, READ_MAX_LINES
+from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, READ_MAX_LINES, spill_if_oversized
 
 
 def _make_deps(workspace: Path, tool_results_dir: Path | None = None) -> CoDeps:
@@ -474,3 +474,31 @@ async def test_file_read_rejects_in_vault_symlink_escaping_all_roots(tmp_path: P
 
     assert result.metadata is not None
     assert result.metadata.get("error") is True, result.return_value
+
+
+@pytest.mark.asyncio
+async def test_file_read_refetches_spilled_tool_result(tmp_path: Path) -> None:
+    """A spilled tool result under tool_results_dir is re-readable via file_read.
+
+    spill_if_oversized writes the full result there and the placeholder instructs
+    the model to file_read that path; the read must succeed even though
+    tool_results_dir is not a file_search root.
+    """
+    workspace = tmp_path / "ws"
+    tool_results_dir = tmp_path / "tool_results"
+    workspace.mkdir()
+
+    content = "spilled-line\n" * 1_000
+    placeholder = spill_if_oversized(content, tool_results_dir, "shell_exec")
+    assert PERSISTED_OUTPUT_TAG in placeholder
+    spilled = next(tool_results_dir.glob("*.txt"))
+
+    deps = _make_deps(workspace, tool_results_dir=tool_results_dir)
+    ctx = _ctx(deps, tool=file_read)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await file_read(ctx, path=str(spilled), start_line=1, end_line=5)
+
+    assert result.metadata is not None
+    assert result.metadata.get("error") is not True, result.return_value
+    assert "spilled-line" in result.return_value

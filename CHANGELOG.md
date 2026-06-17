@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.387]
+
+Fixed broken spilled-tool-result re-fetch — `file_read` can now read back its own spilled outputs.
+
+- `spill_if_oversized` writes oversized tool results under `~/.co-cli/tool-results/` and the placeholder instructs the model to `file_read` that path, but `file_read`'s boundary check only permitted `file_search_roots`, so every re-fetch failed with "Path escapes all read roots".
+- `file_read` now includes `tool_results_dir` among its allowed read roots (file_search is unaffected — the directory remains unlistable).
+- Added a functional round-trip test (spill → file_read) in `test_flow_files_read.py`.
+
 ## [0.8.386]
 
 Rules-conformance cleanup — drained the current batch of R1 one-sided (write-only / dead) members surfaced by the periodic whole-codebase audit. All behavior-preserving subtractions.
