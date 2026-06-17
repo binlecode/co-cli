@@ -46,8 +46,6 @@ class HousekeepingStats(BaseModel):
     memory_decayed: int = 0
     skill_merged: int = 0
     skill_decayed: int = 0
-    done_pruned: int = 0
-    session_pruned: int = 0
 
 
 class HousekeepingState(BaseModel):

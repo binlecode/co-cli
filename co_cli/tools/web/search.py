@@ -30,7 +30,6 @@ class WebRetryResult:
     retryable: bool
     message: str
     delay_seconds: float = 0.0
-    status_code: int | None = None
 
 
 def _parse_seconds(raw: str | None) -> float | None:
@@ -135,13 +134,11 @@ def classify_web_http_error(
                     retryable=True,
                     message=f"{tool_name} rate limited (HTTP 429) for {target}.",
                     delay_seconds=delay or 1.0,
-                    status_code=code,
                 )
             return WebRetryResult(
                 retryable=True,
                 message=f"{tool_name} transient HTTP {code} for {target}.",
                 delay_seconds=delay or 1.0,
-                status_code=code,
             )
 
         if code in TERMINAL_STATUS_CODES or 400 <= code < 500:
@@ -158,14 +155,12 @@ def classify_web_http_error(
             return WebRetryResult(
                 retryable=False,
                 message=msg,
-                status_code=code,
             )
 
         return WebRetryResult(
             retryable=True,
             message=f"{tool_name} server error (HTTP {code}) for {target}.",
             delay_seconds=delay or 1.0,
-            status_code=code,
         )
 
     if isinstance(error, httpx.TimeoutException):

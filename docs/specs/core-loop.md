@@ -128,7 +128,6 @@ Two boundary rules keep the loop legible:
 | `messages` | next transcript snapshot for the REPL |
 | `output` | final model output object |
 | `usage` | latest run usage payload |
-| `streamed_text` | whether visible assistant text was streamed live |
 | `model_requests` | count of `ModelResponse`s across all runs this turn |
 
 Turn-scoped mutable state is explicit in `_TurnState`:
@@ -406,7 +405,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | Symbol | Source | Contract |
 | --- | --- | --- |
 | `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async — single foreground-turn entrypoint; owns runs, approval resumes, retries, and interrupt handling |
-| `TurnResult` | `co_cli/context/orchestrate.py` | Frozen dataclass — `outcome` (`"continue"` / `"error"`), `interrupted`, `messages`, `output`, `usage`, `streamed_text` |
+| `TurnResult` | `co_cli/context/orchestrate.py` | Dataclass — `outcome` (`"continue"` / `"error"`), `interrupted`, `messages`, `output`, `usage`, `model_requests` |
 | `_TurnState` | `co_cli/context/orchestrate.py` | Module-private mutable turn state; not exported |
 
 ### Compaction and recovery

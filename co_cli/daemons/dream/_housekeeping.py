@@ -10,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,10 +43,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_MEMORY_MERGE_PROMPT_PATH = Path(__file__).parent / "prompts" / "memory_merge.md"
-_MEMORY_MERGE_PROMPT: str = _MEMORY_MERGE_PROMPT_PATH.read_text(encoding="utf-8").strip()
-_SKILL_MERGE_PROMPT_PATH = Path(__file__).parent / "prompts" / "skill_merge.md"
-_SKILL_MERGE_PROMPT: str = _SKILL_MERGE_PROMPT_PATH.read_text(encoding="utf-8").strip()
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+
+@cache
+def _memory_merge_prompt() -> str:
+    return (_PROMPTS_DIR / "memory_merge.md").read_text(encoding="utf-8").strip()
+
+
+@cache
+def _skill_merge_prompt() -> str:
+    return (_PROMPTS_DIR / "skill_merge.md").read_text(encoding="utf-8").strip()
+
 
 _MAX_CLUSTER_SIZE = 5
 _MAX_MERGES_PER_CYCLE = 10
@@ -53,8 +63,10 @@ _MAX_DECAY_PER_CYCLE = 20
 _SKILL_ARCHIVE_SUBDIR = ".archive"
 
 
-def _cluster_by_similarity(members: list[MemoryItem], threshold: float) -> list[list[MemoryItem]]:
-    """Union-find clustering by pairwise token-Jaccard similarity."""
+def _cluster_by_similarity[T](
+    members: list[T], threshold: float, text_of: Callable[[T], str]
+) -> list[list[T]]:
+    """Union-find clustering by pairwise token-Jaccard similarity on ``text_of(member)``."""
     size = len(members)
     if size < 2:
         return []
@@ -76,10 +88,10 @@ def _cluster_by_similarity(members: list[MemoryItem], threshold: float) -> list[
         for j in range(i + 1, size):
             if find(i) == find(j):
                 continue
-            if token_jaccard(members[i].content, members[j].content) >= threshold:
+            if token_jaccard(text_of(members[i]), text_of(members[j])) >= threshold:
                 union(i, j)
 
-    grouped: dict[int, list[MemoryItem]] = defaultdict(list)
+    grouped: dict[int, list[T]] = defaultdict(list)
     for idx, member in enumerate(members):
         grouped[find(idx)].append(member)
     return [cluster for cluster in grouped.values() if len(cluster) >= 2]
@@ -106,7 +118,7 @@ def _identify_mergeable_clusters(deps: CoDeps) -> list[list[MemoryItem]]:
 
     clusters: list[list[MemoryItem]] = []
     for members in groups.values():
-        clusters.extend(_cluster_by_similarity(members, threshold))
+        clusters.extend(_cluster_by_similarity(members, threshold, lambda item: item.content))
 
     clusters = [cluster[:_MAX_CLUSTER_SIZE] for cluster in clusters]
     return clusters[:_MAX_MERGES_PER_CYCLE]
@@ -158,7 +170,7 @@ def _write_consolidated_item(
 async def _merge_cluster(deps: CoDeps, cluster: list[MemoryItem]) -> Path | None:
     anchor = _select_canonical(cluster)
     prompt = _render_merge_prompt(cluster, anchor)
-    merged_body = (await llm_call(deps, prompt, instructions=_MEMORY_MERGE_PROMPT) or "").strip()
+    merged_body = (await llm_call(deps, prompt, instructions=_memory_merge_prompt()) or "").strip()
     if len(merged_body) < _MERGED_BODY_MIN_CHARS:
         logger.warning(
             "housekeeping.merge: merged body too short (%d chars); skipping cluster",
@@ -248,40 +260,6 @@ def _skill_recall_key(deps: CoDeps, name: str) -> tuple[int, int]:
     return (len(recall_days), int(record.get("use_count") or 0))
 
 
-def _cluster_skills_by_similarity(
-    members: list[_SkillCandidate], threshold: float
-) -> list[list[_SkillCandidate]]:
-    """Union-find clustering of skill candidates by token-Jaccard on body text."""
-    size = len(members)
-    if size < 2:
-        return []
-
-    parent = list(range(size))
-
-    def find(node: int) -> int:
-        while parent[node] != node:
-            parent[node] = parent[parent[node]]
-            node = parent[node]
-        return node
-
-    def union(left: int, right: int) -> None:
-        root_left, root_right = find(left), find(right)
-        if root_left != root_right:
-            parent[root_left] = root_right
-
-    for i in range(size):
-        for j in range(i + 1, size):
-            if find(i) == find(j):
-                continue
-            if token_jaccard(members[i].body, members[j].body) >= threshold:
-                union(i, j)
-
-    grouped: dict[int, list[_SkillCandidate]] = defaultdict(list)
-    for idx, member in enumerate(members):
-        grouped[find(idx)].append(member)
-    return [cluster for cluster in grouped.values() if len(cluster) >= 2]
-
-
 def _select_canonical_skill(deps: CoDeps, cluster: list[_SkillCandidate]) -> _SkillCandidate:
     """Recall-aware canonical pick — highest (recall_days, use_count) wins."""
     return max(cluster, key=lambda s: _skill_recall_key(deps, s.name))
@@ -357,7 +335,7 @@ def _split_frontmatter_raw(text: str) -> tuple[str, str]:
 async def _merge_skill_cluster(deps: CoDeps, cluster: list[_SkillCandidate]) -> Path | None:
     anchor = _select_canonical_skill(deps, cluster)
     prompt = _render_skill_merge_prompt(deps, cluster, anchor)
-    merged_body = (await llm_call(deps, prompt, instructions=_SKILL_MERGE_PROMPT) or "").strip()
+    merged_body = (await llm_call(deps, prompt, instructions=_skill_merge_prompt()) or "").strip()
     if len(merged_body) < _MERGED_BODY_MIN_CHARS:
         logger.warning(
             "housekeeping.skill_merge: merged body too short (%d chars); skipping cluster",
@@ -376,7 +354,7 @@ def _identify_skill_clusters(deps: CoDeps) -> list[list[_SkillCandidate]]:
     if len(eligible) < 2:
         return []
     threshold = deps.config.skills.consolidation_similarity_threshold
-    clusters = _cluster_skills_by_similarity(eligible, threshold)
+    clusters = _cluster_by_similarity(eligible, threshold, lambda item: item.body)
     clusters = [cluster[:_MAX_CLUSTER_SIZE] for cluster in clusters]
     return clusters[:_MAX_MERGES_PER_CYCLE]
 
@@ -515,7 +493,6 @@ def _prune_aged_files(directory: Path, cutoff: float) -> int:
 
 def prune_done_and_snapshots(
     cfg: DreamSettings,
-    state: HousekeepingState,
     *,
     done_dir: Path,
     snapshots_dir: Path,
@@ -524,17 +501,15 @@ def prune_done_and_snapshots(
 
     Deletes files in ``done_dir`` and ``snapshots_dir`` whose mtime is older
     than ``cfg.done_retention_days``. ``failed/`` is intentionally left untouched
-    (rare, diagnostic). Increments ``state.stats.done_pruned`` by the total count.
+    (rare, diagnostic).
     """
     cutoff = (datetime.now(UTC) - timedelta(days=cfg.done_retention_days)).timestamp()
     pruned = _prune_aged_files(done_dir, cutoff) + _prune_aged_files(snapshots_dir, cutoff)
-    state.stats.done_pruned += pruned
     return pruned
 
 
 def prune_sessions(
     cfg: DreamSettings,
-    state: HousekeepingState,
     *,
     sessions_dir: Path,
 ) -> int:
@@ -544,8 +519,7 @@ def prune_sessions(
     files (``parse_session_filename`` accepts the name) are eligible, so foreign
     files in ``sessions_dir`` are left untouched. The live session is appended
     every turn, keeping its mtime recent, so an age cutoff never selects it.
-    Best-effort: per-file OSError is logged and skipped. Increments
-    ``state.stats.session_pruned`` and returns the count deleted.
+    Best-effort: per-file OSError is logged and skipped. Returns the count deleted.
     """
     if cfg.session_retention_days == 0:
         return 0
@@ -572,7 +546,6 @@ def prune_sessions(
             oldest,
             newest,
         )
-    state.stats.session_pruned += len(pruned_mtimes)
     return len(pruned_mtimes)
 
 
@@ -611,11 +584,10 @@ async def run_housekeeping(
     decay_skills(deps, state)
     prune_done_and_snapshots(
         cfg,
-        state,
         done_dir=DREAM_QUEUE_DONE_DIR,
         snapshots_dir=DREAM_SNAPSHOTS_DIR,
     )
-    prune_sessions(cfg, state, sessions_dir=deps.sessions_dir)
+    prune_sessions(cfg, sessions_dir=deps.sessions_dir)
 
     state.last_housekeeping_at = datetime.now(UTC).isoformat()
     save_housekeeping_state(DREAM_DAEMON_DIR, state)

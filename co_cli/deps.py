@@ -227,8 +227,6 @@ class CoRuntimeState:
     # Count of messages durably persisted to session_path; accumulates across the session.
     # Not reset per-turn — append-only persistence requires this to grow monotonically.
     persisted_message_count: int = 0
-    # Wired in bootstrap/core.py:create_deps to frontend.on_status. Not cleared per-turn.
-    background_status_callback: Callable[[str], None] | None = field(default=None, repr=False)
     # Names of DEFERRED tools the model has revealed via tool_view. The per-turn visibility
     # filter (agent/toolset.py) reveals a DEFERRED tool only once its name is here; the
     # tool_view tool adds names on an exact-name match. The "explicitly justified" tool

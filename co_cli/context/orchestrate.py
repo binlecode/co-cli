@@ -106,7 +106,6 @@ class TurnResult:
     # usage: pydantic-ai RunUsage object. Kept Any: callers never inspect fields directly;
     # usage is forwarded opaquely to span attributes.
     usage: Any = None
-    streamed_text: bool = False
     # Count of ModelResponses across all runs in this turn.
     # Sourced from the per-run accumulator on _TurnState; consumed by the
     # post-turn skill-review hook to gate background firing.
@@ -509,7 +508,6 @@ def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
         output=None,
         usage=turn_state.latest_usage,
         interrupted=False,
-        streamed_text=turn_state.latest_streamed_text,
         outcome="error",
         model_requests=turn_state.model_requests,
     )
@@ -551,7 +549,6 @@ def _build_interrupted_turn_result(turn_state: _TurnState) -> TurnResult:
         output=None,
         usage=turn_state.latest_usage,
         interrupted=True,
-        streamed_text=turn_state.latest_streamed_text,
         outcome="continue",
         model_requests=turn_state.model_requests,
     )
@@ -817,7 +814,6 @@ async def run_turn(
                     output=latest_result.output,
                     usage=turn_state.latest_usage,
                     interrupted=False,
-                    streamed_text=turn_state.latest_streamed_text,
                     outcome="continue",
                     model_requests=turn_state.model_requests,
                 )

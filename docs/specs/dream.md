@@ -301,7 +301,7 @@ flowchart TD
         MemDecay["Phase 2a: Memory decay\naged > decay_after_days\nAND no recall in recall_protection_days\nAND not decay_protected\n→ archive to memory/_archive/"]
         SkillDecay["Phase 2b: Skill decay\nsidecar age > skills.decay_after_days\nAND no recall in skills.recall_protection_days\nAND not pinned\n→ archive to user_skills_dir/.archive/"]
         Prune["Phase 3: Retention prune\nqueue/done/ + orphaned snapshots/ older than done_retention_days\n+ sessions/ older than session_retention_days (opt-in)\n(failed/ left intact)"]
-        State["Persist HousekeepingState\n(last_housekeeping_at,\n memory_merged/decayed,\n skill_merged/decayed,\n done_pruned, session_pruned)"]
+        State["Persist HousekeepingState\n(last_housekeeping_at,\n memory_merged/decayed,\n skill_merged/decayed)"]
     end
 
     Manual --> MemMerge
@@ -353,7 +353,7 @@ Never-run state returns `True` so a freshly-installed daemon does a baseline pas
 
 ### 2.2 State
 
-`HousekeepingState` persists at `~/.co-cli/daemons/dream/_dream_state.json` (distinct from the in-memory `DaemonState` in `_state.py`).
+`HousekeepingState` persists at `~/.co-cli/daemons/dream/_dream_state.json` (distinct from the in-memory `DaemonState` in `state.py`).
 
 | Field | Meaning |
 |---|---|
@@ -362,8 +362,6 @@ Never-run state returns `True` so a freshly-installed daemon does a baseline pas
 | `stats.memory_decayed` | Cumulative memory items archived by decay |
 | `stats.skill_merged` | Cumulative skill-merge clusters completed |
 | `stats.skill_decayed` | Cumulative skills archived by decay |
-| `stats.done_pruned` | Cumulative `done/` + orphaned-snapshot files deleted by the retention prune |
-| `stats.session_pruned` | Cumulative session transcripts deleted by the age-based session retention prune |
 
 Load is forgiving: missing or corrupt state returns a fresh state object. The schema is additive — counters default to `0` so older payloads stay readable.
 
@@ -594,16 +592,16 @@ Internal caps (housekeeping — apply to both domains):
 | Symbol | Source | Contract |
 |---|---|---|
 | `run_housekeeping(deps, cfg, state) -> HousekeepingState` | `co_cli/daemons/dream/_housekeeping.py` | Async — merge under `asyncio.timeout(cfg.max_pass_seconds)`, then decay and retention-prune unconditionally; caller owns the `HousekeepingState` load, this function mutates + persists it |
-| `prune_done_and_snapshots(cfg, state, *, done_dir, snapshots_dir) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — delete `done/` + orphaned snapshot files older than `cfg.done_retention_days`; bumps `state.stats.done_pruned`; returns count deleted |
-| `prune_sessions(cfg, state, *, sessions_dir) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — delete canonically-named session transcripts older than `cfg.session_retention_days` (`0` = no-op); leaves foreign files; bumps `state.stats.session_pruned`; returns count deleted |
+| `prune_done_and_snapshots(cfg, *, done_dir, snapshots_dir) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — delete `done/` + orphaned snapshot files older than `cfg.done_retention_days`; returns count deleted |
+| `prune_sessions(cfg, *, sessions_dir) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — delete canonically-named session transcripts older than `cfg.session_retention_days` (`0` = no-op); leaves foreign files; returns count deleted |
 | `merge_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of same-kind memory clusters; articles excluded; returns clusters merged |
 | `decay_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled memory candidates; returns count archived |
 | `merge_skills(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of user-skill clusters; pinned excluded; rewrites anchor in-place, archives siblings to `user_skills_dir/.archive/`; returns clusters merged |
 | `decay_skills(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled user skills with a sidecar; pinned and sidecar-less skills protected; returns count archived |
 | `scheduled_tick_due(state, cfg) -> bool` | `co_cli/daemons/dream/_loop.py` | Returns True when ≥ `run_interval_hours` since last pass AND past today's `run_start_at` boundary |
-| `HousekeepingState` / `HousekeepingStats` | `co_cli/daemons/dream/_state.py` | Pydantic models for housekeeping state persistence |
-| `load_housekeeping_state(daemon_dir)` | `co_cli/daemons/dream/_state.py` | Forgiving loader — fresh state on missing/corrupt |
-| `save_housekeeping_state(daemon_dir, state)` | `co_cli/daemons/dream/_state.py` | Atomic write of `_dream_state.json` under `daemons/dream/` |
+| `HousekeepingState` / `HousekeepingStats` | `co_cli/daemons/dream/state.py` | Pydantic models for housekeeping state persistence |
+| `load_housekeeping_state(daemon_dir)` | `co_cli/daemons/dream/state.py` | Forgiving loader — fresh state on missing/corrupt |
+| `save_housekeeping_state(daemon_dir, state)` | `co_cli/daemons/dream/state.py` | Atomic write of `_dream_state.json` under `daemons/dream/` |
 | `find_decay_candidates(memory_dir, config)` | `co_cli/memory/decay.py` | Pure candidate filter — applies `decay_after_days`, `recall_protection_days`, and `decay_protected` |
 | `archive_artifacts(entries, memory_dir, memory_store)` | `co_cli/memory/archive.py` | Move items into `memory/_archive/` |
 | `restore_artifact(slug, memory_dir, memory_store)` | `co_cli/memory/archive.py` | Restore archived item by unambiguous filename prefix |
@@ -628,7 +626,7 @@ Internal caps (housekeeping — apply to both domains):
 | `co_cli/daemons/dream/_loop.py` | Polling main loop and queue drain logic |
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review` |
 | `co_cli/daemons/dream/_process.py` | PID-file helpers, advisory flock, `spawn_detached` (Popen + setsid, POSIX-only) |
-| `co_cli/daemons/dream/_state.py` | `DaemonState` runtime struct + PID-file loader + `HousekeepingState` / `HousekeepingStats` |
+| `co_cli/daemons/dream/state.py` | `DaemonState` runtime struct + PID-file loader + `HousekeepingState` / `HousekeepingStats` |
 | `co_cli/daemons/dream/_housekeeping.py` | Memory + skill merge and decay phases + retention prune; `run_housekeeping`, `merge_memory`, `decay_memory`, `merge_skills`, `decay_skills`, `prune_done_and_snapshots`, `prune_sessions` |
 | `co_cli/daemons/dream/prompts/memory_merge.md` | Same-kind memory consolidation prompt |
 | `co_cli/daemons/dream/prompts/skill_merge.md` | Cluster-scoped skill umbrella consolidation prompt |
@@ -697,7 +695,7 @@ Internal caps (housekeeping — apply to both domains):
 | Memory `decay_protected` pin overrides age + recall | `tests/daemons/dream/test_housekeeping.py` |
 | Decay phases run after merge timeout (memory + skill) | `tests/daemons/dream/test_housekeeping.py` |
 | Retention prune: aged `done/` + stale snapshot deleted, fresh `done/` kept | `tests/daemons/dream/test_housekeeping.py` |
-| Session retention prune: aged transcripts deleted, recent kept, non-canonical untouched, disabled is no-op, `session_pruned` persisted | `tests/daemons/dream/test_housekeeping.py` |
+| Session retention prune: aged transcripts deleted, recent kept, non-canonical untouched, disabled is no-op | `tests/daemons/dream/test_housekeeping.py` |
 | Skill canonical pick: highest `(len(recall_days), use_count)` wins | `tests/daemons/dream/test_skill_housekeeping.py` |
 | Skill cluster: similar bodies grouped; pinned excluded | `tests/daemons/dream/test_skill_housekeeping.py` |
 | Skill decay candidacy: aged + never-recalled → archive; recent recall protects; pinned protects; no sidecar → not eligible | `tests/daemons/dream/test_skill_housekeeping.py` |

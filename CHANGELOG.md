@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.386]
+
+Rules-conformance cleanup — drained the current batch of R1 one-sided (write-only / dead) members surfaced by the periodic whole-codebase audit. All behavior-preserving subtractions.
+
+- Removed three clean write-only/dead fields: `WebRetryResult.status_code`, `TurnResult.streamed_text`, `SearchResult.confidence`.
+- Removed `CoRuntimeState.background_status_callback` (live status reaches consumers via `frontend.on_status`) plus its bootstrap assignment and survival test.
+- Dropped the write-only `HousekeepingStats.done_pruned`/`session_pruned` counters, their increments, the now-orphaned `state` param on `prune_done_and_snapshots`/`prune_sessions`, and their test assertions.
+- Synced `core-loop.md` and `dream.md` to match.
+
 ## [0.8.384]
 
 FTS / hybrid recall hardening — a no-match query now returns few/zero results instead of calibration-free junk, lexical-only mode is a single switch, and past-conversation questions reach session recall.

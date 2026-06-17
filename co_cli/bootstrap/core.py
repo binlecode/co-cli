@@ -470,7 +470,6 @@ async def create_deps(
         degradations=MappingProxyType(degradations),
         **paths,
     )
-    deps.runtime.background_status_callback = on_status
 
     from co_cli.bootstrap.schema_budget import measure_always_schema_budget
     from co_cli.context.assembly import build_base_instructions

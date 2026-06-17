@@ -387,10 +387,8 @@ def test_prune_removes_aged_done_and_snapshots_keeps_fresh(tmp_path: Path) -> No
     os.utime(old_done, (old, old))
     os.utime(stale_snapshot, (old, old))
 
-    state = HousekeepingState()
     prune_done_and_snapshots(
         DreamSettings(done_retention_days=7),
-        state,
         done_dir=done_dir,
         snapshots_dir=snapshots_dir,
     )
@@ -422,22 +420,18 @@ def _write_session(sessions_dir: Path, *, age_days: int) -> Path:
 
 
 def test_prune_sessions_deletes_aged_keeps_recent(tmp_path: Path) -> None:
-    """Sessions older than the cutoff are deleted; recent ones survive; counter bumps."""
+    """Sessions older than the cutoff are deleted; recent ones survive."""
     from co_cli.daemons.dream._housekeeping import prune_sessions
 
     sessions_dir = tmp_path / "sessions"
     aged = _write_session(sessions_dir, age_days=45)
     recent = _write_session(sessions_dir, age_days=1)
 
-    state = HousekeepingState()
-    count = prune_sessions(
-        DreamSettings(session_retention_days=30), state, sessions_dir=sessions_dir
-    )
+    count = prune_sessions(DreamSettings(session_retention_days=30), sessions_dir=sessions_dir)
 
     assert count == 1
     assert not aged.exists()
     assert recent.exists()
-    assert state.stats.session_pruned == 1
 
 
 def test_prune_sessions_disabled_is_noop(tmp_path: Path) -> None:
@@ -447,14 +441,10 @@ def test_prune_sessions_disabled_is_noop(tmp_path: Path) -> None:
     sessions_dir = tmp_path / "sessions"
     aged = _write_session(sessions_dir, age_days=400)
 
-    state = HousekeepingState()
-    count = prune_sessions(
-        DreamSettings(session_retention_days=0), state, sessions_dir=sessions_dir
-    )
+    count = prune_sessions(DreamSettings(session_retention_days=0), sessions_dir=sessions_dir)
 
     assert count == 0
     assert aged.exists()
-    assert state.stats.session_pruned == 0
 
 
 def test_prune_sessions_leaves_non_canonical_files(tmp_path: Path) -> None:
@@ -470,19 +460,14 @@ def test_prune_sessions_leaves_non_canonical_files(tmp_path: Path) -> None:
     old = (datetime.now(UTC) - timedelta(days=400)).timestamp()
     os.utime(foreign, (old, old))
 
-    state = HousekeepingState()
-    count = prune_sessions(
-        DreamSettings(session_retention_days=30), state, sessions_dir=sessions_dir
-    )
+    count = prune_sessions(DreamSettings(session_retention_days=30), sessions_dir=sessions_dir)
 
     assert count == 0
     assert foreign.exists()
 
 
-def test_run_housekeeping_prunes_sessions_and_persists_counter(
-    tmp_path: Path, monkeypatch
-) -> None:
-    """Full pass deletes expired sessions, keeps recent, persists session_pruned to disk."""
+def test_run_housekeeping_prunes_expired_sessions(tmp_path: Path, monkeypatch) -> None:
+    """Full pass deletes expired sessions and keeps recent ones."""
     import asyncio
     import importlib
     from types import SimpleNamespace
@@ -493,7 +478,6 @@ def test_run_housekeeping_prunes_sessions_and_persists_counter(
 
     import co_cli.config.core as core_mod
     import co_cli.daemons.dream._housekeeping as housekeeping_mod
-    from co_cli.daemons.dream.state import load_housekeeping_state
 
     importlib.reload(core_mod)
     importlib.reload(housekeeping_mod)
@@ -516,10 +500,7 @@ def test_run_housekeeping_prunes_sessions_and_persists_counter(
     cfg = DreamSettings(session_retention_days=30)
 
     core_mod.DREAM_DAEMON_DIR.mkdir(parents=True, exist_ok=True)
-    result = asyncio.run(housekeeping_mod.run_housekeeping(deps, cfg, state))
+    asyncio.run(housekeeping_mod.run_housekeeping(deps, cfg, state))
 
     assert not aged.exists()
     assert recent.exists()
-    assert result.stats.session_pruned == 1
-    reloaded = load_housekeeping_state(core_mod.DREAM_DAEMON_DIR)
-    assert reloaded.stats.session_pruned == 1

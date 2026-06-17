@@ -57,7 +57,6 @@ class SearchResult:
     category: str | None
     created_at: str | None
     updated_at: str | None
-    confidence: float | None = None
     chunk_index: int | None = None
     start_line: int | None = None
     end_line: int | None = None

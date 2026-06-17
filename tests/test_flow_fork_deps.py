@@ -4,7 +4,6 @@ from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.deps import (
     CoDeps,
-    CoRuntimeState,
     fork_deps,
 )
 
@@ -34,15 +33,3 @@ def test_fork_deps_does_not_share_runtime() -> None:
     child = fork_deps(parent)
     child.runtime.compaction_skip_count = 99
     assert parent.runtime.compaction_skip_count == 0
-
-
-def test_background_status_callback_not_cleared_by_reset_for_turn() -> None:
-    """background_status_callback survives reset_for_turn — it's cross-turn state."""
-    runtime = CoRuntimeState()
-
-    def cb(_: str) -> None:
-        return None
-
-    runtime.background_status_callback = cb
-    runtime.reset_for_turn()
-    assert runtime.background_status_callback is cb
