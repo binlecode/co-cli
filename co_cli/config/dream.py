@@ -12,6 +12,7 @@ DREAM_ENV_MAP: dict[str, str] = {
     "run_start_at": "CO_DREAM_RUN_START_AT",
     "max_pass_seconds": "CO_DREAM_MAX_PASS_SECONDS",
     "done_retention_days": "CO_DREAM_DONE_RETENTION_DAYS",
+    "session_retention_days": "CO_DREAM_SESSION_RETENTION_DAYS",
 }
 
 
@@ -29,6 +30,11 @@ class DreamSettings(BaseModel):
     run_start_at: str = Field(default="03:00", pattern=r"^[0-2]\d:[0-5]\d$")
     max_pass_seconds: int = Field(default=600, ge=60)
     done_retention_days: int = Field(default=7, ge=1)
+    session_retention_days: int = Field(
+        default=0,
+        ge=0,
+        description="Delete session transcripts older than N days; 0 disables. Recommended: 30.",
+    )
 
     @field_validator("run_interval_hours")
     @classmethod

@@ -286,7 +286,7 @@ Current default: `dream.enabled = false`. Opt-in via `CO_DREAM_ENABLED=true` or 
 
 ## 2. Clock-Driven Housekeeping
 
-Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay → retention-prune against the full memory corpus AND the user skill library. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream run`). It reads the memory item store, the per-skill recall sidecars, and skill markdown bodies — never transcripts (that is the reviewer's job). The final retention-prune phase (`prune_done_and_snapshots`) deletes `queue/done/` files and orphaned `snapshots/` files older than `dream.done_retention_days` (default 7), keeping those audit bins bounded; `queue/failed/` is left intact.
+Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay → retention-prune against the full memory corpus AND the user skill library. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream run`). It reads the memory item store, the per-skill recall sidecars, and skill markdown bodies — never transcripts (that is the reviewer's job). The retention-prune phase has two independent sweeps: `prune_done_and_snapshots` deletes `queue/done/` files and orphaned `snapshots/` files older than `dream.done_retention_days` (default 7), and `prune_sessions` deletes session transcripts in `sessions_dir` older than `dream.session_retention_days` (default `0` = disabled, opt-in). Both keep their bins bounded; `queue/failed/` is left intact. `prune_sessions` only touches canonically-named session files (`parse_session_filename` accepts the name), leaving foreign files alone, and the live session's recent mtime keeps it from ever being selected.
 
 ```mermaid
 flowchart TD
@@ -300,8 +300,8 @@ flowchart TD
         SkillMerge["Phase 1b: Skill merge\ntoken-Jaccard clusters of user-skill bodies\npinned skills excluded\ncanonical = max (len(recall_days), use_count)\n→ llm_call() consolidates body\n→ archive non-anchor originals to skills/.archive/"]
         MemDecay["Phase 2a: Memory decay\naged > decay_after_days\nAND no recall in recall_protection_days\nAND not decay_protected\n→ archive to memory/_archive/"]
         SkillDecay["Phase 2b: Skill decay\nsidecar age > skills.decay_after_days\nAND no recall in skills.recall_protection_days\nAND not pinned\n→ archive to user_skills_dir/.archive/"]
-        Prune["Phase 3: Retention prune\nqueue/done/ + orphaned snapshots/\nolder than done_retention_days\n(failed/ left intact)"]
-        State["Persist HousekeepingState\n(last_housekeeping_at,\n memory_merged/decayed,\n skill_merged/decayed,\n done_pruned)"]
+        Prune["Phase 3: Retention prune\nqueue/done/ + orphaned snapshots/ older than done_retention_days\n+ sessions/ older than session_retention_days (opt-in)\n(failed/ left intact)"]
+        State["Persist HousekeepingState\n(last_housekeeping_at,\n memory_merged/decayed,\n skill_merged/decayed,\n done_pruned, session_pruned)"]
     end
 
     Manual --> MemMerge
@@ -363,6 +363,7 @@ Never-run state returns `True` so a freshly-installed daemon does a baseline pas
 | `stats.skill_merged` | Cumulative skill-merge clusters completed |
 | `stats.skill_decayed` | Cumulative skills archived by decay |
 | `stats.done_pruned` | Cumulative `done/` + orphaned-snapshot files deleted by the retention prune |
+| `stats.session_pruned` | Cumulative session transcripts deleted by the age-based session retention prune |
 
 Load is forgiving: missing or corrupt state returns a fresh state object. The schema is additive — counters default to `0` so older payloads stay readable.
 
@@ -461,7 +462,7 @@ Both phases call `refresh_skills(deps)` after writes so `deps.skill_catalog` sta
 
 ### 2.6 Failure and Timeout Semantics
 
-`run_housekeeping` wraps the **merge phases** in `asyncio.timeout(cfg.max_pass_seconds)` (default 600 s). Decay phases are synchronous and bounded by `MAX_DECAY_PER_CYCLE` filesystem moves — wrapping them in the same timeout would let a slow merge starve decay, so both decay phases run unconditionally after merge regardless of whether merge completed or timed out. The retention-prune phase is likewise synchronous and runs outside the timeout, after decay. On merge timeout, partial merge counters are still persisted, decay and prune still run, and `last_housekeeping_at` is set to now — the next tick fires on schedule rather than stacking missed passes. Individual merge clusters that raise are logged and skipped without aborting the pass.
+`run_housekeeping` wraps the **merge phases** in `asyncio.timeout(cfg.max_pass_seconds)` (default 600 s). Decay phases are synchronous and bounded by `MAX_DECAY_PER_CYCLE` filesystem moves — wrapping them in the same timeout would let a slow merge starve decay, so both decay phases run unconditionally after merge regardless of whether merge completed or timed out. The retention-prune phases (`prune_done_and_snapshots`, then `prune_sessions`) are likewise synchronous and run outside the timeout, after decay. On merge timeout, partial merge counters are still persisted, decay and prune still run, and `last_housekeeping_at` is set to now — the next tick fires on schedule rather than stacking missed passes. Individual merge clusters that raise are logged and skipped without aborting the pass.
 
 ### 2.7 User Inspection and Recovery
 
@@ -525,6 +526,7 @@ The daemon wires the same observability stack as the main app via `setup_observa
 | `dream.run_start_at` | `CO_DREAM_RUN_START_AT` | `"03:00"` | Preferred local time-of-day boundary for the scheduled tick (`HH:MM`) |
 | `dream.max_pass_seconds` | `CO_DREAM_MAX_PASS_SECONDS` | `600` | Wall-clock cap on the merge phase of a housekeeping pass (≥ 60); decay runs unconditionally after merge |
 | `dream.done_retention_days` | `CO_DREAM_DONE_RETENTION_DAYS` | `7` | Age (days, ≥ 1) past which `queue/done/` and orphaned `snapshots/` files are deleted by the housekeeping retention prune; `failed/` is never pruned |
+| `dream.session_retention_days` | `CO_DREAM_SESSION_RETENTION_DAYS` | `0` | Age (days, ≥ 0) past which session transcripts are deleted by the housekeeping retention prune; `0` disables it (opt-in). Recommended starting value: 30 |
 
 ### Reviewer trigger settings (`skills.*`)
 
@@ -593,6 +595,7 @@ Internal caps (housekeeping — apply to both domains):
 |---|---|---|
 | `run_housekeeping(deps, cfg, state) -> HousekeepingState` | `co_cli/daemons/dream/_housekeeping.py` | Async — merge under `asyncio.timeout(cfg.max_pass_seconds)`, then decay and retention-prune unconditionally; caller owns the `HousekeepingState` load, this function mutates + persists it |
 | `prune_done_and_snapshots(cfg, state, *, done_dir, snapshots_dir) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — delete `done/` + orphaned snapshot files older than `cfg.done_retention_days`; bumps `state.stats.done_pruned`; returns count deleted |
+| `prune_sessions(cfg, state, *, sessions_dir) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — delete canonically-named session transcripts older than `cfg.session_retention_days` (`0` = no-op); leaves foreign files; bumps `state.stats.session_pruned`; returns count deleted |
 | `merge_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of same-kind memory clusters; articles excluded; returns clusters merged |
 | `decay_memory(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled memory candidates; returns count archived |
 | `merge_skills(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of user-skill clusters; pinned excluded; rewrites anchor in-place, archives siblings to `user_skills_dir/.archive/`; returns clusters merged |
@@ -626,7 +629,7 @@ Internal caps (housekeeping — apply to both domains):
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review` |
 | `co_cli/daemons/dream/_process.py` | PID-file helpers, advisory flock, `spawn_detached` (Popen + setsid, POSIX-only) |
 | `co_cli/daemons/dream/_state.py` | `DaemonState` runtime struct + PID-file loader + `HousekeepingState` / `HousekeepingStats` |
-| `co_cli/daemons/dream/_housekeeping.py` | Memory + skill merge and decay phases + retention prune; `run_housekeeping`, `merge_memory`, `decay_memory`, `merge_skills`, `decay_skills`, `prune_done_and_snapshots` |
+| `co_cli/daemons/dream/_housekeeping.py` | Memory + skill merge and decay phases + retention prune; `run_housekeeping`, `merge_memory`, `decay_memory`, `merge_skills`, `decay_skills`, `prune_done_and_snapshots`, `prune_sessions` |
 | `co_cli/daemons/dream/prompts/memory_merge.md` | Same-kind memory consolidation prompt |
 | `co_cli/daemons/dream/prompts/skill_merge.md` | Cluster-scoped skill umbrella consolidation prompt |
 | `co_cli/daemons/dream/process.py` | Public surface: `start_daemon`, `stop_daemon`, `status_daemon`, `_run_foreground` |
@@ -694,6 +697,7 @@ Internal caps (housekeeping — apply to both domains):
 | Memory `decay_protected` pin overrides age + recall | `tests/daemons/dream/test_housekeeping.py` |
 | Decay phases run after merge timeout (memory + skill) | `tests/daemons/dream/test_housekeeping.py` |
 | Retention prune: aged `done/` + stale snapshot deleted, fresh `done/` kept | `tests/daemons/dream/test_housekeeping.py` |
+| Session retention prune: aged transcripts deleted, recent kept, non-canonical untouched, disabled is no-op, `session_pruned` persisted | `tests/daemons/dream/test_housekeeping.py` |
 | Skill canonical pick: highest `(len(recall_days), use_count)` wins | `tests/daemons/dream/test_skill_housekeeping.py` |
 | Skill cluster: similar bodies grouped; pinned excluded | `tests/daemons/dream/test_skill_housekeeping.py` |
 | Skill decay candidacy: aged + never-recalled → archive; recent recall protects; pinned protects; no sidecar → not eligible | `tests/daemons/dream/test_skill_housekeeping.py` |

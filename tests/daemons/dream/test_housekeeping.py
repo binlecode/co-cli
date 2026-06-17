@@ -322,6 +322,7 @@ def test_run_housekeeping_decay_runs_after_merge_timeout(tmp_path: Path, monkeyp
         memory_dir=memory_dir,
         memory_store=None,
         user_skills_dir=tmp_path / "user-skills",
+        sessions_dir=tmp_path / "sessions",
         config=SimpleNamespace(
             memory=MemorySettings(decay_after_days=90, recall_protection_days=30),
             skills=SkillsSettings(),
@@ -397,3 +398,128 @@ def test_prune_removes_aged_done_and_snapshots_keeps_fresh(tmp_path: Path) -> No
     assert not old_done.exists()
     assert not stale_snapshot.exists()
     assert fresh_done.exists()
+
+
+# ---------------------------------------------------------------------------
+# prune_sessions
+# ---------------------------------------------------------------------------
+
+
+def _write_session(sessions_dir: Path, *, age_days: int) -> Path:
+    """Create a canonical-named session file aged ``age_days`` via mtime."""
+    import os
+
+    from co_cli.session.filename import session_filename
+
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    created = datetime.now(UTC) - timedelta(days=age_days)
+    name = session_filename(created, uuid4().hex)
+    path = sessions_dir / name
+    path.write_text("{}\n", encoding="utf-8")
+    stamp = created.timestamp()
+    os.utime(path, (stamp, stamp))
+    return path
+
+
+def test_prune_sessions_deletes_aged_keeps_recent(tmp_path: Path) -> None:
+    """Sessions older than the cutoff are deleted; recent ones survive; counter bumps."""
+    from co_cli.daemons.dream._housekeeping import prune_sessions
+
+    sessions_dir = tmp_path / "sessions"
+    aged = _write_session(sessions_dir, age_days=45)
+    recent = _write_session(sessions_dir, age_days=1)
+
+    state = HousekeepingState()
+    count = prune_sessions(
+        DreamSettings(session_retention_days=30), state, sessions_dir=sessions_dir
+    )
+
+    assert count == 1
+    assert not aged.exists()
+    assert recent.exists()
+    assert state.stats.session_pruned == 1
+
+
+def test_prune_sessions_disabled_is_noop(tmp_path: Path) -> None:
+    """session_retention_days == 0 deletes nothing, even for very old sessions."""
+    from co_cli.daemons.dream._housekeeping import prune_sessions
+
+    sessions_dir = tmp_path / "sessions"
+    aged = _write_session(sessions_dir, age_days=400)
+
+    state = HousekeepingState()
+    count = prune_sessions(
+        DreamSettings(session_retention_days=0), state, sessions_dir=sessions_dir
+    )
+
+    assert count == 0
+    assert aged.exists()
+    assert state.stats.session_pruned == 0
+
+
+def test_prune_sessions_leaves_non_canonical_files(tmp_path: Path) -> None:
+    """A foreign .jsonl that isn't a canonical session name is never deleted."""
+    import os
+
+    from co_cli.daemons.dream._housekeeping import prune_sessions
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True)
+    foreign = sessions_dir / "notes.jsonl"
+    foreign.write_text("{}\n", encoding="utf-8")
+    old = (datetime.now(UTC) - timedelta(days=400)).timestamp()
+    os.utime(foreign, (old, old))
+
+    state = HousekeepingState()
+    count = prune_sessions(
+        DreamSettings(session_retention_days=30), state, sessions_dir=sessions_dir
+    )
+
+    assert count == 0
+    assert foreign.exists()
+
+
+def test_run_housekeeping_prunes_sessions_and_persists_counter(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Full pass deletes expired sessions, keeps recent, persists session_pruned to disk."""
+    import asyncio
+    import importlib
+    from types import SimpleNamespace
+
+    from co_cli.config.skills import SkillsSettings
+
+    monkeypatch.setenv("CO_HOME", str(tmp_path))
+
+    import co_cli.config.core as core_mod
+    import co_cli.daemons.dream._housekeeping as housekeeping_mod
+    from co_cli.daemons.dream._state import load_housekeeping_state
+
+    importlib.reload(core_mod)
+    importlib.reload(housekeeping_mod)
+
+    sessions_dir = tmp_path / "sessions"
+    aged = _write_session(sessions_dir, age_days=45)
+    recent = _write_session(sessions_dir, age_days=1)
+
+    deps = SimpleNamespace(
+        memory_dir=tmp_path / "memory",
+        memory_store=None,
+        user_skills_dir=tmp_path / "user-skills",
+        sessions_dir=sessions_dir,
+        config=SimpleNamespace(
+            memory=MemorySettings(),
+            skills=SkillsSettings(),
+        ),
+    )
+    state = HousekeepingState()
+    cfg = DreamSettings(session_retention_days=30)
+
+    core_mod.DREAM_DAEMON_DIR.mkdir(parents=True, exist_ok=True)
+    result = asyncio.run(housekeeping_mod.run_housekeeping(deps, cfg, state))
+
+    assert not aged.exists()
+    assert recent.exists()
+    assert result.stats.session_pruned == 1
+    reloaded = load_housekeeping_state(core_mod.DREAM_DAEMON_DIR)
+    assert reloaded.stats.session_pruned == 1

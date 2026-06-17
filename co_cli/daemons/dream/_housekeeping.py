@@ -33,6 +33,7 @@ from co_cli.memory.item import (
 from co_cli.memory.service import save_memory_item
 from co_cli.memory.similarity import token_jaccard
 from co_cli.observability.tracing import trace
+from co_cli.session.filename import parse_session_filename
 from co_cli.skills.usage import read_record
 
 if TYPE_CHECKING:
@@ -531,6 +532,50 @@ def prune_done_and_snapshots(
     return pruned
 
 
+def prune_sessions(
+    cfg: DreamSettings,
+    state: HousekeepingState,
+    *,
+    sessions_dir: Path,
+) -> int:
+    """Delete session transcripts older than ``cfg.session_retention_days``.
+
+    Opt-in: ``0`` (the default) disables pruning. Only canonical-named session
+    files (``parse_session_filename`` accepts the name) are eligible, so foreign
+    files in ``sessions_dir`` are left untouched. The live session is appended
+    every turn, keeping its mtime recent, so an age cutoff never selects it.
+    Best-effort: per-file OSError is logged and skipped. Increments
+    ``state.stats.session_pruned`` and returns the count deleted.
+    """
+    if cfg.session_retention_days == 0:
+        return 0
+    if not sessions_dir.exists():
+        return 0
+    cutoff = (datetime.now(UTC) - timedelta(days=cfg.session_retention_days)).timestamp()
+    pruned_mtimes: list[float] = []
+    for path in sessions_dir.glob("*.jsonl"):
+        if parse_session_filename(path.name) is None:
+            continue
+        try:
+            mtime = path.stat().st_mtime
+            if mtime < cutoff:
+                path.unlink()
+                pruned_mtimes.append(mtime)
+        except OSError as exc:
+            logger.warning("housekeeping.prune_sessions: cannot prune %s: %s", path, exc)
+    if pruned_mtimes:
+        oldest = datetime.fromtimestamp(min(pruned_mtimes), UTC).date()
+        newest = datetime.fromtimestamp(max(pruned_mtimes), UTC).date()
+        logger.info(
+            "housekeeping.prune_sessions: pruned %d session(s), mtime %s..%s",
+            len(pruned_mtimes),
+            oldest,
+            newest,
+        )
+    state.stats.session_pruned += len(pruned_mtimes)
+    return len(pruned_mtimes)
+
+
 @trace("co.housekeeping.pass")
 async def run_housekeeping(
     deps: CoDeps, cfg: DreamSettings, state: HousekeepingState
@@ -570,6 +615,7 @@ async def run_housekeeping(
         done_dir=DREAM_QUEUE_DONE_DIR,
         snapshots_dir=DREAM_SNAPSHOTS_DIR,
     )
+    prune_sessions(cfg, state, sessions_dir=deps.sessions_dir)
 
     state.last_housekeeping_at = datetime.now(UTC).isoformat()
     save_housekeeping_state(DREAM_DAEMON_DIR, state)

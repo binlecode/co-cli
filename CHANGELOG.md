@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.8.378]
+
+Session retention — opt-in age-based pruning of session transcripts via the dream daemon's housekeeping pass. New `session_retention_days` knob (`CO_DREAM_SESSION_RETENTION_DAYS`, default `0` = disabled, recommended 30) deletes canonical session `.jsonl` files older than N days; adds a `session_pruned` counter and a per-pass summary log line.
+
 ## [0.8.376]
 
 Rules-conformance cleanup — remove the rejected fitness-function scaffolding and fix the real coding-rule violations it was avoiding (behavior-preserving).

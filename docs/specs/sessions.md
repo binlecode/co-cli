@@ -18,6 +18,7 @@ There is no LLM call on the recall path — session_search returns lexically-mat
 - Format: one message per JSONL line; pydantic-ai history is the source of truth.
 - Filename: `YYYY-MM-DD-THHMMSSZ-<uuid8>.jsonl`. The 8-char UUID suffix is the canonical session identifier.
 - Mutation: append-only via `persist_session_history()`; rewritten in place on compaction (see [compaction.md](compaction.md)).
+- Retention: opt-in age-based pruning by the dream daemon's housekeeping pass — transcripts older than `dream.session_retention_days` are deleted (`0`, the default, disables it). The live session is appended every turn so its mtime stays recent and an age cutoff never selects it. See [dream.md](dream.md).
 
 ## 2. Architecture layers
 
@@ -80,6 +81,8 @@ Provider-reported token usage is recorded to a durable append-only ledger at `~/
 ## 4. Config
 
 Session search is file-based and has no configurable settings — there are no chunk, embedding, or backend knobs. The `memory.*` retrieval settings in [memory.md §3](memory.md) govern the memory/canon hybrid index only; sessions ignore them.
+
+Session *retention* is the one configurable lifecycle knob: `dream.session_retention_days` (`CO_DREAM_SESSION_RETENTION_DAYS`, default `0` = disabled) caps transcript age. It lives in `DreamSettings` because the dream daemon's housekeeping pass enforces it; see [dream.md §Config](dream.md).
 
 ## 5. Public Interface
 
