@@ -1,10 +1,13 @@
 """File-based lexical search over session transcripts.
 
-Ripgrep (fixed-string, case-insensitive) over ``sessions_dir/*.jsonl``, with a
-Python line-scan fallback when ``rg`` is absent. Matched JSONL lines are mapped
-back to readable message content via ``extract_messages`` and returned as
-``SessionHit`` records. ``SessionHit.path`` carries the session uuid8 (not a
-filesystem path) to match the attribute contract the recall tool consumes.
+Ripgrep (case-insensitive) over ``sessions_dir/*.jsonl``, with a Python
+line-scan fallback when ``rg`` is absent. Literal substring by default
+(``--fixed-strings``); ``is_regex=True`` treats the query as a regex (validated
+up front, ``--fixed-strings`` dropped). Matched JSONL lines are mapped back to
+readable message content via ``extract_messages`` and returned inside a
+``SessionSearchResult`` (``hits`` + an optional ``error`` set only on an invalid
+regex). ``SessionHit.path`` carries the session uuid8 (not a filesystem path) to
+match the attribute contract the recall tool consumes.
 
 Matching is a case-insensitive substring of the raw, on-disk JSONL line. co
 writes transcripts via pydantic-core ``dump_json`` (literal UTF-8 — only ``"``
@@ -16,6 +19,7 @@ message part's content — is dropped: there is no readable snippet to cite.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -28,6 +32,20 @@ from co_cli.session.transcript import ExtractedMessage, extract_messages
 logger = logging.getLogger(__name__)
 
 _SOURCE_LABEL = "session"
+
+
+@dataclass
+class SessionSearchResult:
+    """Outcome of a session search.
+
+    ``error`` is non-None only when the query was supplied as a regex
+    (``is_regex=True``) and failed to compile. An explicit error is distinct
+    from an empty ``hits`` list (a valid search that matched nothing): the
+    model must not read a bad-pattern failure as "nothing recorded" (CD-M-1).
+    """
+
+    hits: list[SessionHit]
+    error: str | None = None
 
 
 @dataclass
@@ -49,32 +67,49 @@ class SessionHit:
     score: float
 
 
-def search_sessions(sessions_dir: Path, query: str, limit: int) -> list[SessionHit]:
+def search_sessions(
+    sessions_dir: Path, query: str, limit: int, *, is_regex: bool = False
+) -> SessionSearchResult:
     """Lexically search session transcripts; return ranked ``SessionHit`` records.
+
+    Literal substring by default. When ``is_regex`` the query is a regular
+    expression: it is ``re.compile``-validated up front — on failure an explicit
+    ``SessionSearchResult(error=...)`` is returned and nothing is dispatched, so
+    a known-bad pattern never reaches the Python line-scan (CD-M-1).
 
     Ranking is (match_count desc, recency desc); ``score`` is the match count.
     """
     query = query.strip()
     if not query or not sessions_dir.exists():
-        return []
+        return SessionSearchResult(hits=[])
 
-    matches = _ripgrep_line_matches(sessions_dir, query)
+    compiled: re.Pattern[str] | None = None
+    if is_regex:
+        try:
+            compiled = re.compile(query, re.IGNORECASE)
+        except re.error as e:
+            return SessionSearchResult(hits=[], error=f"invalid regex pattern: {e}")
+
+    matches = _ripgrep_line_matches(sessions_dir, query, is_regex=is_regex)
     if matches is None:
-        matches = _python_line_matches(sessions_dir, query)
+        matches = _python_line_matches(sessions_dir, query, compiled)
 
-    hits = _build_hits(matches, query)
+    hits = _build_hits(matches, query, compiled)
     hits.sort(key=lambda h: (h.score, h.created_at), reverse=True)
-    return hits[:limit]
+    return SessionSearchResult(hits=hits[:limit])
 
 
-def _ripgrep_line_matches(sessions_dir: Path, query: str) -> dict[Path, list[int]] | None:
+def _ripgrep_line_matches(
+    sessions_dir: Path, query: str, *, is_regex: bool = False
+) -> dict[Path, list[int]] | None:
     """Run rg; return {file: [0-indexed matched line]}, or None if rg is unavailable.
 
     Mirrors ``tools/files/read.py``'s invocation hygiene: sanitized env and
     ``--no-config`` so the user's ripgrep.toml cannot interfere. ``--no-ignore``
     and ``--hidden`` keep parity with the Python fallback, which globs every
-    file regardless of ignore rules. Exit code 1 (no match) is success with
-    empty output.
+    file regardless of ignore rules. ``--fixed-strings`` (literal matching) is
+    dropped in regex mode so the query is treated as a pattern. Exit code 1 (no
+    match) is success with empty output.
     """
     if shutil.which("rg") is None:
         return None
@@ -84,7 +119,10 @@ def _ripgrep_line_matches(sessions_dir: Path, query: str) -> dict[Path, list[int
         "--line-number",
         "--no-heading",
         "--with-filename",
-        "--fixed-strings",
+    ]
+    if not is_regex:
+        args.append("--fixed-strings")
+    args += [
         "--ignore-case",
         "--no-config",
         "--no-ignore",
@@ -131,8 +169,14 @@ def _parse_rg_output(stdout: bytes) -> dict[Path, list[int]]:
     return matches
 
 
-def _python_line_matches(sessions_dir: Path, query: str) -> dict[Path, list[int]]:
-    """rg-absent fallback: case-insensitive substring scan over each JSONL file."""
+def _python_line_matches(
+    sessions_dir: Path, query: str, compiled: re.Pattern[str] | None
+) -> dict[Path, list[int]]:
+    """rg-absent fallback: scan each JSONL file line by line.
+
+    Literal case-insensitive substring unless ``compiled`` is supplied (regex
+    mode), in which case ``compiled.search`` decides each line.
+    """
     needle = query.lower()
     matches: dict[Path, list[int]] = {}
     for path in sessions_dir.glob("*.jsonl"):
@@ -141,22 +185,36 @@ def _python_line_matches(sessions_dir: Path, query: str) -> dict[Path, list[int]
         try:
             with path.open("r", encoding="utf-8") as f:
                 for idx, line in enumerate(f):
-                    if needle in line.lower():
+                    matched = (
+                        compiled.search(line) is not None
+                        if compiled is not None
+                        else needle in line.lower()
+                    )
+                    if matched:
                         matches.setdefault(path, []).append(idx)
         except (OSError, UnicodeDecodeError):
             continue
     return matches
 
 
-def _build_hits(matches: dict[Path, list[int]], query: str) -> list[SessionHit]:
+def _build_hits(
+    matches: dict[Path, list[int]], query: str, compiled: re.Pattern[str] | None
+) -> list[SessionHit]:
     """Map matched JSONL lines to readable snippets, dropping structural-only matches.
 
-    For each matched line, select the retained message part whose content
-    contains the raw query (case-insensitive). A line that matched only on a
-    structural JSON key/value yields no such part and is skipped; a session with
-    no content-bearing match produces no hit (CD-M-1).
+    For each matched line, select the retained message part whose decoded content
+    the query matches (literal substring, or ``compiled.search`` in regex mode) —
+    so snippet selection stays consistent with what the engine matched. A line
+    that matched only on a structural JSON key/value yields no such part and is
+    skipped; a session with no content-bearing match produces no hit (CD-M-1).
     """
     needle = query.lower()
+
+    def content_matches(content: str) -> bool:
+        if compiled is not None:
+            return compiled.search(content) is not None
+        return needle in content.lower()
+
     hits: list[SessionHit] = []
     for path, line_indices in matches.items():
         parsed = parse_session_filename(path.name)
@@ -173,7 +231,7 @@ def _build_hits(matches: dict[Path, list[int]], query: str) -> list[SessionHit]:
         content_match_count = 0
         for line_index in line_indices:
             part = next(
-                (m for m in by_line.get(line_index, []) if needle in m.content.lower()),
+                (m for m in by_line.get(line_index, []) if content_matches(m.content)),
                 None,
             )
             if part is None:

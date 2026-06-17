@@ -17,6 +17,7 @@ from tests._settings import SETTINGS
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.session._search import search_sessions
 from co_cli.session.filename import session_filename
 from co_cli.session.store import SessionStore
 from co_cli.tools.session.recall import _SESSIONS_CHANNEL_CAP, session_search
@@ -214,3 +215,64 @@ async def test_tool_no_match_returns_empty_message(tmp_path: Path) -> None:
         result = await session_search(ctx, query="nonexistent_phrase_zzz9")
 
     assert result.metadata.get("results", []) == []
+
+
+_FLIGHT_CODE_PATTERN = r"\b[A-Z]{2}\d{2,4}\b"
+
+
+def test_engine_regex_bridges_vocabulary_mismatch(tmp_path: Path) -> None:
+    """Regex mode finds a shaped entity the literal user-vocabulary query misses.
+
+    The session records only "AA890 delayed" — never the word "flight". A literal
+    `flight` query is a false negative; the structural pattern bridges the gap.
+    A malformed pattern returns an explicit error, never an empty "no results"
+    and never a raise or a fallthrough into the line-scan.
+    """
+    sessions_dir = tmp_path / "sessions"
+    _make_session_file(sessions_dir, "aabb1122", "Booking confirmed: AA890 delayed two hours.")
+
+    regex = search_sessions(sessions_dir, _FLIGHT_CODE_PATTERN, limit=3, is_regex=True)
+    assert regex.error is None
+    assert regex.hits, "regex pattern must surface the shaped flight code"
+    assert "AA890" in regex.hits[0].snippet
+
+    literal = search_sessions(sessions_dir, "flight", limit=3)
+    assert literal.error is None
+    assert literal.hits == [], "literal query on absent vocabulary must miss"
+
+    malformed = search_sessions(sessions_dir, "[unterminated", limit=3, is_regex=True)
+    assert malformed.hits == []
+    assert malformed.error is not None, "malformed regex must yield an explicit error"
+
+
+@pytest.mark.asyncio
+async def test_tool_pattern_mode_returns_flight_code_hit(tmp_path: Path) -> None:
+    """Tool-level pattern= mode returns the shaped entity as a line-cited hit."""
+    sessions_dir = tmp_path / "sessions"
+    _make_session_file(sessions_dir, "aabb1122", "Booking confirmed: AA890 delayed two hours.")
+    store = _make_store(sessions_dir)
+    deps = _make_deps(sessions_dir, store)
+    ctx = _ctx(deps)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_search(ctx, pattern=_FLIGHT_CODE_PATTERN)
+
+    results = result.metadata.get("results", [])
+    assert results, "pattern mode must surface the flight-code session"
+    assert results[0]["session_id"] == "aabb1122"
+    assert "AA890" in results[0]["chunk_text"]
+
+
+@pytest.mark.asyncio
+async def test_tool_query_and_pattern_mutually_exclusive(tmp_path: Path) -> None:
+    """Supplying both query and pattern returns a tool_error, not an implicit choice."""
+    sessions_dir = tmp_path / "sessions"
+    _make_session_file(sessions_dir, "aabb1122", "some content")
+    store = _make_store(sessions_dir)
+    deps = _make_deps(sessions_dir, store)
+    ctx = _ctx(deps)
+
+    async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+        result = await session_search(ctx, query="x", pattern="y")
+
+    assert result.metadata.get("error") is True

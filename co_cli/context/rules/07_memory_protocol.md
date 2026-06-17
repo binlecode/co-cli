@@ -20,6 +20,18 @@ Load a memory item's full body with `memory_view(name)`; pull verbatim turns fro
 session when you need the exact wording. Don't reach for `file_read` to retrieve
 memory item bodies.
 
+**Cross-session recall cascade.** A past session may word a thing differently than
+the question (a flight stored as `AA890`, never "flight") — the "one broader retry"
+above is just the keyword rung:
+
+1. A literal keyword search of past sessions. *Zero or structural-key-only hits →*
+2. Other angles — a regex pattern search for shaped targets (codes, IDs, dates,
+   amounts), and/or synonym/entity terms as several separate keyword searches;
+   one thin angle is not a "no". *Angles exhausted, no content-bearing hit →*
+3. **Honest miss** — say recall was inconclusive, name what you searched, and note
+   the history wasn't read exhaustively (some content has no searchable handle).
+   Never a bare "nothing found" that hides that.
+
 ## Explicit saves
 
 When the user explicitly asks to remember or save something — "remember I prefer X",

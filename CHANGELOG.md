@@ -1,6 +1,15 @@
 # Changelog
 
-## [0.8.380]
+## [0.8.382]
+
+Cross-session recall concept expansion — bridge vocabulary mismatch when a past session recorded an entity in different words than the question asks.
+
+### Feature: regex/pattern search path for session recall
+
+- `session_search` gains a `pattern=` parameter (regex, case-insensitive), mutually exclusive with literal `query=`; an invalid pattern is `re.compile`-validated up front and returns an explicit `tool_error`, never a silent empty result or a fallthrough to the Python line-scan.
+- Engine: `search_sessions(..., *, is_regex=False)` / `SessionStore.search(..., *, is_regex=False)` return a `SessionSearchResult` (`hits` + optional `error`); literal default path is byte-for-byte unchanged.
+- Guidance: the `session_search` docstring gains a concept→pattern/synonym/multi-angle "expanding intent" block; `07_memory_protocol.md` gains a three-rung cross-session recall cascade (literal → pattern/synonym angles → honest miss) carrying behavioral triggers only (no deferred-tool call signatures on the floor).
+- Instruction-floor ceiling re-pinned 24,200 → 25,000 to absorb the intentional cascade addition (cascade trimmed to a terse skeleton first; full detail rides the deferred docstring).
 
 Rules-conformance cleanup (R4 layer back-edges) — eliminate three lower-layer-imports-higher-layer edges by pure module relocation (behavior-preserving).
 

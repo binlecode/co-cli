@@ -11,7 +11,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from co_cli.session._search import SessionHit, search_sessions
+from co_cli.session._search import SessionSearchResult, search_sessions
 
 if TYPE_CHECKING:
     from co_cli.config.core import Settings
@@ -26,9 +26,9 @@ class SessionStore:
         self._config = config
         self._sessions_dir = sessions_dir
 
-    def search(self, query: str, limit: int) -> list[SessionHit]:
-        """Lexical ripgrep search over session transcripts."""
-        return search_sessions(self._sessions_dir, query, limit)
+    def search(self, query: str, limit: int, *, is_regex: bool = False) -> SessionSearchResult:
+        """Lexical (default) or regex (``is_regex``) ripgrep search over transcripts."""
+        return search_sessions(self._sessions_dir, query, limit, is_regex=is_regex)
 
     def count(self) -> int:
         """Number of session transcript files on disk."""

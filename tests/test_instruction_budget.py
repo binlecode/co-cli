@@ -29,6 +29,13 @@ the floor but were previously unmeasured (this is a surface-definition change, n
 a growth accommodation — the downward-only rule still holds for the same surface).
 Ceiling = full-floor measurement + ~490-char headroom; the headroom absorbs the
 +23-char max critique across shipped souls (finch 185 vs tars 162, pre-measured).
+
+Re-pinned 2026-06-17 (session-recall-concept-expansion TASK-3): the cross-session
+recall cascade added to ``07_memory_protocol.md`` is an intentional rule addition;
+floor measured 24,694 (personality=tars), ceiling moved to 25,000 (~306 headroom).
+The cascade was trimmed to a terse 3-rung skeleton first (full concept-expansion
+detail lives in the ``session_search`` docstring, which is deferred and not in the
+floor), so the re-pin absorbs only the irreducible rung guidance.
 """
 
 from __future__ import annotations
@@ -42,7 +49,7 @@ from co_cli.context.assembly import build_base_instructions
 from co_cli.context.guidance import build_toolset_guidance
 from co_cli.personality.prompts.loader import load_soul_critique
 
-INSTRUCTION_BLOCK_CEILING = 24_200
+INSTRUCTION_BLOCK_CEILING = 25_000
 
 
 @pytest.mark.asyncio
