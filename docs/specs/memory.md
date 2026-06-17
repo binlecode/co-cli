@@ -55,7 +55,13 @@ co_cli/index/            Infrastructure facade — IndexStore (public) + retriev
 | `fts5` | BM25 over chunked text only | Explicitly configured, or hybrid degrades before store construction |
 | `grep` | In-memory substring over memory item title+content | `memory_store` is `None` (session search is independent — always file-based) |
 
-Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`); unconfigured = pass-through.
+Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross_encoder_reranker_url`); unconfigured = pass-through. The reranker is gated to hybrid mode — when the effective backend is not `hybrid` (`fts5`/`grep`), it is passed as `None` regardless of `cross_encoder_reranker_url`, so a lexical backend issues zero reranker calls (a single switch for a fully lexical, no-external-model run).
+
+**Relevance floors** (applied around RRF, never on the fused score itself):
+- *Pre-fusion vector floor*: vector-only candidates whose cosine `max(0, 1 - dist)` is below `vector_similarity_floor` are dropped before RRF merge. BM25/lexical hits are always kept — a literal token match is never culled by the vector floor.
+- *Post-fusion reranker floor*: when the TEI reranker call succeeds, reranked candidates scoring below `rerank_score_floor` are dropped. Skipped when the reranker is absent or its breaker is open (no calibrated score to floor); an all-below-floor result stays breaker-closed.
+
+When a hybrid query degrades to FTS at runtime (embedder unreachable or vector leg errors), an `index.hybrid_degraded_to_fts` event is emitted on the active `index.search` span — visible in `co tail` / `co trace`.
 
 Each candidate's text sent to the reranker is truncated to `rerank_text_char_budget` chars (default 512; the title is prepended and never clipped). The cross-encoder runs one forward pass per `(query, candidate)` pair, so its latency scales with `candidate_count × tokens_per_candidate` — an untruncated batch of ~50 large chunks costs ~14s, while a 512-char cap holds it to ~2s. Relevance scoring saturates well within 512 chars, so the cap is a no-op for the ~54% of chunks already shorter than it and preserves ranking fidelity on the rest (see `docs/REPORT-rerank-latency-calibration.md` for the calibration).
 
@@ -71,6 +77,8 @@ Each candidate's text sent to the reranker is truncated to `rerank_text_char_bud
 | `memory.cross_encoder_reranker_url` | `CO_MEMORY_CROSS_ENCODER_RERANKER_URL` | `http://127.0.0.1:8282` | TEI cross-encoder reranker URL |
 | `memory.tei_rerank_batch_size` | `CO_MEMORY_TEI_RERANK_BATCH_SIZE` | `50` | batch size for TEI rerank HTTP requests |
 | `memory.rerank_text_char_budget` | `CO_MEMORY_RERANK_TEXT_CHAR_BUDGET` | `512` | per-candidate char cap on reranker input (bounds cross-encoder latency) |
+| `memory.vector_similarity_floor` | `CO_MEMORY_VECTOR_SIMILARITY_FLOOR` | `0.02` | min vector cosine `max(0,1-dist)` for a vector-only candidate to enter RRF (lexical hits exempt) |
+| `memory.rerank_score_floor` | `CO_MEMORY_RERANK_SCORE_FLOOR` | `0.2` | min TEI reranker score to keep a reranked hit (unbounded range; only when reranker succeeds) |
 | `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | paragraph-aware chunking budget for memory items |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | chunk overlap |
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | token-Jaccard threshold for write-time dedup and daemon merge clusters |

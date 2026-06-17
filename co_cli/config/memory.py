@@ -14,6 +14,8 @@ DEFAULT_MEMORY_CHUNK_TOKENS = 600
 DEFAULT_MEMORY_CHUNK_OVERLAP_TOKENS = 80
 DEFAULT_TEI_RERANK_BATCH_SIZE = 50
 DEFAULT_RERANK_TEXT_CHAR_BUDGET = 512
+DEFAULT_MEMORY_VECTOR_SIMILARITY_FLOOR = 0.02
+DEFAULT_MEMORY_RERANK_SCORE_FLOOR = 0.2
 
 
 MEMORY_ENV_MAP: dict[str, str] = {
@@ -24,6 +26,8 @@ MEMORY_ENV_MAP: dict[str, str] = {
     "cross_encoder_reranker_url": "CO_MEMORY_CROSS_ENCODER_RERANKER_URL",
     "tei_rerank_batch_size": "CO_MEMORY_TEI_RERANK_BATCH_SIZE",
     "rerank_text_char_budget": "CO_MEMORY_RERANK_TEXT_CHAR_BUDGET",
+    "vector_similarity_floor": "CO_MEMORY_VECTOR_SIMILARITY_FLOOR",
+    "rerank_score_floor": "CO_MEMORY_RERANK_SCORE_FLOOR",
     "embed_api_url": "CO_MEMORY_EMBED_API_URL",
     "chunk_tokens": "CO_MEMORY_CHUNK_TOKENS",
     "chunk_overlap_tokens": "CO_MEMORY_CHUNK_OVERLAP_TOKENS",
@@ -51,6 +55,11 @@ class MemorySettings(BaseModel):
     )
     tei_rerank_batch_size: int = Field(default=DEFAULT_TEI_RERANK_BATCH_SIZE)
     rerank_text_char_budget: int = Field(default=DEFAULT_RERANK_TEXT_CHAR_BUDGET, ge=1)
+    vector_similarity_floor: float = Field(
+        default=DEFAULT_MEMORY_VECTOR_SIMILARITY_FLOOR, ge=0.0, le=1.0
+    )
+    # Range is TEI-cross-encoder-defined (not normalized); left unbounded by design.
+    rerank_score_floor: float = Field(default=DEFAULT_MEMORY_RERANK_SCORE_FLOOR)
     embed_api_url: str = Field(default=DEFAULT_MEMORY_EMBED_API_URL)
     chunk_tokens: int = Field(default=DEFAULT_MEMORY_CHUNK_TOKENS, ge=0)
     chunk_overlap_tokens: int = Field(default=DEFAULT_MEMORY_CHUNK_OVERLAP_TOKENS, ge=0)

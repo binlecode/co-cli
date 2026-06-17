@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.384]
+
+FTS / hybrid recall hardening — a no-match query now returns few/zero results instead of calibration-free junk, lexical-only mode is a single switch, and past-conversation questions reach session recall.
+
+### Relevance floors (eval-calibrated, ship on by default)
+
+- Pre-fusion **vector-similarity floor** (`vector_similarity_floor`, default 0.02): vector-only candidates below the cosine floor are dropped before RRF fusion; BM25/lexical hits are always kept.
+- Post-fusion **reranker-score floor** (`rerank_score_floor`, default 0.2): when the TEI reranker succeeds, hits below the floor are dropped; skipped when the reranker is absent or its breaker is open (an all-below-floor result stays breaker-closed).
+
+### Lexical-only mode + observability
+
+- The reranker is now gated to hybrid mode — `search_backend=fts5`/`grep` issues zero reranker calls, making a fully lexical, no-external-model run a single switch.
+- Runtime hybrid→FTS degradation emits an `index.hybrid_degraded_to_fts` span event (visible in `co tail` / `co trace`).
+
+### Tool surface
+
+- `memory_view` clamps oversized artifact bodies (`VIEW_MAX_BODY_CHARS`) with a truncation marker, so one artifact can no longer flood context.
+- `session_search` visibility flipped DEFERRED → ALWAYS so past-conversation questions reach session recall instead of misrouting to `memory_search`.
+
 ## [0.8.382]
 
 Cross-session recall concept expansion — bridge vocabulary mismatch when a past session recorded an entity in different words than the question asks.

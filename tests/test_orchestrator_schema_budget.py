@@ -39,7 +39,12 @@ from co_cli.personality.prompts.loader import load_soul_critique
 # auto-promote to a background task and return a task handle) → bucket 17,674 → 17,808. Re-pinned
 # consciously: the model MUST know a shell_exec result can be a task handle, a permanent
 # non-deferrable cost on an ALWAYS tool (same class as the `pty` param); note kept to one sentence.
-ALWAYS_BUCKET_CEILING = 17_900
+# 2026-06-17: fts-hybrid-recall-hardening (TASK-5, Gate-1 Option B) flipped session_search
+# DEFERRED → ALWAYS so past-conversation questions reach session recall instead of misrouting to
+# memory_search → bucket 17,808 → 20,016. Re-pinned consciously: the one-schema prefill cost is a
+# deliberate, reviewed trade against the misroute-to-wrong-tier failure for a common query class
+# (its concept-expansion docstring is what elicits the cascade; trimming it would defeat the fix).
+ALWAYS_BUCKET_CEILING = 20_100
 # Per-tool tripwire against UNINTENDED docstring bloat — pinned just above the
 # largest ALWAYS tool, not a first-principle budget (the principled cap is the
 # cumulative ALWAYS_BUCKET_CEILING: every ALWAYS schema ships in every turn's

@@ -14,6 +14,7 @@ from co_cli.index.store import IndexStore
 from co_cli.memory.service import reindex, save_memory_item
 from co_cli.tools.memory.view import memory_view
 from co_cli.tools.shell_backend import ShellBackend
+from co_cli.tools.tool_io import VIEW_MAX_BODY_CHARS
 
 _FTS5_CONFIG = SETTINGS.memory.model_copy(
     update={
@@ -97,6 +98,44 @@ async def test_memory_view_returns_body_after_create(tmp_path: Path) -> None:
         # Frontmatter keys must not appear in the body
         assert "memory_kind:" not in result.return_value, (
             f"frontmatter must be stripped from body: {result.return_value!r}"
+        )
+    finally:
+        store.close()
+
+
+@pytest.mark.asyncio
+async def test_memory_view_clamps_oversized_body(tmp_path: Path) -> None:
+    """memory_view must clamp an oversized artifact body and append a truncation marker.
+
+    Failure mode: returning the full multi-megabyte body floods the agent's context
+    instead of nudging it to refine toward a narrower artifact.
+    """
+    store = _make_store(tmp_path)
+    try:
+        oversized = "lorem ipsum dolor sit amet. " * 2_000
+        assert len(oversized) > VIEW_MAX_BODY_CHARS
+        stem = _seed(
+            tmp_path / "memory",
+            store,
+            content=oversized,
+            kind="note",
+            title="oversized artifact",
+        )
+        deps = _make_deps(tmp_path, store)
+        from co_cli.tools.agent_tool import AGENT_TOOL_ATTR
+
+        info = getattr(memory_view, AGENT_TOOL_ATTR)
+        deps.tool_catalog[info.name] = info
+        ctx = RunContext(deps=deps, model=None, usage=RunUsage(), tool_name=info.name)
+
+        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
+            result = await memory_view(ctx, name=stem)
+
+        assert "(truncated — refine with a narrower artifact)" in result.return_value, (
+            f"oversized body must carry the truncation marker: {result.return_value[-200:]!r}"
+        )
+        assert len(result.return_value) < VIEW_MAX_BODY_CHARS + 200, (
+            f"clamped body must be bounded near VIEW_MAX_BODY_CHARS: {len(result.return_value)}"
         )
     finally:
         store.close()

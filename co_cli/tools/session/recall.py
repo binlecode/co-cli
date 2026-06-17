@@ -127,7 +127,7 @@ def _format_session_results(query: str, results: list[dict]) -> str:
 
 
 @agent_tool(
-    visibility=VisibilityPolicyEnum.DEFERRED,
+    visibility=VisibilityPolicyEnum.ALWAYS,
     is_concurrent_safe=True,
 )
 async def session_search(

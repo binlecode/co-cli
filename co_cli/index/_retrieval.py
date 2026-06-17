@@ -26,6 +26,7 @@ from co_cli.index.search_util import (
     sanitize_fts5_query,
     source_clause,
 )
+from co_cli.observability.tracing import current_span
 
 logger = logging.getLogger(__name__)
 
@@ -165,6 +166,8 @@ class RetrievalService:
         cross_encoder_url: str | None,
         tei_batch_size: int,
         rerank_text_char_budget: int,
+        vector_similarity_floor: float,
+        rerank_score_floor: float,
     ) -> None:
         self._conn = conn
         self._backend = backend
@@ -173,6 +176,8 @@ class RetrievalService:
         self._cross_encoder_url = cross_encoder_url
         self._tei_batch_size = tei_batch_size
         self._rerank_text_char_budget = rerank_text_char_budget
+        self._vector_similarity_floor = vector_similarity_floor
+        self._rerank_score_floor = rerank_score_floor
         self._reranker_provider = "tei" if cross_encoder_url is not None else "none"
         self._rerank_breaker: CircuitBreaker | None = (
             CircuitBreaker() if cross_encoder_url is not None else None
@@ -251,6 +256,10 @@ class RetrievalService:
         except Exception as e:
             logger.warning(f"Vector search failed, falling back to FTS: {e}")
 
+        current_span().add_event(
+            "index.hybrid_degraded_to_fts",
+            {"co.index.backend": self._backend},
+        )
         return self._rerank(fts_query, _dedup_by_path(fts_chunks), limit)
 
     def _fts_search(
@@ -400,6 +409,9 @@ class RetrievalService:
             if meta is None:
                 continue
             dist = rowid_to_distance.get(c["rowid"], 1.0)
+            similarity = max(0.0, 1.0 - dist)
+            if similarity < self._vector_similarity_floor:
+                continue
             results.append(
                 SearchResult(
                     source=meta["source"],
@@ -407,7 +419,7 @@ class RetrievalService:
                     path=c["doc_path"],
                     title=meta["title"],
                     snippet=None,
-                    score=max(0.0, 1.0 - dist),
+                    score=similarity,
                     category=meta["category"],
                     created_at=meta["created_at"],
                     updated_at=meta["updated_at"],
@@ -485,7 +497,7 @@ class RetrievalService:
             result = self._tei_rerank(query, candidates, limit)
             if self._rerank_breaker is not None:
                 self._rerank_breaker.on_success()
-            return result
+            return [r for r in result if r.score >= self._rerank_score_floor]
         except Exception as e:
             if self._rerank_breaker is not None:
                 self._rerank_breaker.on_failure(e)

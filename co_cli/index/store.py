@@ -186,9 +186,13 @@ class IndexStore:
             backend=self._backend,
             vec_table=self._vec_table,
             embedding=self._embedding if self._backend == "hybrid" else None,
-            cross_encoder_url=config.memory.cross_encoder_reranker_url,
+            cross_encoder_url=(
+                config.memory.cross_encoder_reranker_url if self._backend == "hybrid" else None
+            ),
             tei_batch_size=config.memory.tei_rerank_batch_size,
             rerank_text_char_budget=config.memory.rerank_text_char_budget,
+            vector_similarity_floor=config.memory.vector_similarity_floor,
+            rerank_score_floor=config.memory.rerank_score_floor,
         )
 
     @property

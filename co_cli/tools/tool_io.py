@@ -54,6 +54,11 @@ PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
 # prefix) is ~26k chars — inline and (via the L2 tail-protection sibling) visible.
 READ_MAX_LINES = 500
 
+# Domain clamp for memory_view full-body reads: ~26k chars matches the
+# READ_MAX_LINES rationale (500 lines * ~52 chars/line) — an inline-safe ceiling
+# applied before tool_output, distinct from the spill path.
+VIEW_MAX_BODY_CHARS = 26_000
+
 
 def _generate_preview(content: str, max_chars: int) -> tuple[str, bool]:
     """Truncate at the last newline within max_chars when it lies past halfway; else hard-cut.

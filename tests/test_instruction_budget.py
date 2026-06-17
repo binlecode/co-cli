@@ -34,8 +34,8 @@ Re-pinned 2026-06-17 (session-recall-concept-expansion TASK-3): the cross-sessio
 recall cascade added to ``07_memory_protocol.md`` is an intentional rule addition;
 floor measured 24,694 (personality=tars), ceiling moved to 25,000 (~306 headroom).
 The cascade was trimmed to a terse 3-rung skeleton first (full concept-expansion
-detail lives in the ``session_search`` docstring, which is deferred and not in the
-floor), so the re-pin absorbs only the irreducible rung guidance.
+detail lives in the ``session_search`` docstring, a tool docstring not counted in
+this instruction floor), so the re-pin absorbs only the irreducible rung guidance.
 """
 
 from __future__ import annotations

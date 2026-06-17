@@ -10,7 +10,7 @@ from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.memory.frontmatter import parse_frontmatter
 from co_cli.memory.item import MemoryKindEnum
 from co_cli.tools.agent_tool import agent_tool
-from co_cli.tools.tool_io import tool_error, tool_output
+from co_cli.tools.tool_io import VIEW_MAX_BODY_CHARS, tool_error, tool_output
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,11 @@ async def memory_view(
     raw = path.read_text(encoding="utf-8")
     frontmatter, body = parse_frontmatter(raw)
     kind = frontmatter.get("memory_kind", MemoryKindEnum.NOTE.value)
+    body = body.strip()
+    if len(body) > VIEW_MAX_BODY_CHARS:
+        body = body[:VIEW_MAX_BODY_CHARS] + "\n\n(truncated — refine with a narrower artifact)"
     return tool_output(
-        body.strip(),
+        body,
         ctx=ctx,
         name=name,
         kind=kind,
