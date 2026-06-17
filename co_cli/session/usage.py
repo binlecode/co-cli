@@ -1,19 +1,16 @@
-"""Durable per-turn token-usage accounting — turn-scoped accumulator + append-only ledger.
+"""Durable per-turn token-usage accounting — append-only ledger.
 
-Provider-reported token usage (``response.usage`` / ``RunUsage`` — ground truth,
-never ``chars/4``) is captured at every model-call boundary into a turn-scoped
-``UsageAccumulator`` shared by reference across delegation/task forks (so subagent
-and summarizer tokens roll into the active turn's total). At each turn boundary the
-turn's totals are appended as one JSON line to ``~/.co-cli/usage.jsonl`` and the
-accumulator is reset for the next turn.
+At each turn boundary the turn's totals (drained from the realtime
+``UsageAccumulator`` in ``co_cli/observability/usage.py``) are appended as one
+JSON line to ``~/.co-cli/usage.jsonl``.
 
 This module is **write-only durable accounting**: it MUST NOT feed compaction
 triggers or the status-line context-% (those stay on the realtime
 ``current_request_tokens_estimate``). Usage capture is observational, never a
 control input.
 
-All accumulator and ledger I/O is **best-effort** (mirrors ``skills/usage.py``):
-exceptions are logged and swallowed so usage tracking never blocks or fails a turn.
+All ledger I/O is **best-effort** (mirrors ``skills/usage.py``): exceptions are
+logged and swallowed so usage tracking never blocks or fails a turn.
 
 Cross-process append safety: the session process and the dream daemon process both
 append to the same ``usage.jsonl``. Each line is well under ``PIPE_BUF`` (4096 B)
@@ -29,34 +26,11 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from co_cli.deps import CoDeps
 
 logger = logging.getLogger(__name__)
 
 ORIGIN_SESSION = "session"
 ORIGIN_DAEMON = "daemon"
-
-
-@dataclass
-class UsageAccumulator:
-    """Turn-scoped token tally, shared by reference across forks.
-
-    Forks only ``add``; the main loop owns ``reset`` at the turn boundary.
-    """
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-
-    def add(self, input_tokens: int, output_tokens: int) -> None:
-        self.input_tokens += input_tokens
-        self.output_tokens += output_tokens
-
-    def reset(self) -> None:
-        self.input_tokens = 0
-        self.output_tokens = 0
 
 
 @dataclass(frozen=True)
@@ -84,20 +58,6 @@ class UsageWindow:
     daemon: UsageTotals
     total: UsageTotals
     session_count: int = 0
-
-
-def record_usage(deps: CoDeps, usage: object) -> None:
-    """Best-effort bump of the fork-shared accumulator from a provider usage object.
-
-    Reads ``input_tokens`` / ``output_tokens`` off the provider-reported usage and
-    adds them to ``deps.usage_accumulator``. Swallows and logs any error.
-    """
-    try:
-        input_tokens = getattr(usage, "input_tokens", 0) or 0
-        output_tokens = getattr(usage, "output_tokens", 0) or 0
-        deps.usage_accumulator.add(int(input_tokens), int(output_tokens))
-    except Exception as exc:
-        logger.debug("record_usage failed: %s", exc)
 
 
 def append_turn(

@@ -41,7 +41,6 @@ from co_cli.config.core import (
 )
 from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.context.summarization import estimate_message_tokens
-from co_cli.daemons.dream.kick import write_review_kick
 from co_cli.deps import CoDeps
 from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import (
@@ -56,6 +55,7 @@ from co_cli.observability.setup import setup_observability
 from co_cli.project_info import project_info
 from co_cli.session.browser import extract_title
 from co_cli.session.persistence import persist_session_history
+from co_cli.session.review_kick import write_review_kick
 from co_cli.session.usage import ORIGIN_SESSION, append_turn
 from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans

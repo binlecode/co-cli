@@ -33,7 +33,8 @@ from co_cli.deps import CoDeps, CoSessionState, fork_deps
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.call import llm_call
 from co_cli.main import _apply_command_outcome, _finalize_turn
-from co_cli.session.usage import aggregate, record_usage
+from co_cli.observability.usage import record_usage
+from co_cli.session.usage import aggregate
 from co_cli.tools.shell_backend import ShellBackend
 
 

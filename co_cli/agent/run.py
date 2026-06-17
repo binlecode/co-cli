@@ -39,7 +39,7 @@ async def run_standalone(
     """
     from co_cli.agent.build import build_task_agent
     from co_cli.observability.tracing import pop_span, push_span
-    from co_cli.session.usage import record_usage
+    from co_cli.observability.usage import record_usage
 
     if deps.model is None:
         raise ValueError(f"{spec.name}: run_standalone requires deps.model to be set.")

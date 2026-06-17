@@ -74,7 +74,7 @@ from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt
 from co_cli.display.stream_renderer import StreamRenderer
 from co_cli.observability.tracing import current_span, pop_span, push_span, trace
-from co_cli.session.usage import record_usage
+from co_cli.observability.usage import record_usage
 from co_cli.tools.approvals import (
     decode_tool_args,
     is_auto_approved,

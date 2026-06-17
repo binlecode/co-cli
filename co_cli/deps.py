@@ -18,7 +18,7 @@ from co_cli.config.core import (
     Settings,
 )
 from co_cli.config.llm import MAX_CONTEXT_TOKENS
-from co_cli.session.usage import UsageAccumulator
+from co_cli.observability.usage import UsageAccumulator
 from co_cli.tools.file_read_tracker import FileReadTracker
 
 if TYPE_CHECKING:

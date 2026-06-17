@@ -30,7 +30,7 @@ from pydantic_ai.models import ModelRequestParameters, StreamedResponse
 from pydantic_ai.models.wrapper import WrapperModel
 from pydantic_ai.settings import ModelSettings
 
-from co_cli.context.history_processors import sanitize_surrogate_codepoints_messages
+from co_cli.llm._message_sanitize import sanitize_surrogate_codepoints_messages
 from co_cli.observability.serialize import serialize_messages, serialize_response
 from co_cli.observability.tracing import current_span, pop_span, push_span
 

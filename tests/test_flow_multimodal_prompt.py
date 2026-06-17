@@ -14,14 +14,15 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai.messages import BinaryContent
+from pydantic_ai.toolsets import FunctionToolset
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
 from tests._settings import TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.agent.build import build_orchestrator
-from co_cli.agent.core import build_native_toolset
-from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
+from co_cli.agent.spec import OrchestratorSpec
+from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.check import probe_ollama_model
 from co_cli.context.orchestrate import _prompt_char_count, run_turn
 from co_cli.deps import CoDeps, CoSessionState
@@ -32,7 +33,19 @@ from co_cli.tools.shell_backend import ShellBackend
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _FIXTURE = _REPO_ROOT / "tests" / "fixtures" / "vision" / "red_square.png"
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
-_TOOLSET, _TOOL_INDEX = build_native_toolset()
+
+# Minimal spec — no system prompt, no per-turn instructions, no tool schemas.
+# The image-grounding behavior under test (a [text, BinaryContent] list prompt
+# threading through run_turn) is independent of the orchestrator's prompt and
+# tool catalog; the full spec only inflates the prefill (~16k tokens) and makes
+# the live turn fragile to local-GPU throttling under suite load. Prefilling
+# only the user prompt + image keeps the turn fast and the assertion sharp.
+_MINIMAL_SPEC = OrchestratorSpec(
+    name="orchestrator-multimodal-test",
+    static_instruction_builders=(),
+    per_turn_instructions=(),
+    history_processors=(),
+)
 
 _AGENT_VISION_CAPABLE = (
     True if TEST_LLM.uses_gemini() else probe_ollama_model(TEST_LLM.host, TEST_LLM.model).vision
@@ -40,11 +53,11 @@ _AGENT_VISION_CAPABLE = (
 
 
 def _make_deps() -> CoDeps:
+    empty_toolset: FunctionToolset[CoDeps] = FunctionToolset()
     return CoDeps(
         shell=ShellBackend(),
         model=_LLM_MODEL,
-        toolset=_TOOLSET,
-        tool_catalog=_TOOL_INDEX,
+        toolset=_CallSeamToolset(empty_toolset),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(),
         agent_vision_capable=_AGENT_VISION_CAPABLE,
@@ -69,7 +82,7 @@ async def test_run_turn_accepts_list_prompt_with_image() -> None:
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
 
     deps = _make_deps()
-    agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
+    agent = build_orchestrator(_MINIMAL_SPEC, deps)
     frontend = SilentFrontend(approval_response="y")
     pixels = BinaryContent(data=_FIXTURE.read_bytes(), media_type="image/png")
 

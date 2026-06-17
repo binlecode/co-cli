@@ -41,9 +41,9 @@ Sessions are searched in place over the raw `*.jsonl` files — no write-time in
 | Property | Value |
 | --- | --- |
 | Source value | `'session'` (the `source` field on each hit) |
-| Search entry point | `SessionStore.search(query, limit)` → `search_sessions(sessions_dir, query, limit)` (`co_cli/session/_search.py`) |
-| Match engine | `rg --fixed-strings --ignore-case --no-config` over `sessions_dir/*.jsonl`; Python line-scan fallback when `rg` is absent |
-| Match semantics | case-insensitive substring of the raw, on-disk JSONL line (pydantic-core `dump_json` writes literal UTF-8, so unicode/accented/CJK queries match raw) |
+| Search entry point | `SessionStore.search(query, limit, *, is_regex=False)` → `search_sessions(sessions_dir, query, limit, *, is_regex=False)` (`co_cli/session/_search.py`); returns a `SessionSearchResult` (`hits` + optional `error`) |
+| Match engine | `rg --fixed-strings --ignore-case --no-config` over `sessions_dir/*.jsonl` (literal default); regex mode (`is_regex=True`) drops `--fixed-strings` so the query is a pattern. Python line-scan fallback when `rg` is absent |
+| Match semantics | literal default — case-insensitive substring of the raw, on-disk JSONL line (pydantic-core `dump_json` writes literal UTF-8, so unicode/accented/CJK queries match raw). Regex mode matches a case-insensitive pattern instead, `re.compile`-validated up front (invalid pattern → `SessionSearchResult.error`, never dispatched, never an empty "no results") |
 | Snippet | matched line → `extract_messages()` → the retained part whose content contains the query; a match landing only on a structural JSON key/value is dropped |
 | Citation | `start_line == end_line ==` the matched JSONL line (1-indexed) |
 | Ranking | `(match_count desc, recency desc)`; `score` is the match count (synthetic) |
@@ -59,15 +59,17 @@ Compaction rewrites the live session JSONL in place when context pressure crosse
 
 ### Recall pipeline
 
-`_search_sessions(ctx, query, span)` routes through:
+`_search_sessions(ctx, query, span, is_regex)` routes through:
 
 ```
-_search_sessions(query) → SessionStore.search(query, limit=15)
+_search_sessions(query, is_regex) → SessionStore.search(query, limit=15, is_regex=is_regex)
     → dedup to _SESSIONS_CHANNEL_CAP = 3 unique sessions
     → exclude the current session by UUID
 ```
 
-Browse mode (`session_search(query='')`) skips the search path and returns recent-session metadata (id, date, title, file size) via `_browse_recent()`. The current session is excluded in both modes.
+The tool exposes literal (`query=`) and regex (`pattern=`) search; the two are mutually exclusive (both supplied → `tool_error`). A non-empty `pattern` routes through the same channel with `is_regex=True`. An invalid regex returns a `tool_error` carrying the compile error, never a silent empty result.
+
+Browse mode (`session_search()` with neither `query` nor `pattern`) skips the search path and returns recent-session metadata (id, date, title, file size) via `_browse_recent()`. The current session is excluded in both modes.
 
 ### Durable token-usage ledger
 
@@ -90,7 +92,7 @@ Session *retention* is the one configurable lifecycle knob: `dream.session_reten
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `session_search(ctx, query, limit=3)` | `co_cli/tools/session/recall.py` | Async tool — lexical line-cited recall over past sessions; current session excluded; empty query → recent-session browse |
+| `session_search(ctx, query, pattern, limit=3)` | `co_cli/tools/session/recall.py` | Async tool — line-cited recall over past sessions; `query` literal, `pattern` regex (mutually exclusive); current session excluded; neither supplied → recent-session browse |
 | `session_view(ctx, session_id, start_line, end_line)` | `co_cli/tools/session/view.py` | Async tool — verbatim JSONL line-range reader by uuid8; `tool_error` for unknown id |
 
 Result shape for `session_search`:
@@ -112,9 +114,10 @@ Result shape for `session_search`:
 | Symbol | Source | Contract |
 | --- | --- | --- |
 | `SessionStore(config, sessions_dir)` | `co_cli/session/store.py` | File-based domain store — no IndexStore reference |
-| `SessionStore.search(query, limit)` | `co_cli/session/store.py` | Lexical ripgrep recall over transcript files; returns `SessionHit` records |
+| `SessionStore.search(query, limit, *, is_regex=False)` | `co_cli/session/store.py` | Lexical (default) or regex (`is_regex`) ripgrep recall over transcript files; returns a `SessionSearchResult` |
 | `SessionStore.count()` | `co_cli/session/store.py` | Number of `*.jsonl` transcript files on disk |
-| `search_sessions(sessions_dir, query, limit)` | `co_cli/session/_search.py` | ripgrep (Python-fallback) search → ranked `SessionHit` list; `path` is the uuid8 |
+| `search_sessions(sessions_dir, query, limit, *, is_regex=False)` | `co_cli/session/_search.py` | ripgrep (Python-fallback) search → `SessionSearchResult`; literal default, regex when `is_regex` |
+| `SessionSearchResult` | `co_cli/session/_search.py` | Search outcome: `hits` (ranked `SessionHit` list) + `error` (non-None only on an invalid regex; distinct from empty `hits`) |
 | `SessionHit` | `co_cli/session/_search.py` | Result record: `path` (uuid8), `snippet`, `start_line`, `end_line`, `created_at`, `source`, `score` |
 
 ### Persistence and extraction helpers
@@ -124,8 +127,8 @@ Result shape for `session_search`:
 | `persist_session_history(...)` | `co_cli/session/persistence.py` | Append-only writer; on compaction rewrites the file in place |
 | `append_messages(path, messages)` | `co_cli/session/persistence.py` | Tail-append used by `_finalize_turn` |
 | `load_transcript(path)` | `co_cli/session/persistence.py` | Reads a JSONL transcript back into pydantic-ai messages |
-| `UsageAccumulator` | `co_cli/session/usage.py` | Turn-scoped token tally (`input_tokens`/`output_tokens`, `add`/`reset`); fork-shared by reference |
-| `record_usage(deps, usage)` | `co_cli/session/usage.py` | Best-effort bump of `deps.usage_accumulator` from a provider usage object |
+| `UsageAccumulator` | `co_cli/observability/usage.py` | Turn-scoped token tally (`input_tokens`/`output_tokens`, `add`/`reset`); fork-shared by reference |
+| `record_usage(deps, usage)` | `co_cli/observability/usage.py` | Best-effort bump of `deps.usage_accumulator` from a provider usage object |
 | `append_turn(ledger_path, *, origin, session_id, input_tokens, output_tokens, turn_ended_at)` | `co_cli/session/usage.py` | Best-effort append of one ledger line; no-op when both counts are 0 |
 | `aggregate(ledger_path, *, since, session_id, origin)` | `co_cli/session/usage.py` | Streams the ledger → `UsageWindow` (Session / Daemon / Total totals + distinct-session count) |
 | `session_filename(created_at, session_id)` | `co_cli/session/filename.py` | Builds `YYYY-MM-DD-THHMMSSZ-<uuid8>.jsonl` |
@@ -156,7 +159,8 @@ Result shape for `session_search`:
 | `co_cli/session/_search.py` | ripgrep lexical search + Python fallback; `SessionHit`, `search_sessions()` |
 | `co_cli/session/filename.py` | filename parsing/generation, latest-session discovery |
 | `co_cli/session/persistence.py` | transcript append/load, in-place rewrite on compaction |
-| `co_cli/session/usage.py` | durable token-usage ledger: `UsageAccumulator`, `record_usage`, `append_turn`, `aggregate` |
+| `co_cli/session/usage.py` | durable token-usage ledger: `ORIGIN_*`, `UsageTotals`, `UsageWindow`, `append_turn`, `aggregate` |
+| `co_cli/observability/usage.py` | realtime turn-scoped accumulator: `UsageAccumulator`, `record_usage` |
 | `co_cli/session/browser.py` | session listing and picker metadata |
 | `co_cli/session/transcript.py` | JSONL line parser: `ExtractedMessage`, `extract_messages()` |
 | `co_cli/tools/session/recall.py` | `session_search` — recall and browse modes |

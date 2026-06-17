@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.380]
+
+Rules-conformance cleanup (R4 layer back-edges) — eliminate three lower-layer-imports-higher-layer edges by pure module relocation (behavior-preserving).
+
+### Refactor: relocate misfiled symbols to their owning layer
+
+- `llm → session`: split `session/usage.py` — the realtime accumulator (`UsageAccumulator`, `record_usage`) moves down to `observability/usage.py`; the durable ledger stays in `session/usage.py`.
+- `llm → context`: move `sanitize_surrogate_codepoints_messages` (+ helpers) from `context/history_processors.py` into the new `llm/_message_sanitize.py` (its sole caller is surrogate recovery).
+- `context → daemons`: relocate the KICK producer `write_review_kick` from `daemons/dream/kick.py` to `session/review_kick.py` so both producers import down.
+
+### Test hardening: vision turns immune to local-GPU throttling
+
+- `test_flow_multimodal_prompt` and `test_flow_user_image_intake` now build the live vision turn against a minimal orchestrator spec + empty toolset, cutting the prefill from ~16k tokens to ~40. The behavior under test (multimodal prompt threading, image-path intake) is unchanged; the turn no longer times out under sustained suite load.
+
 ## [0.8.378]
 
 Session retention — opt-in age-based pruning of session transcripts via the dream daemon's housekeeping pass. New `session_retention_days` knob (`CO_DREAM_SESSION_RETENTION_DAYS`, default `0` = disabled, recommended 30) deletes canonical session `.jsonl` files older than N days; adds a `session_pruned` counter and a per-pass summary log line.

@@ -58,10 +58,10 @@ from co_cli.context.summarization import (
     resolve_compaction_budget,
     summarize_messages,
 )
-from co_cli.daemons.dream.kick import write_review_kick
 from co_cli.deps import CoDeps
 from co_cli.observability.tracing import current_span, trace
 from co_cli.session.persistence import append_messages
+from co_cli.session.review_kick import write_review_kick
 
 __all__ = [
     "STATIC_MARKER_PREFIX",

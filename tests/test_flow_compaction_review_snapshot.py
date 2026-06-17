@@ -52,7 +52,7 @@ def _patch_dirs(monkeypatch, tmp_path):
     snapshots = tmp_path / "snapshots"
     queue = tmp_path / "queue"
     monkeypatch.setattr("co_cli.context.compaction.DREAM_SNAPSHOTS_DIR", snapshots)
-    monkeypatch.setattr("co_cli.daemons.dream.kick.DREAM_QUEUE_DIR", queue)
+    monkeypatch.setattr("co_cli.session.review_kick.DREAM_QUEUE_DIR", queue)
     return snapshots, queue
 
 

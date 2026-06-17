@@ -22,14 +22,15 @@ from pydantic_ai.messages import (
     TextPart,
     UserPromptPart,
 )
+from pydantic_ai.toolsets import FunctionToolset
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
 from tests._settings import TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.agent.build import build_orchestrator
-from co_cli.agent.core import build_native_toolset
-from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
+from co_cli.agent.spec import OrchestratorSpec
+from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.check import probe_ollama_model
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.commands.core import BUILTIN_COMMANDS
@@ -44,7 +45,19 @@ from co_cli.tools.vision.intake import detect_lone_image_path
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _FIXTURE = _REPO_ROOT / "tests" / "fixtures" / "vision" / "red_square.png"
 _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
-_TOOLSET, _TOOL_INDEX = build_native_toolset()
+
+# Minimal spec — no system prompt, no per-turn instructions, no tool schemas.
+# The intake behavior under test (lone-image-path detection, BinaryContent
+# attachment, and the model answering about the image) is independent of the
+# orchestrator's prompt and tool catalog; the full spec only inflates the
+# prefill (~16k tokens), making the live turn fragile to local-GPU throttling
+# under suite load. Prefilling only the user prompt + image keeps it fast.
+_MINIMAL_SPEC = OrchestratorSpec(
+    name="orchestrator-image-intake-test",
+    static_instruction_builders=(),
+    per_turn_instructions=(),
+    history_processors=(),
+)
 
 _AGENT_VISION_CAPABLE = (
     True if TEST_LLM.uses_gemini() else probe_ollama_model(TEST_LLM.host, TEST_LLM.model).vision
@@ -59,11 +72,11 @@ def _make_deps(
 ) -> CoDeps:
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir(parents=True, exist_ok=True)
+    empty_toolset: FunctionToolset[CoDeps] = FunctionToolset()
     return CoDeps(
         shell=ShellBackend(),
         model=_LLM_MODEL,
-        toolset=_TOOLSET,
-        tool_catalog=_TOOL_INDEX,
+        toolset=_CallSeamToolset(empty_toolset),
         config=_CONFIG_NO_MCP,
         session=CoSessionState(session_path=sessions_dir / "2026-06-14T120000.000-abcd1234.jsonl"),
         agent_vision_capable=agent_vision_capable,
@@ -112,7 +125,7 @@ async def test_lone_absolute_image_path_attaches_and_answers(tmp_path: Path) -> 
     """
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     deps = _make_deps(tmp_path, agent_vision_capable=True)
-    agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
+    agent = build_orchestrator(_MINIMAL_SPEC, deps)
     frontend = SilentFrontend(approval_response="y")
 
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
@@ -160,7 +173,7 @@ async def test_slash_delegated_image_path_not_attached(tmp_path: Path) -> None:
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     skill = SkillInfo(name="imgskill", body=str(_FIXTURE))
     deps = _make_deps(tmp_path, agent_vision_capable=True, skill_catalog={"imgskill": skill})
-    agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
+    agent = build_orchestrator(_MINIMAL_SPEC, deps)
     frontend = SilentFrontend(approval_response="y")
 
     async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):

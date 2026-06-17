@@ -32,8 +32,8 @@ def _restore_co_home() -> Generator[None, None, None]:
     import importlib
 
     import co_cli.config.core as core_mod
-    import co_cli.daemons.dream.kick as kick_mod
     import co_cli.main as main_mod
+    import co_cli.session.review_kick as kick_mod
 
     importlib.reload(core_mod)
     importlib.reload(kick_mod)
@@ -53,8 +53,8 @@ def _make_deps(
     import importlib
 
     import co_cli.config.core as core_mod
-    import co_cli.daemons.dream.kick as kick_mod
     import co_cli.main as main_mod
+    import co_cli.session.review_kick as kick_mod
 
     # Reload the kick producer (and main) so the module-level DREAM_QUEUE_DIR the
     # producer writes to is re-resolved against the updated USER_DIR (CO_HOME
