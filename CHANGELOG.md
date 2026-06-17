@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.390]
+
+Tool execution now shows live timing, matching the existing `Thinking… Ns` / `Thought for Ns` reasoning vocabulary — on a slow local model a running tool is no longer indistinguishable from a hung one.
+
+- In-flight tool panel paints a live `(Ns)` elapsed label, advanced by a single App-level wall-clock ticker gated on "any tool active" (one task for all tools, modeled on the reasoning ticker); degrades to a no-op for headless/sync callers with no running loop.
+- Every finished tool commits a standalone `label (Ns)` duration line independent of the result payload, so structured/empty-result tools also report timing.
+- Ticker is cancelled and start-stamps cleared on every teardown path (`_close_tool` when the last tool closes, plus `cleanup()` on error/interrupt) so no leaked ticker repaints a torn-down region.
+- Default `reasoning_display` flipped from `collapsed` to `full` — reasoning bodies stream visibly by default; `off`/`collapsed` remain selectable via config, env, `--reasoning-display`, and `/reasoning`.
+
 ## [0.8.388]
 
 Measured compaction-summarizer fidelity on the configured local model and revised the handoff template to match what the model honors.

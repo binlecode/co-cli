@@ -1,6 +1,7 @@
 """Themed terminal display — console, semantic styles, display helpers, Frontend, TerminalFrontend."""
 
 import asyncio
+import time
 from dataclasses import dataclass
 from io import StringIO
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
@@ -15,6 +16,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from co_cli.deps import ApprovalSubject
+from co_cli.display.stream_renderer import _format_elapsed
 
 if TYPE_CHECKING:
     from prompt_toolkit import Application
@@ -57,6 +59,8 @@ console = Console(theme=Theme(_THEMES["light"]))
 _active_theme: Theme = Theme(_THEMES["light"])
 
 # -- Indicators ------------------------------------------------------------
+
+_TOOL_TICK_INTERVAL = 1.0  # wall-clock repaint cadence for the live tool-exec counter
 
 PROMPT_CHAR = "❯"
 BULLET = "▸"
@@ -255,6 +259,11 @@ class TerminalFrontend:
         self._active_tools: dict[str, str] = {}
         # tool_call_id → stable original label (set once in on_tool_start, never overwritten)
         self._tool_labels: dict[str, str] = {}
+        # tool_call_id → time.monotonic() stamp at on_tool_start; drives elapsed labels
+        self._tool_started_at: dict[str, float] = {}
+        # Single App-level wall-clock ticker repainting the in-flight tool panel while
+        # any tool runs (tool execution emits no stream deltas). One task for all tools.
+        self._tool_ticker_task: asyncio.Task | None = None
         # Last pushed status snapshot; drives render_footer_toolbar
         self._footer_snapshot: StatusSnapshot | None = None
         # In-app single-key prompt state (approval / confirm). The owned
@@ -379,18 +388,57 @@ class TerminalFrontend:
             self._commit(Text(final, style="thinking"))
 
     def _refresh_tool_inflight(self) -> None:
-        """Render all active tool labels as one in-flight Text block."""
+        """Render all active tool labels (with live elapsed) as one in-flight Text block."""
         if not self._active_tools:
             self._clear_inflight()
             return
-        lines = "\n".join(f"  {label}" for label in self._active_tools.values())
-        self._set_inflight(Text(lines, style="dim"), "tool")
+        now = time.monotonic()
+        rows: list[str] = []
+        for tool_id, label in self._active_tools.items():
+            started = self._tool_started_at.get(tool_id)
+            if started is not None:
+                rows.append(f"  {label} ({_format_elapsed(now - started)})")
+            else:
+                rows.append(f"  {label}")
+        self._set_inflight(Text("\n".join(rows), style="dim"), "tool")
+
+    def _start_tool_ticker(self) -> None:
+        """Spawn the wall-clock repaint task, if a running loop is available.
+
+        Without a running loop (sync/headless callers) the in-flight label falls back
+        to refresh-driven updates — no ticker, no error (mirrors the reasoning ticker).
+        """
+        if self._tool_ticker_task is not None and not self._tool_ticker_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._tool_ticker_task = loop.create_task(self._tick_tools())
+
+    async def _tick_tools(self) -> None:
+        """Repaint the in-flight tool panel on the wall-clock cadence until no tool runs."""
+        try:
+            while self._active_tools:
+                await asyncio.sleep(_TOOL_TICK_INTERVAL)
+                if not self._active_tools:
+                    return
+                self._refresh_tool_inflight()
+        except asyncio.CancelledError:
+            return
+
+    def _stop_tool_ticker(self) -> None:
+        if self._tool_ticker_task is not None:
+            self._tool_ticker_task.cancel()
+            self._tool_ticker_task = None
 
     def _close_tool(self, tool_id: str) -> str:
         """Pop both dicts and refresh the in-flight block. Returns stable label for panel title."""
         self._active_tools.pop(tool_id, None)
         label = self._tool_labels.pop(tool_id, tool_id)
         self._refresh_tool_inflight()
+        if not self._active_tools:
+            self._stop_tool_ticker()
         return label
 
     def _render_tool_panel(self, label: str, result: "ToolResultPayload") -> None:
@@ -407,7 +455,9 @@ class TerminalFrontend:
         label = args_display if args_display else name
         self._active_tools[tool_id] = label
         self._tool_labels[tool_id] = label
+        self._tool_started_at[tool_id] = time.monotonic()
         self._refresh_tool_inflight()
+        self._start_tool_ticker()
 
     def on_tool_progress(self, tool_id: str, message: str) -> None:
         """Tool lifecycle: in-progress update from a running tool."""
@@ -416,7 +466,15 @@ class TerminalFrontend:
 
     def on_tool_complete(self, tool_id: str, result: "ToolResultPayload") -> None:
         """Tool lifecycle: tool completed with optional final result payload."""
+        started = self._tool_started_at.pop(tool_id, None)
         label = self._close_tool(tool_id)
+        # Committed duration on a standalone line for EVERY tool, independent of the
+        # result payload — _render_tool_panel only commits for non-empty string results,
+        # so structured/empty-result tools would otherwise show no completion timing.
+        if started is not None:
+            self._commit(
+                Text(f"{label} ({_format_elapsed(time.monotonic() - started)})", style="dim")
+            )
         self._render_tool_panel(label, result)
 
     def on_status(self, message: str) -> None:
@@ -631,6 +689,8 @@ class TerminalFrontend:
 
     def cleanup(self) -> None:
         """Clear the in-flight region and tool state on exception/cancellation."""
+        self._stop_tool_ticker()
         self._active_tools.clear()
         self._tool_labels.clear()
+        self._tool_started_at.clear()
         self._clear_inflight()

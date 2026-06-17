@@ -208,8 +208,8 @@ to `CoRuntimeState` — use `CoSessionState` for user-preference and cross-turn 
 | Mode | Display behaviour |
 |---|---|
 | `off` | Thinking stream is silently dropped — no reasoning surface at all |
-| `collapsed` | Default. A live transient `Thinking… Ns` header in the in-flight region; on thinking-end commits a single durable `Thought for Ns` line. The raw body is never shown |
-| `full` | The `Thinking… Ns` header is shown with the raw thinking body streamed below it; the body + `Thought for Ns` footer are committed to scrollback |
+| `collapsed` | A live transient `Thinking… Ns` header in the in-flight region; on thinking-end commits a single durable `Thought for Ns` line. The raw body is never shown |
+| `full` | Default. The `Thinking… Ns` header is shown with the raw thinking body streamed below it; the body + `Thought for Ns` footer are committed to scrollback |
 
 co commits to scrollback line-by-line (not a retained-widget TUI), so reasoning cannot be
 expanded after the fact — to read the raw reasoning, switch to `full`. The elapsed counter is
@@ -223,7 +223,7 @@ Usage:
 - `/reasoning off|collapsed|full` — set directly
 
 The mode is stored on `deps.session.reasoning_display` (a `CoSessionState` field, default
-`"collapsed"`). It is read by `_execute_run()` at stream start via
+`"full"`). It is read by `_execute_run()` at stream start via
 `StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)`. Changes take
 effect on the next turn; any in-flight stream uses the mode it started with. Delegation agent
 turns inherit the mode via `fork_deps()`, which copies `base.session.reasoning_display` into the
@@ -239,7 +239,7 @@ in-flight) and `on_thinking_commit()` (durable scrollback). `collapsed` feeds on
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `reasoning_display` | `CO_REASONING_DISPLAY` | `collapsed` | Initial reasoning display mode (`off`/`collapsed`/`full`); overridden by `--reasoning-display` CLI flag or `/reasoning` mid-session |
+| `reasoning_display` | `CO_REASONING_DISPLAY` | `full` | Initial reasoning display mode (`off`/`collapsed`/`full`); overridden by `--reasoning-display` CLI flag or `/reasoning` mid-session |
 | `repl.queue_cap` | `CO_REPL_QUEUE_CAP` | `0` | Max pending mid-turn input-queue items (≥ 0); `0` = unbounded |
 | `repl.drop_policy` | `CO_REPL_DROP_POLICY` | `"oldest"` | Drop policy when an enqueue exceeds `queue_cap`: `"oldest"` drops the head, `"newest"` rejects the incoming item. Inert at cap `0` |
 

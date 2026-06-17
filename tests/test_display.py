@@ -234,6 +234,93 @@ async def test_thinking_counter_repaints_without_new_deltas(monkeypatch):
     assert repaints_after == repaints_during
 
 
+# ── TerminalFrontend tool-exec timing ──────────────────────────────────────
+
+
+def test_tool_complete_commits_duration_line_for_non_string_result():
+    """Every finished tool commits a duration line, even when the result is
+    structured/non-string (so no result Panel renders)."""
+    frontend = TerminalFrontend()
+    frontend._app = _StubApp()
+    frontend.on_tool_start("t1", "memory_search", 'memory_search "x"')
+
+    session, buffer = _capture_committed()
+    with session:
+        frontend.on_tool_complete("t1", {"hits": []})
+    out = buffer.getvalue()
+    # Committed completion line carries the stable label and an elapsed suffix,
+    # independent of the (non-string) result payload.
+    assert 'memory_search "x"' in out
+    assert "s)" in out
+
+
+def test_inflight_tool_label_elapsed_advances_across_refreshes(monkeypatch):
+    """The in-flight tool label's elapsed seconds increase as wall-clock advances,
+    with no on_tool_progress call (the ticker drives _refresh_tool_inflight)."""
+    from co_cli.display import core
+
+    clock = {"now": 100.0}
+    monkeypatch.setattr(core.time, "monotonic", lambda: clock["now"])
+
+    frontend = TerminalFrontend()
+    frontend._app = _StubApp()
+    frontend.on_tool_start("t1", "shell", "shell ls")
+    assert "(0s)" in frontend.get_inflight()
+
+    clock["now"] = 102.0
+    frontend._refresh_tool_inflight()
+    assert "(2s)" in frontend.get_inflight()
+
+    clock["now"] = 105.0
+    frontend._refresh_tool_inflight()
+    assert "(5s)" in frontend.get_inflight()
+
+
+def test_tool_ticker_is_noop_without_running_loop():
+    """With no running event loop (sync caller), on_tool_start renders the elapsed
+    label without error — the timer degrades to refresh-driven updates, no ticker crash."""
+    frontend = TerminalFrontend()
+    frontend._app = _StubApp()
+    frontend.on_tool_start("t1", "shell", "shell ls")
+    # In-flight label still renders with an elapsed suffix despite no ticker.
+    assert "shell ls" in frontend.get_inflight()
+    assert "s)" in frontend.get_inflight()
+
+
+@pytest.mark.asyncio
+async def test_tool_ticker_repaints_then_stops_on_complete(monkeypatch):
+    """Under a running loop the ticker repaints the in-flight panel on its cadence
+    while a tool runs, and stops once the tool completes."""
+    from co_cli.display import core
+
+    monkeypatch.setattr(core, "_TOOL_TICK_INTERVAL", 0.02)
+
+    repaints: list[str] = []
+
+    class _RecordingApp:
+        def invalidate(self) -> None:
+            repaints.append(self_frontend.get_inflight())
+
+    frontend = TerminalFrontend()
+    self_frontend = frontend
+    frontend._app = _RecordingApp()
+
+    frontend.on_tool_start("t1", "shell", "shell ls")
+    await asyncio.sleep(0.1)
+    repaints_during = len(repaints)
+
+    session, _ = _capture_committed()
+    with session:
+        frontend.on_tool_complete("t1", "done")
+    await asyncio.sleep(0.1)
+    repaints_after_complete = len(repaints)
+
+    # Ticked several times while in flight; ticker stopped after completion.
+    assert repaints_during >= 3
+    assert len(repaints) == repaints_after_complete
+    assert frontend._tool_ticker_task is None
+
+
 def test_status_persists_to_scrollback_when_superseded_by_text():
     frontend = TerminalFrontend()
     frontend._app = _StubApp()

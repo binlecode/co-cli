@@ -195,8 +195,8 @@ Reasoning display is purely a frontend concern:
 | Mode | Behavior |
 | --- | --- |
 | `off` | thinking is discarded |
-| `collapsed` | default; a transient `Thinking… Ns` live line that commits a single durable `Thought for Ns` summary; raw body never shown |
-| `full` | the `Thinking… Ns` header plus the raw thinking body are streamed and committed through the thinking surface |
+| `collapsed` | a transient `Thinking… Ns` live line that commits a single durable `Thought for Ns` summary; raw body never shown |
+| `full` | default; the `Thinking… Ns` header plus the raw thinking body are streamed and committed through the thinking surface |
 
 ### 2.3 Approval Flow
 
@@ -396,7 +396,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `doom_loop_threshold` | `CO_DOOM_LOOP_THRESHOLD` | `3` | Identical tool-call streak threshold for doom-loop intervention |
 | `max_reflections` | `CO_MAX_REFLECTIONS` | `3` | Consecutive shell-error streak threshold for reflection guardrail |
 | `llm.max_model_requests_per_turn` | `CO_LLM_MAX_MODEL_REQUESTS_PER_TURN` | `40` | Max `ModelResponse`s per turn; `0` disables the cap |
-| `reasoning_display` | `CO_REASONING_DISPLAY` | `collapsed` | Thinking display mode for streamed turns (`off`/`collapsed`/`full`) |
+| `reasoning_display` | `CO_REASONING_DISPLAY` | `full` | Thinking display mode for streamed turns (`off`/`collapsed`/`full`) |
 
 ## 4. Public Interface
 
