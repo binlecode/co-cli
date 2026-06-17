@@ -226,5 +226,8 @@ async def _run_foreground(co_home: Path, origin: str, session_id: str) -> None:
             await shutdown_wait
         deps = bootstrap.result()
         await main_loop(deps, queue_dir, done_dir, failed_dir, state, deps.config.dream, shutdown)
+    except Exception:
+        logger.error("dream daemon crashed", exc_info=True)
+        raise
     finally:
         pid_file.unlink(missing_ok=True)

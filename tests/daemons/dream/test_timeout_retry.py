@@ -13,6 +13,7 @@ No LLM or asyncio timing tricks — pure exception propagation.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from pathlib import Path
 
@@ -193,6 +194,47 @@ async def test_main_loop_unknown_domain_lands_in_failed(tmp_path: Path) -> None:
     assert failed_path.exists(), "unknown-domain kick must land in failed/"
     result = read_queue_item(failed_path)
     assert "unknown review domain" in result.get("last_error", "")
+
+
+@pytest.mark.asyncio
+async def test_main_loop_failed_kick_is_logged_with_traceback(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failed KICK review emits a WARNING naming the item, carrying a traceback.
+
+    Without this, a reviewer that raises leaves no log trace — only a bare
+    last_error in the failed/ sidecar. The operator-visible outcome of the fix is
+    that the failure (with stack) is discoverable in co-dream.jsonl.
+    """
+    deps = _make_deps(tmp_path)
+    _write_session_file(deps.sessions_dir, "sess-log-test")
+
+    queue_dir = tmp_path / "queue"
+    queue_dir.mkdir()
+    item_path = queue_dir / "2024-01-01T00-00-00.json"
+    write_queue_item(item_path, _kick_payload("sess-log-test", attempts=0))
+
+    state = _make_state()
+    cfg = DreamSettings(
+        review_timeout_seconds=30,
+        retry_backoff_seconds=1,
+        max_retry_attempts=1,
+        tick_interval_seconds=1,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="co_cli.daemons.dream._loop"):
+        await _run_until_failed(deps, queue_dir, state, cfg, "2024-01-01T00-00-00.json")
+
+    failures = [
+        record
+        for record in caplog.records
+        if "KICK review failed" in record.getMessage()
+        and "2024-01-01T00-00-00.json" in record.getMessage()
+    ]
+    assert failures, "a failed KICK must emit a WARNING naming the item"
+    assert all(record.exc_info is not None for record in failures), (
+        "the failure log must carry a traceback (exc_info)"
+    )
 
 
 @pytest.mark.asyncio

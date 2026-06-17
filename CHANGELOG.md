@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.393]
+
+Dream daemon failures are no longer silent. The daemon runs detached with stdout/stderr at DEVNULL, so its JSONL log is the only durable error channel — and two paths bypassed it.
+
+- KICK review failures now log at WARNING with a full traceback (`exc_info`) on every failed attempt (not just the terminal one), so transient and retried failures are visible in `co-dream.jsonl` — previously the only trace was a stackless `last_error` in the failed-queue sidecar, written only after retries exhausted.
+- Uncaught exceptions from bootstrap or the main loop now log at ERROR with a traceback before the process exits (the PID file is still cleaned by the finally-block); previously a crash left no record anywhere.
+- Spec (`dream.md` §1.4, §2.6) updated to document both logging paths.
+
 ## [0.8.392]
 
 The `/dream` slash command gains full daemon lifecycle control from inside the REPL — previously you could only *see* the daemon was down but had to drop to a shell to act.

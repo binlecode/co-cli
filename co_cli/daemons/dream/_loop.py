@@ -134,6 +134,7 @@ async def main_loop(
             _cleanup_override(payload)
             _flush_daemon_usage(deps)
         except Exception as exc:
+            logger.warning("dream: KICK review failed for %s", item_path.name, exc_info=True)
             attempts = payload.get("attempts", 0) + 1
             payload["attempts"] = attempts
             write_queue_item(item_path, payload)
