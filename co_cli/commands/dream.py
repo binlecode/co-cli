@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import typer
 
-from co_cli.config.core import DREAM_RUN_TAG, USER_DIR
+from co_cli.config.core import DREAM_TIDY_TAG, USER_DIR
 from co_cli.fileio.atomic import atomic_write_text
 
 if TYPE_CHECKING:
@@ -21,11 +21,66 @@ dream_app = typer.Typer(
 
 
 async def handle_dream_slash(ctx: CommandContext, args: str) -> None:
-    """Handle the /dream slash command — read-only daemon inspection."""
+    """Handle the /dream slash command — status (default) plus start | stop | tidy.
+
+    Routes to the existing detached ``process.py`` control surface; the daemon's
+    lifetime stays independent of the REPL. ``start`` is a manual override that
+    works regardless of ``dream.enabled`` (which gates only auto-spawn).
+    """
     from co_cli.daemons.dream.process import status_daemon
     from co_cli.display.core import console
 
-    status = status_daemon(USER_DIR)
+    tokens = args.strip().split()
+    sub = tokens[0].lower() if tokens else ""
+
+    if sub in ("", "status"):
+        _print_dream_status(ctx, status_daemon(USER_DIR))
+        return
+
+    if sub == "start":
+        if status_daemon(USER_DIR).get("running"):
+            console.print("[info]Dream daemon:[/info]  [accent]already running[/accent]")
+            return
+        from co_cli.daemons.dream.process import start_daemon
+
+        try:
+            start_daemon(USER_DIR, origin="slash")
+        except SystemExit:
+            pass
+        return
+
+    if sub == "stop":
+        if "force" not in (token.lower() for token in tokens[1:]):
+            console.print(
+                "[yellow]Dream daemon is shared across every co session attached to this "
+                "CO_HOME.[/yellow]"
+            )
+            console.print(
+                "  Stopping pauses curation for all of them — queued reviews resume on the "
+                "next start."
+            )
+            console.print("  [dim]hint:[/dim] `/dream stop force` to stop anyway")
+            return
+        from co_cli.daemons.dream.process import stop_daemon
+
+        stop_daemon(USER_DIR)
+        return
+
+    if sub == "tidy":
+        if not status_daemon(USER_DIR).get("running"):
+            console.print("[info]Dream daemon:[/info]  [yellow]not running[/yellow]")
+            console.print("  [dim]hint:[/dim] `/dream start` to start it first")
+            return
+        atomic_write_text(DREAM_TIDY_TAG, "")
+        console.print("Housekeeping requested. Check `/dream` for results.")
+        return
+
+    console.print("[dim]usage:[/dim] /dream [status | start | stop | tidy]")
+
+
+def _print_dream_status(ctx: CommandContext, status: dict) -> None:
+    """Render the read-only daemon status block."""
+    from co_cli.display.core import console
 
     if status.get("running"):
         console.print("[info]Dream daemon:[/info]  [accent]running[/accent]")
@@ -33,15 +88,16 @@ async def handle_dream_slash(ctx: CommandContext, args: str) -> None:
             console.print(f"  [dim]{key}:[/dim] {value}")
         return
 
-    deps = ctx.deps
-    if deps.config.dream.enabled:
+    if ctx.deps.config.dream.enabled:
         queue_depth = status.get("queue_depth", 0)
         console.print("[info]Dream daemon:[/info]  [yellow]not running[/yellow]")
         console.print(f"  [dim]queue (on disk):[/dim] {queue_depth}")
-        console.print("  [dim]hint:[/dim] 'co dream start' to start manually")
+        console.print("  [dim]hint:[/dim] `/dream start` to start manually")
     else:
         console.print("[info]Dream daemon:[/info]  [dim]disabled[/dim]")
-        console.print("  [dim]hint:[/dim] set dream.enabled=true and restart co chat")
+        console.print(
+            "  [dim]hint:[/dim] `/dream start` to start manually (or set dream.enabled=true)"
+        )
 
 
 @dream_app.callback(invoke_without_command=True)
@@ -80,18 +136,36 @@ def dream_status() -> None:
 
 @dream_app.command("stop")
 def dream_stop(
+    yes: bool = typer.Option(
+        False, "--yes", help="Confirm the stop (graceful SIGTERM) without the shared-daemon prompt"
+    ),
     force: bool = typer.Option(
         False, "--force", help="SIGKILL immediately, skipping the SIGTERM grace period"
     ),
 ) -> None:
-    """Stop the dream daemon."""
+    """Stop the dream daemon.
+
+    The daemon is shared across every co session attached to this CO_HOME, so a
+    stop pauses curation for all of them. Requires explicit confirmation: pass
+    ``--yes`` for a graceful stop or ``--force`` for an immediate SIGKILL (which
+    also implies confirmation).
+    """
     from co_cli.daemons.dream.process import stop_daemon
+
+    if not yes and not force:
+        typer.echo(
+            "dream daemon is shared across every co session attached to this CO_HOME; "
+            "stopping pauses curation for all of them (queued reviews resume on next start). "
+            "Use --yes (graceful) or --force (SIGKILL) to confirm.",
+            err=True,
+        )
+        return
 
     stop_daemon(USER_DIR, force=force)
 
 
-@dream_app.command("run")
-def dream_run() -> None:
+@dream_app.command("tidy")
+def dream_tidy() -> None:
     """Request a one-shot housekeeping pass from the running daemon.
 
     Writes a sentinel file the daemon picks up on its next idle tick;
@@ -105,5 +179,5 @@ def dream_run() -> None:
         typer.echo("dream daemon not running; start with `co dream start`.", err=True)
         raise typer.Exit(code=1)
 
-    atomic_write_text(DREAM_RUN_TAG, "")
+    atomic_write_text(DREAM_TIDY_TAG, "")
     typer.echo("Housekeeping requested. Check `co dream status` for results.")

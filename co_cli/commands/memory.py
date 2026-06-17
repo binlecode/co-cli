@@ -11,7 +11,7 @@ from co_cli.memory.item import filter_memory_items, format_memory_item_row, load
 from co_cli.tools.memory.recall import grep_recall
 
 _MEMORY_USAGE = (
-    "[bold]Usage:[/bold] /memory list|count|forget|restore|decay-review|stats "
+    "[bold]Usage:[/bold] /memory list|count|forget|restore|stats "
     "[query] [--older-than N] "
     "[--kind preference|feedback|rule|decision|article|reference|note] [--dry]"
 )
@@ -165,44 +165,11 @@ async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
         )
 
 
-async def _subcmd_knowledge_decay_review(ctx: CommandContext, rest: str) -> None:
-    """Preview decay candidates and, with confirmation, archive them."""
-    from co_cli.memory.archive import archive_artifacts
-    from co_cli.memory.decay import find_decay_candidates
-
-    tokens = rest.split()
-    dry_run = "--dry" in tokens
-
-    candidates = find_decay_candidates(ctx.deps.memory_dir, ctx.deps.config.memory)
-    if not candidates:
-        console.print("[dim]No decay candidates.[/dim]")
-        return None
-
-    for art in candidates:
-        created_at = (art.created_at or "")[:10]
-        last = art.last_recalled_at[:10] if art.last_recalled_at else "never"
-        slug_prefix = art.path.stem
-        console.print(f"  {slug_prefix}  created={created_at}  last_recalled={last}")
-    console.print(f"[dim]{len(candidates)} decay candidate(s)[/dim]")
-
-    if dry_run:
-        return None
-
-    prompt_text = f"Archive {len(candidates)} decay candidates? [y/N] "
-    confirmed = await _confirm(ctx, prompt_text)
-    if not confirmed:
-        console.print("[dim]Aborted.[/dim]")
-        return None
-
-    archived = archive_artifacts(candidates, ctx.deps.memory_dir, ctx.deps.memory_store)
-    console.print(f"[success]✓ Archived {archived}.[/success]")
-
-
 async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
-    """Display knowledge health dashboard: artifact counts, archive size, housekeeping state, decay."""
+    """Display knowledge health dashboard: artifact counts, archive size, housekeeping state."""
     from co_cli.config.core import DREAM_DAEMON_DIR
+    from co_cli.config.memory import MEMORY_ITEM_COUNT_WARN
     from co_cli.daemons.dream.state import load_housekeeping_state
-    from co_cli.memory.decay import find_decay_candidates
 
     knowledge_dir = ctx.deps.memory_dir
     artifacts = load_memory_items(knowledge_dir)
@@ -222,26 +189,29 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     if hk.last_housekeeping_at:
         last_pass = (
             f"{hk.last_housekeeping_at}"
-            f" (memory: {hk.stats.memory_merged} merged, {hk.stats.memory_decayed} archived; "
+            f" (memory: {hk.stats.memory_merged} merged; "
             f"skill: {hk.stats.skill_merged} merged, {hk.stats.skill_decayed} archived)"
         )
     else:
         last_pass = "never"
 
-    candidates = find_decay_candidates(knowledge_dir, ctx.deps.config.memory)
-
     console.print(f"Knowledge: {total} artifacts")
     if kind_parts:
         console.print(f"  {kind_parts}")
     console.print(f"  decay-protected: {protected}")
+    if total > MEMORY_ITEM_COUNT_WARN:
+        console.print(
+            f"[warning]⚠ {total} active items exceeds the warn threshold "
+            f"({MEMORY_ITEM_COUNT_WARN}) — investigate a possible write loop or "
+            f"pollution; nothing is auto-archived.[/warning]"
+        )
     console.print(f"Archived: {archived}")
     console.print(f"Last housekeeping: {last_pass}")
-    console.print(f"Decay candidates: {len(candidates)}")
-    console.print("[dim]hint:[/dim] `co dream run` to request a one-shot housekeeping pass")
+    console.print("[dim]hint:[/dim] `co dream tidy` to request a one-shot housekeeping pass")
 
 
 async def _cmd_memory(ctx: CommandContext, args: str) -> None:
-    """Dispatch /memory subcommands: list, count, forget, restore, decay-review, stats."""
+    """Dispatch /memory subcommands: list, count, forget, restore, stats."""
     parts = args.strip().split(maxsplit=1)
     if not parts:
         console.print(_MEMORY_USAGE)
@@ -259,8 +229,6 @@ async def _cmd_memory(ctx: CommandContext, args: str) -> None:
         await _subcmd_memory_forget(ctx, query, filters)
     elif subcommand == "restore":
         await _subcmd_knowledge_restore(ctx, rest)
-    elif subcommand == "decay-review":
-        await _subcmd_knowledge_decay_review(ctx, rest)
     elif subcommand == "stats":
         await _subcmd_knowledge_stats(ctx)
     else:

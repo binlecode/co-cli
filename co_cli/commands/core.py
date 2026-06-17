@@ -60,10 +60,12 @@ BUILTIN_COMMANDS["compact"] = SlashCommand(
 )
 BUILTIN_COMMANDS["memory"] = SlashCommand(
     "memory",
-    "Manage memory items — /memory list|count|forget|dream|restore|decay-review|stats [args]",
+    "Manage memory items — /memory list|count|forget|dream|restore|stats [args]",
     _cmd_memory,
 )
-BUILTIN_COMMANDS["dream"] = SlashCommand("dream", "Show dream daemon status", handle_dream_slash)
+BUILTIN_COMMANDS["dream"] = SlashCommand(
+    "dream", "Manage the dream daemon (status | start | stop | tidy)", handle_dream_slash
+)
 BUILTIN_COMMANDS["approvals"] = SlashCommand(
     "approvals", "Manage session approval rules", _cmd_approvals
 )

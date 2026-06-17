@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.392]
+
+The `/dream` slash command gains full daemon lifecycle control from inside the REPL — previously you could only *see* the daemon was down but had to drop to a shell to act.
+
+- `/dream` now dispatches `start | stop | tidy` (plus the existing status default); each routes to the existing detached `process.py` control surface, so the daemon's lifetime stays independent of the REPL.
+- `start` works regardless of `dream.enabled` (which gates only auto-spawn) and is idempotent — a second `start` reports already-running without aborting the turn (guarded `SystemExit`).
+- `stop` is force-gated on both surfaces: the daemon is a per-`CO_HOME` singleton, so a bare `/dream stop` / `co dream stop` warns and no-ops; `/dream stop force`, `co dream stop --yes` (graceful), or `co dream stop --force` (SIGKILL) confirm.
+- Renamed the housekeeping verb `run` → `tidy` consistently across both surfaces (`co dream tidy`, `/dream tidy`) and the sentinel `DREAM_RUN_TAG`/`run.tag` → `DREAM_TIDY_TAG`/`tidy.tag`. Zero-backward-compat, no alias.
+- Down-state status hint now names the in-REPL `/dream start` rather than directing the user to a shell.
+
 ## [0.8.390]
 
 Tool execution now shows live timing, matching the existing `Thinking… Ns` / `Thought for Ns` reasoning vocabulary — on a slow local model a running tool is no longer indistinguishable from a hung one.

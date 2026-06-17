@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from co_cli.config.core import DREAM_DAEMON_DIR, DREAM_RUN_TAG
+from co_cli.config.core import DREAM_DAEMON_DIR, DREAM_TIDY_TAG
 from co_cli.config.dream import DreamSettings
 from co_cli.daemons.dream._queue import (
     list_queue_files,
@@ -84,8 +84,8 @@ async def _maybe_housekeep(deps: CoDeps, cfg: DreamSettings) -> None:
     from co_cli.daemons.dream._housekeeping import run_housekeeping
 
     state = load_housekeeping_state(DREAM_DAEMON_DIR)
-    if DREAM_RUN_TAG.exists():
-        DREAM_RUN_TAG.unlink(missing_ok=True)
+    if DREAM_TIDY_TAG.exists():
+        DREAM_TIDY_TAG.unlink(missing_ok=True)
         await run_housekeeping(deps, cfg, state)
         return
     if scheduled_tick_due(state, cfg):

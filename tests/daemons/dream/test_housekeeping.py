@@ -284,7 +284,7 @@ def test_decay_recall_outside_protection_window_archives(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# co dream run — sentinel + daemon-not-running path
+# co dream tidy — sentinel + daemon-not-running path
 # ---------------------------------------------------------------------------
 
 
@@ -340,8 +340,8 @@ def test_run_housekeeping_decay_runs_after_merge_timeout(tmp_path: Path, monkeyp
     assert result.stats.skill_decayed == 0, "no user skills present → no skill decay"
 
 
-def test_dream_run_errors_when_daemon_not_running(tmp_path: Path, monkeypatch) -> None:
-    """`co dream run` with no PID file: exits 1, no sentinel written."""
+def test_dream_tidy_errors_when_daemon_not_running(tmp_path: Path, monkeypatch) -> None:
+    """`co dream tidy` with no PID file: exits 1, no sentinel written."""
     from typer.testing import CliRunner
 
     monkeypatch.setenv("CO_HOME", str(tmp_path))
@@ -354,10 +354,10 @@ def test_dream_run_errors_when_daemon_not_running(tmp_path: Path, monkeypatch) -
     importlib.reload(dream_mod)
 
     runner = CliRunner()
-    result = runner.invoke(dream_mod.dream_app, ["run"])
+    result = runner.invoke(dream_mod.dream_app, ["tidy"])
     assert result.exit_code == 1
     assert "not running" in result.stderr or "not running" in result.output
-    assert not core_mod.DREAM_RUN_TAG.exists(), "sentinel must not be written when daemon down"
+    assert not core_mod.DREAM_TIDY_TAG.exists(), "sentinel must not be written when daemon down"
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 This spec owns the dream subsystem — co's self-learning path. It covers two coupled layers:
 
 1. **In-session reviewer (daemon layer)** — a per-`CO_HOME` daemon that processes KICK payloads queued by the REPL. It runs domain-specific review agents (memory + skill) against recent session transcripts.
-2. **Clock-driven housekeeping** — merge → decay against the full memory corpus, fired on a 24h scheduled tick inside the same daemon loop, or on demand via `co dream run`. Lives in `co_cli/daemons/dream/_housekeeping.py`. There is no transcript mining outside the reviewer — housekeeping operates only on the durable memory item store + recall metrics.
+2. **Clock-driven housekeeping** — merge → decay against the full memory corpus, fired on a 24h scheduled tick inside the same daemon loop, or on demand via `co dream tidy` (or `/dream tidy`). Lives in `co_cli/daemons/dream/_housekeeping.py`. There is no transcript mining outside the reviewer — housekeeping operates only on the durable memory item store + recall metrics.
 
 The broader persistent cognition model lives in [memory.md](memory.md). Startup and shutdown sequencing live in [bootstrap.md](bootstrap.md) and [01-system.md](01-system.md). Prompt injection and recall scoring live in [prompt-assembly.md](prompt-assembly.md). Model routing for daemon and batch review calls lives in [config.md](config.md).
 
@@ -286,12 +286,12 @@ Current default: `dream.enabled = false`. Opt-in via `CO_DREAM_ENABLED=true` or 
 
 ## 2. Clock-Driven Housekeeping
 
-Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay → retention-prune against the full memory corpus AND the user skill library. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream run`). It reads the memory item store, the per-skill recall sidecars, and skill markdown bodies — never transcripts (that is the reviewer's job). The retention-prune phase has two independent sweeps: `prune_done_and_snapshots` deletes `queue/done/` files and orphaned `snapshots/` files older than `dream.done_retention_days` (default 7), and `prune_sessions` deletes session transcripts in `sessions_dir` older than `dream.session_retention_days` (default `0` = disabled, opt-in). Both keep their bins bounded; `queue/failed/` is left intact. `prune_sessions` only touches canonically-named session files (`parse_session_filename` accepts the name), leaving foreign files alone, and the live session's recent mtime keeps it from ever being selected.
+Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay → retention-prune against the full memory corpus AND the user skill library. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream tidy`). It reads the memory item store, the per-skill recall sidecars, and skill markdown bodies — never transcripts (that is the reviewer's job). The retention-prune phase has two independent sweeps: `prune_done_and_snapshots` deletes `queue/done/` files and orphaned `snapshots/` files older than `dream.done_retention_days` (default 7), and `prune_sessions` deletes session transcripts in `sessions_dir` older than `dream.session_retention_days` (default `0` = disabled, opt-in). Both keep their bins bounded; `queue/failed/` is left intact. `prune_sessions` only touches canonically-named session files (`parse_session_filename` accepts the name), leaving foreign files alone, and the live session's recent mtime keeps it from ever being selected.
 
 ```mermaid
 flowchart TD
     subgraph Entry["Entry Points"]
-        Manual["co dream run\n(writes ~/.co-cli/daemons/dream/run.tag)"]
+        Manual["co dream tidy\n(writes ~/.co-cli/daemons/dream/tidy.tag)"]
         Auto["scheduled tick\n(now ≥ last + run_interval_hours,\nclamped to next run_start_at)"]
     end
 
@@ -318,8 +318,8 @@ flowchart TD
 Inside the daemon's polling main loop, on every empty-queue iteration (before the idle sleep), two checks fire in order:
 
 ```python
-if DREAM_RUN_TAG.exists():
-    DREAM_RUN_TAG.unlink(missing_ok=True)
+if DREAM_TIDY_TAG.exists():
+    DREAM_TIDY_TAG.unlink(missing_ok=True)
     await run_housekeeping(deps, cfg)
 elif scheduled_tick_due(state, cfg):
     await run_housekeeping(deps, cfg)
@@ -328,14 +328,14 @@ elif scheduled_tick_due(state, cfg):
 Manual trigger:
 
 ```text
-co dream run
+co dream tidy   (or /dream tidy in the REPL)
   → checks daemon liveness via PID file
   → if daemon down: stderr "dream daemon not running; start with `co dream start`." + exit 1
-  → atomic-write empty sentinel at ~/.co-cli/daemons/dream/run.tag
+  → atomic-write empty sentinel at ~/.co-cli/daemons/dream/tidy.tag
   → print "Housekeeping requested. Check `co dream status` for results."
 ```
 
-Worst-case latency from `co dream run` to housekeeping start is `dream.tick_interval_seconds` (default 5 s). There is no ad-hoc spawn — the daemon must be running.
+Worst-case latency from `co dream tidy` to housekeeping start is `dream.tick_interval_seconds` (default 5 s). There is no ad-hoc spawn — the daemon must be running.
 
 Scheduled tick:
 
@@ -466,7 +466,7 @@ Both phases call `refresh_skills(deps)` after writes so `deps.skill_catalog` sta
 
 | Command | Purpose |
 |---|---|
-| `co dream run` | Request a one-shot housekeeping pass from the running daemon |
+| `co dream tidy` | Request a one-shot housekeeping pass from the running daemon |
 | `co dream status` | Daemon state + queue/failed counts (post-pass effects show via `/memory stats`) |
 | `/memory stats` | Active counts, archive count, last housekeeping timestamp + cumulative stats, decay candidates |
 | `/memory restore [slug]` | List archived artifacts or restore one by unambiguous filename prefix |
@@ -493,7 +493,7 @@ Auto-spawn and daemon existence are visible across four surfaces (mission §"Tru
 |---|---|
 | **First-spawn notice** | On first auto-spawn of a `CO_HOME`, REPL prints: `[dream] daemon started in background. 'co dream status' to inspect; 'co dream stop' to stop.` |
 | **Welcome banner** | `Dream:` row alongside `Memory:` / `Tools:` / `Dir:`. Three states: `✓ running  queue: N` (accent), `disabled` (dim), `enabled but daemon not running  queue: N (on disk)` (yellow). Built from local PID-file + queue-directory reads — instantaneous, never stalls startup. |
-| **`/dream` slash** | Read-only inspection in the REPL. Calls `status_daemon` (file-based; no daemon round-trip). When daemon is down: prints state + on-disk queue depth + guidance. |
+| **`/dream` slash** | In-REPL daemon control. Bare `/dream` (or `/dream status`) is read-only inspection — calls `status_daemon` (file-based; no daemon round-trip), and when the daemon is down prints state + on-disk queue depth + the `/dream start` hint. Subcommands `start | stop | tidy` route to the same detached `process.py` control surface as the shell CLI: `start` is a manual override that works regardless of `dream.enabled`; `stop` requires the explicit `force` token (`/dream stop force`) because the daemon is shared across every attached session; `tidy` requests a one-shot housekeeping pass. The daemon's lifetime stays independent of the REPL. |
 | **`co dream status`** | Full JSON: `running`, `pid`, `uptime_seconds`, `queue_depth`, `failed_count`, `spawn_origin`, `spawn_session_id`. Authoritative source of truth — read directly from PID file + queue directory. |
 
 CLI subcommands:
@@ -501,8 +501,8 @@ CLI subcommands:
 ```text
 co dream start [--foreground] [--origin=<str>] [--session-id=<str>]
 co dream status
-co dream stop [--force]
-co dream run                # request a one-shot housekeeping pass
+co dream stop [--yes] [--force]   # shared daemon: --yes (graceful) or --force (SIGKILL) to confirm
+co dream tidy                      # request a one-shot housekeeping pass
 ```
 
 The daemon wires the same observability stack as the main app via `setup_observability()`: a rotating JSONL app log `co-dream.jsonl` (INFO+; WARNING+ records land here too — there is no separate dream errors file) and a span stream `co-dream-spans.jsonl`, both directly under `$CO_HOME/logs/`. For app-log streaming: `tail -f $CO_HOME/logs/co-dream.jsonl`. Note: `co tail` / `co trace` read only `co-cli-spans.jsonl`, so dream spans are inspectable via `jq` over `co-dream-spans.jsonl`, not the live viewers.
@@ -605,7 +605,7 @@ Internal caps (housekeeping — apply to both domains):
 | `find_decay_candidates(memory_dir, config)` | `co_cli/memory/decay.py` | Pure candidate filter — applies `decay_after_days`, `recall_protection_days`, and `decay_protected` |
 | `archive_artifacts(entries, memory_dir, memory_store)` | `co_cli/memory/archive.py` | Move items into `memory/_archive/` |
 | `restore_artifact(slug, memory_dir, memory_store)` | `co_cli/memory/archive.py` | Restore archived item by unambiguous filename prefix |
-| `DREAM_RUN_TAG` | `co_cli/config/core.py` | Path to the sentinel file written by `co dream run` |
+| `DREAM_TIDY_TAG` | `co_cli/config/core.py` | Path to the sentinel file written by `co dream tidy` |
 
 ### Transcript loading (reviewer only)
 
@@ -653,7 +653,7 @@ Internal caps (housekeeping — apply to both domains):
 | `co_cli/memory/archive.py` | Archive and restore mechanics |
 | `co_cli/session/persistence.py` | `load_transcript` — reviewer-only |
 | `co_cli/commands/memory.py` | `/memory restore`, `/memory decay-review`, `/memory stats` |
-| `co_cli/commands/dream.py` | `co dream run` subcommand — writes the sentinel file |
+| `co_cli/commands/dream.py` | `co dream tidy` subcommand — writes the sentinel file |
 | `co_cli/commands/memory.py` | `/memory stats` (now reports both memory + skill housekeeping counters) |
 
 ---
@@ -703,5 +703,6 @@ Internal caps (housekeeping — apply to both domains):
 | Manifest assembly does NOT mutate sidecar `recall_days` | `tests/daemons/dream/test_skill_housekeeping.py` |
 | `HousekeepingStats` carries skill counters; state JSON round-trips | `tests/daemons/dream/test_skill_housekeeping.py` |
 | Curator modules / `CURATOR_RUNS_DIR` / curator config fields are gone | `tests/daemons/dream/test_skill_housekeeping.py` |
-| `co dream run` errors cleanly when daemon down; no sentinel written | `tests/daemons/dream/test_housekeeping.py` |
+| `co dream tidy` errors cleanly when daemon down; no sentinel written | `tests/daemons/dream/test_housekeeping.py` |
+| `/dream` slash routes start / stop (force-gated) / tidy / status against a real daemon | `tests/daemons/dream/test_slash_dispatch.py` |
 | End-to-end memory merge against real memory + real LLM | `evals/eval_memory.py` (W3.F), `evals/eval_daily_chat.py` (W1.D) |
