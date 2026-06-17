@@ -574,7 +574,8 @@ After the turn, `_finalize_turn()` reads `compaction_applied_this_turn` and pass
 
 **Pre-compaction review snapshot (Defect-B).** Because the in-place rewrite is lossy, `compact_messages` first calls `_snapshot_and_kick_review(ctx, messages)` at the top — before slicing — so the dream reviewer can extract durable knowledge from the dropped span at full fidelity *before* it is gone. `compact_messages` is the single chokepoint where whole messages are dropped, so this one call covers all three callers (proactive PATH 2, overflow PATH 2, `/compact`). The helper is best-effort (wrapped in try/except, never aborts compaction) and does **not** write runtime — it writes the full pre-drop `messages` to an immutable `snapshots/<id>-<ts>-<uuid>.jsonl` file and fires a single **memory** review KICK carrying `transcript_override=<snapshot path>` (see [dream.md](dream.md) §1.3). It self-guards on the one-shot `runtime.skip_compaction_snapshot` flag, which `proactive_window_processor` sets only around its no-progress escalation call into `recover_overflow_history` (a try/finally bounds it). That escalation re-enters `compact_messages` for the *same* logical compaction the proactive pass already snapshotted, so it is suppressed — while a genuinely *separate* later-in-turn compaction (a fresh proactive pass) still snapshots. This is deliberately **not** keyed on `compaction_applied_this_turn`: that flag stays set for the whole turn and would wrongly suppress every compaction after the first. Recovery PATH 1 (strip-only-fits) never calls `compact_messages` and drops no message, so it produces no snapshot — correct, since the reviewer excludes tool returns (`include_tool_results=False`) and PATH 1 only collapses tool-return bodies.
 
-**`summarize_messages` output structure** (`_SUMMARIZE_PROMPT`; †omitted when empty):
+**`summarize_messages` output structure** (`_SUMMARIZE_PROMPT`; keep-every-section — every section
+is always emitted, with `(none)` as the body when empty):
 
 ```
   ## Active Task             ← verbatim drift anchor (front-loaded)
@@ -582,21 +583,32 @@ After the turn, `_finalize_turn()` reads `compaction_applied_this_turn` and pass
   ## Goal
   ## Constraints & Preferences
   ## Key Decisions
-  ## User Corrections        †
+  ## User Corrections
   ## Errors & Fixes
   ## Completed Actions
   ## In Progress
   ## Remaining Work
   ## Working Set
-  ## Pending User Asks       †
-  ## Resolved Questions      †
-  ## Critical Context        †
+  ## Pending User Asks
+  ## Resolved Questions
+  ## Critical Context
 ```
 
 The two verbatim drift-anchor sections (`## Active Task`, `## Next Step`) lead the template by
 design: a hard-cap truncation clips the *end*, and a stub-collapse writes only the *front*, so
 front-loading the anchors keeps them intact under both output-length tails — the small-model
 carry-forward length variance that a trailing-section position would expose to truncation.
+
+**Keep-every-section over omit-empty (measured).** Sections are always emitted with `(none)` when
+empty, rather than omitted. An earlier revision instructed the model to drop empty sections (a SKIP
+RULE); the `summarizer-fidelity-measure` ablation showed the configured local model
+(`qwen3.6:35b-a3b-agentic`) ignores that rule — it emits `## Section\nNone.` placeholders regardless
+(omit-empty compliance ~0% across transcripts) and, worse, collapses `## Active Task` to a bare
+placeholder once it judges the task complete, losing the user's request as a drift anchor.
+Keep-every-section matches what the model already does (peer-aligned: opencode, openclaw, letta all
+keep sections) and `## Active Task` now preserves the user's request verbatim with a `(completed)`
+suffix. The ablation A/B (keep-every vs omit-empty, N=5/transcript on the configured model) confirmed
+the revision restores verbatim-anchor and section fidelity to ~100% with no regression.
 
 **Summary output budget.** The summarizer output is bounded *proportionally to the region it compresses* (`resolve_summary_budget` in `summarization.py`), instead of drifting toward the flat noreason ceiling (8192 on Ollama):
 

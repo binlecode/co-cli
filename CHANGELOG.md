@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.388]
+
+Measured compaction-summarizer fidelity on the configured local model and revised the handoff template to match what the model honors.
+
+- Added a throwaway eval harness (`evals/eval_summarizer_fidelity.py`) that drives real compactions over three synthesized transcripts (user-correction, tool-heavy, carry-forward), scores section/verbatim/tool-name/path/carry-forward fidelity deterministically over N=5 samples per arm, and emits a paired A/B JSONL verdict.
+- Measured verdict on `qwen3.6:35b-a3b-agentic`: REVISE — the model ignored the omit-empty SKIP RULE (emitting `None.` placeholders) and dropped the verbatim drift anchor once a task completed.
+- Revised `_SUMMARIZE_PROMPT` to keep-every-section with `(none)` placeholders, promoted `## User Corrections` to a permanent positioned section, and made `## Active Task` preserve the user's request verbatim with `(completed)`. Removed the contradictory leftover SKIP RULE. Paired A/B re-measure flips the verdict to COMPLIANT (all properties 1.00, no regression).
+
 ## [0.8.387]
 
 Fixed broken spilled-tool-result re-fetch — `file_read` can now read back its own spilled outputs.

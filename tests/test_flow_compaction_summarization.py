@@ -312,12 +312,11 @@ async def test_summarize_messages_from_scratch_returns_structured_text():
 
     Fixture: multi-turn auth fix — file_read, file_edit, shell tool calls with
     substantial content. Verifies section structure, verbatim active-task fidelity,
-    tool-name fidelity (no hallucinated tool names), and that empty sections are
-    skipped rather than filled with "None." / "[None]" placeholder text.
+    and tool-name fidelity (no hallucinated tool names).
 
-    Note: compression ratio is not asserted — the 12-section format has fixed
-    overhead that exceeds short fixtures. Real production inputs (thousands of
-    tokens) compress massively against this same output size.
+    Note: compression ratio is not asserted — the keep-every-section format has
+    fixed overhead that exceeds short fixtures. Real production inputs (thousands
+    of tokens) compress massively against this same output size.
     """
     await ensure_ollama_warm(TEST_LLM.model)
     async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
@@ -356,4 +355,68 @@ async def test_summarize_messages_from_scratch_returns_structured_text():
     # Core topic (auth / SECRET_KEY) must be captured
     assert any(kw in result.lower() for kw in ("auth", "secret_key", "secret", "co_auth")), (
         f"Summary does not mention the auth/SECRET_KEY topic:\n{result}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_summarize_preserves_anchors_when_task_completed_with_correction():
+    """The handoff must survive a completed task that the user redirected mid-way.
+
+    Real transcript: user asks for bcrypt, corrects to Argon2, the assistant
+    finishes the work touching a named file. Through one real compaction the
+    summary must preserve (a) the user's request verbatim as the Active Task drift
+    anchor — even though the task COMPLETED, the request must not collapse to a
+    bare placeholder — (b) the file in the working set, and (c) the user's
+    correction. These are the three things a resumed agent loses if fidelity fails.
+    """
+    messages = [
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content="Add password hashing to signup in app/auth.py. Use bcrypt."
+                )
+            ]
+        ),
+        ModelResponse(parts=[TextPart(content="Adding bcrypt hashing to the signup handler.")]),
+        ModelRequest(
+            parts=[
+                UserPromptPart(content="No, use Argon2 not bcrypt — bcrypt truncates at 72 bytes.")
+            ]
+        ),
+        ModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name="file_edit", args={"path": "app/auth.py"}, tool_call_id="e1"
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name="file_edit",
+                    content="Edited app/auth.py — added Argon2id hashing.",
+                    tool_call_id="e1",
+                )
+            ]
+        ),
+        ModelResponse(
+            parts=[TextPart(content="Done — app/auth.py now uses Argon2id for signup hashing.")]
+        ),
+    ]
+
+    await ensure_ollama_warm(TEST_LLM.model)
+    async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
+        result = await summarize_messages(_DEPS, messages)
+
+    active_start = result.index("## Active Task")
+    next_header = result.find("##", active_start + len("## Active Task"))
+    active_body = result[active_start:next_header] if next_header != -1 else result[active_start:]
+    assert "Add password hashing to signup" in active_body, (
+        f"Active Task lost the user's request verbatim after completion:\n{active_body}"
+    )
+
+    assert "app/auth.py" in result, f"Working-set file path did not survive:\n{result}"
+
+    assert "argon2" in result.lower(), (
+        f"User correction (Argon2 over bcrypt) did not survive:\n{result}"
     )
