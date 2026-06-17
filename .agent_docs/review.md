@@ -28,7 +28,7 @@ Coding rules are enforced by **judgment and review**, plus **periodic whole-code
 
 **Two review scopes, both needed:**
 - **Diff-scoped review** (`/review-impl`): catches *new* violations introduced by a change. Structurally blind to slow whole-codebase accretion.
-- **Whole-codebase audit** (periodic): judgment-scans the whole tree against the `.agent_docs` coding rules, inventories violations, and feeds a cleanup/refactoring plan. This is the feedback loop that keeps the codebase conformant; review feeds regulation.
+- **Whole-codebase audit** (`/audit-conformance`, periodic): judgment-scans the whole tree against the `.agent_docs` coding rules, inventories violations with `file:line` + rule citation, and emits a scoped `rules-conformance-cleanup` plan. This is the feedback loop that keeps the codebase conformant; review feeds regulation.
 
 ## Clarity by Subtraction (proven refactor rules)
 

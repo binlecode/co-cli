@@ -112,6 +112,7 @@ Non-obvious nuances:
 - `/orchestrate-dev` marks completed tasks `✓ DONE` (never deletes mid-delivery) and auto-invokes `/sync-doc`.
 - `/review-impl` PASS verdict means TL reads it at Gate 2 and ships — no extra review pass.
 - `/clean-tests [path]` is callable any time, not just pre-ship.
+- `/audit-conformance [scope]` is the periodic whole-codebase counterpart to `/review-impl`: `/review-impl` catches violations a *change* introduces (diff-scoped); `/audit-conformance` scans the whole tree for *accreted* coding-rule violations review-impl is structurally blind to, then emits a `rules-conformance-cleanup` plan that re-enters this same flow at Gate 1. Run it periodically (not per-PR) — a good trigger is `git log` showing the same cleanup-commit class repeating.
 - For atomic/single-file changes, use Claude Code's built-in plan flow directly — no skill needed.
 - **Staged-file hygiene**: before shipping, verify only related files are staged. Ask before staging any file that seems tangential.
 
