@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from prompt_toolkit import ANSI, Application
+from prompt_toolkit.completion import Completer
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.history import History
 from prompt_toolkit.key_binding import KeyBindings
@@ -22,7 +23,6 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style, default_ui_style, merge_styles
 from prompt_toolkit.widgets import TextArea
 
-from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.display.core import PROMPT_CHAR, TerminalFrontend
 
 if TYPE_CHECKING:
@@ -51,7 +51,7 @@ Dispatch = Callable[..., Awaitable[None]]
 
 
 @dataclass
-class _ReplRuntime:
+class ReplRuntime:
     """Single mutable owner of chat-loop turn state (F7).
 
     Shared by the ``accept_handler`` (enqueue submissions while a turn is active)
@@ -82,7 +82,7 @@ class _ReplRuntime:
 
 
 def build_key_bindings(
-    *, runtime: _ReplRuntime, dispatch: Dispatch, frontend: TerminalFrontend
+    *, runtime: ReplRuntime, dispatch: Dispatch, frontend: TerminalFrontend
 ) -> KeyBindings:
     """Build the REPL key bindings.
 
@@ -154,7 +154,7 @@ def build_key_bindings(
 def build_repl_app(
     *,
     frontend: TerminalFrontend,
-    completer: SlashCommandCompleter,
+    completer: Completer,
     history: History,
     accept_handler: "Callable[[Buffer], bool]",
     key_bindings: KeyBindings,

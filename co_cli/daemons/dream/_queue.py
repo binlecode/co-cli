@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 
+from co_cli.fileio.atomic import atomic_write_text
+
 
 def read_queue_item(path: Path) -> dict:
     """Read and return the JSON payload from a queue file."""
@@ -15,13 +17,12 @@ def read_queue_item(path: Path) -> dict:
 def write_queue_item(path: Path, payload: dict) -> None:
     """Atomically write JSON payload to a queue file.
 
-    Writes to a sibling tmp file then os.replace into place so a crash
-    mid-write never leaves a truncated queue file. list_queue_files skips
-    *.tmp so in-flight writes are invisible to the daemon scanner.
+    Routes through the shared atomic_write_text primitive so a crash mid-write
+    never leaves a truncated queue file. Its tempfile carries a .tmp suffix and
+    list_queue_files globs only *.json, so in-flight writes are invisible to the
+    daemon scanner.
     """
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload))
-    os.replace(tmp, path)
+    atomic_write_text(path, json.dumps(payload))
 
 
 def list_queue_files(queue_dir: Path) -> list[Path]:

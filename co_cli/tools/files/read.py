@@ -14,6 +14,7 @@ from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.observability.tracing import current_span
+from co_cli.proc.env import build_subprocess_env
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.files.fs_guards import (
     detect_encoding,
@@ -21,7 +22,6 @@ from co_cli.tools.files.fs_guards import (
     is_recursive_pattern,
     safe_mtime,
 )
-from co_cli.tools.shell_env import build_subprocess_env
 from co_cli.tools.tool_io import READ_MAX_LINES, tool_error, tool_output
 
 _READ_MAX_LINE_CHARS = 2000

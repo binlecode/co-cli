@@ -27,7 +27,7 @@ from prompt_toolkit.patch_stdout import patch_stdout
 
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.deps import ApprovalSubject
-from co_cli.display._app import _ReplRuntime, build_key_bindings, build_repl_app
+from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import TerminalFrontend
 from co_cli.main import _build_accept_handler, _IterationState
 
@@ -53,7 +53,7 @@ def _subject() -> ApprovalSubject:
 
 async def _drive_approval(keystroke: str) -> str:
     frontend = TerminalFrontend()
-    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
+    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
 
     async def dispatch(*, user_input, eof):
         return None

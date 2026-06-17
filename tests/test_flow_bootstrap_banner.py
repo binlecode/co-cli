@@ -7,7 +7,8 @@ from pathlib import Path
 from tests._settings import SETTINGS
 
 from co_cli.bootstrap import banner as banner_mod
-from co_cli.bootstrap.banner import build_memory_line, build_status_counts, display_welcome_banner
+from co_cli.bootstrap.banner import build_memory_line, display_welcome_banner
+from co_cli.commands.status_report import build_status_counts
 from co_cli.deps import CoDeps
 from co_cli.display.core import console
 from co_cli.tools.shell_backend import ShellBackend

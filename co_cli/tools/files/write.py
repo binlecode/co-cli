@@ -9,13 +9,13 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.messages import ToolReturn
 
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
+from co_cli.proc.env import build_subprocess_env
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.files.fs_guards import (
     detect_encoding,
     enforce_write_boundary,
     safe_mtime,
 )
-from co_cli.tools.shell_env import build_subprocess_env
 from co_cli.tools.tool_io import tool_error, tool_output
 
 _MAX_EDIT_BYTES = 10 * 1024 * 1024  # 10 MB hard block for patch

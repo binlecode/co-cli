@@ -31,7 +31,7 @@ flowchart TD
 | Component | Module | Role |
 | --- | --- | --- |
 | REPL loop, lifecycle, foreground-turn entry | `co_cli/main.py` | `_chat_loop`, `_handle_one_input`, `_enqueue`, `_build_status_snapshot`, the `chat` CLI command |
-| Application factory, key bindings, turn-state holder | `co_cli/display/_app.py` | `build_repl_app`, `build_key_bindings`, `_ReplRuntime` (single owner of turn-task + input queue) |
+| Application factory, key bindings, turn-state holder | `co_cli/display/app.py` | `build_repl_app`, `build_key_bindings`, `ReplRuntime` (single owner of turn-task + input queue) |
 | Slash-command registry and dispatch | `co_cli/commands/` | `dispatch`, `BUILTIN_COMMANDS`, `SlashCommand`, `CommandContext`, `SlashOutcome` variants |
 | Frontend contract + terminal implementation | `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `render_to_ansi`, `StatusSnapshot`, `console` |
 | No-op frontend for evals/tests | `co_cli/display/headless.py` | `HeadlessFrontend` — full protocol implementation, stores `last_status_snapshot` |
@@ -69,8 +69,8 @@ coupling. This seam is a deliberate design invariant — defend it, do not redes
   agent never imports the TUI; it calls *up* through the protocol. Slash dispatch lives in the
   TUI and returns `LocalOnly` / `ReplaceTranscript` / `DelegateToAgent` — only the last crosses
   into the agent (§2).
-- **Queue is above the agent, Frontend below.** The mid-turn input queue lives on `_ReplRuntime`
-  (`co_cli/display/_app.py`); `orchestrate.py` never references it and runs one `user_input` per
+- **Queue is above the agent, Frontend below.** The mid-turn input queue lives on `ReplRuntime`
+  (`co_cli/display/app.py`); `orchestrate.py` never references it and runs one `user_input` per
   turn to completion. So the agent is queue-agnostic — sandwiched between two TUI-owned concerns,
   coupled to neither. This is the only async decoupling in-process, and it is deliberately
   REPL-internal (a bounded control buffer), not an event bus.
@@ -87,7 +87,7 @@ coupling. This seam is a deliberate design invariant — defend it, do not redes
 - `deps.session.reasoning_display` set from the effective startup mode (CLI flag or config)
 - a `FileHistory` persisted to `~/.co-cli/history.txt` and a completer seeded from
   `BUILTIN_COMMANDS` keys and user-invocable skill names
-- the REPL `Application` via `build_repl_app(...)` (`co_cli/display/_app.py`), bound to the
+- the REPL `Application` via `build_repl_app(...)` (`co_cli/display/app.py`), bound to the
   frontend via `frontend.bind_app(app)`; the loop then drives it with `await app.run_async()`
   inside `patch_stdout()`
 
@@ -102,7 +102,7 @@ way); `queue_cap == 0` is unbounded (the default). Each armed turn carries an `a
 that drains the next queued item at the turn boundary — normal completion *and* `Esc`-cancel both
 fire it — so the queue advances one item per turn. Turn state — the current turn-task reference,
 the iteration state, and the input `queue` (`collections.deque[str]`) — has one owner,
-`_ReplRuntime`, shared by the `accept_handler` and the key bindings. Queue depth + a truncated
+`ReplRuntime`, shared by the `accept_handler` and the key bindings. Queue depth + a truncated
 head-item preview surface in the bottom toolbar (`{n} queued: "…"`, omitted at depth 0).
 `/queue [list|clear|pop [n]]` inspects or prunes pending items; mid-turn it bypasses the queue and
 runs via `runtime.schedule_control(...)` (it is a buffer op, not a turn). `exit`/`quit` and empty
@@ -268,7 +268,7 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 | `HeadlessFrontend` | `co_cli/display/headless.py` | No-op frontend for evals and tests; stores `last_status_snapshot` for inspection; mirrors the async prompt signatures |
 | `render_to_ansi(renderable, *, width) -> str` | `co_cli/display/core.py` | The sole Rich renderable→ANSI-string primitive; stateless, width supplied by the caller |
 | `console`, `set_theme(name)`, `PROMPT_CHAR` | `co_cli/display/core.py` | Shared console instance, theme switcher, prompt glyph |
-| `build_repl_app(...)`, `build_key_bindings(...)`, `_ReplRuntime` | `co_cli/display/_app.py` | Inline-REPL Application factory, Esc/Ctrl+C/Ctrl+D key bindings, and the single turn-state holder — holds the turn-task reference and the input `queue` |
+| `build_repl_app(...)`, `build_key_bindings(...)`, `ReplRuntime` | `co_cli/display/app.py` | Inline-REPL Application factory, Esc/Ctrl+C/Ctrl+D key bindings, and the single turn-state holder — holds the turn-task reference and the input `queue` |
 | `StreamRenderer(frontend, reasoning_display)` | `co_cli/display/stream_renderer.py` | Per-run text/thinking buffering and flush policy |
 | `QuestionPrompt(question, options, multiple)` | `co_cli/display/core.py` | Clarify-path prompt for tool-issued questions |
 | `StatusSnapshot(session_label, mode, context_pct, background_task_count, approval_count, queue_depth=0, queue_head_preview=None)` | `co_cli/display/core.py` | Typed contract for bottom-toolbar footer content; pushed via `update_status` (which repaints via `_invalidate`); when `queue_depth > 0`, renders `{n} queued: "<preview>"` between `mode` and `ctx`; omitted at 0 |
@@ -312,7 +312,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, completer helpers |
 | `co_cli/commands/types.py` | `CommandContext`, `SlashOutcome`, `LocalOnly`, `ReplaceTranscript`, `DelegateToAgent`, `_confirm` |
 | `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `render_to_ansi`, `StatusSnapshot`, `QuestionPrompt`, `console`, `set_theme`, `PROMPT_CHAR` |
-| `co_cli/display/_app.py` | `build_repl_app`, `build_key_bindings`, `_ReplRuntime` — the single-owner inline-REPL Application factory |
+| `co_cli/display/app.py` | `build_repl_app`, `build_key_bindings`, `ReplRuntime` — the single-owner inline-REPL Application factory |
 | `co_cli/display/headless.py` | `HeadlessFrontend` — full `Frontend` protocol implementation for evals and tests |
 | `co_cli/display/stream_renderer.py` | `StreamRenderer` — text/thinking buffering and flush policy per run |
 | `co_cli/deps.py` | `CoSessionState` (user-preference + tool-visible state), `CoRuntimeState` (orchestration state) |

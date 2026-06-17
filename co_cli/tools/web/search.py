@@ -254,7 +254,7 @@ def _is_cloudflare_challenge(resp: httpx.Response) -> bool:
 # ---------------------------------------------------------------------------
 
 _MAX_RESULTS = 8
-_SEARCH_TIMEOUT = 12
+_SEARCH_TIMEOUT_SECONDS = 12
 _BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 
 
@@ -306,7 +306,7 @@ async def web_search(
         site_prefix = " OR ".join(f"site:{d}" for d in domains)
         effective_query = f"{site_prefix} {effective_query}"
 
-    async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT_SECONDS) as client:
         resp_or_error = await _http_get_with_retries(
             client=client,
             tool_name="web_search",

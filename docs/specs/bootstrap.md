@@ -231,7 +231,7 @@ These settings most directly affect bootstrap behavior.
 | --- | --- | --- |
 | `create_deps(frontend, stack) -> CoDeps` | `co_cli/bootstrap/core.py` | Async — assembles the runtime context from settings (validates config, probes model, builds tool registry, connects MCP, loads skills, builds memory store) |
 | `restore_session(deps, frontend) -> Path` | `co_cli/bootstrap/core.py` | Picks the most recent `*.jsonl` under `sessions_dir` and writes it to `deps.session.session_path`; mints a new path when none exists |
-| `probe_ollama_model(host, model) -> OllamaModelProbe` | `co_cli/bootstrap/check.py` | Posts to `/api/show`; returns `num_ctx` (floor validation) and the `vision` capability flag (the `image_view` gate) from one payload; degrades to `(None, False)` on error |
+| `probe_ollama_model(host, model) -> OllamaModelProbe` | `co_cli/check.py` | Posts to `/api/show`; returns `num_ctx` (floor validation) and the `vision` capability flag (the `image_view` gate) from one payload; degrades to `(None, False)` on error |
 | `check_security() -> list[SecurityFinding]` | `co_cli/bootstrap/security.py` | Runs the once-per-session security posture checks consumed by `render_security_findings()` |
 | `render_security_findings(findings) -> None` | `co_cli/bootstrap/security.py` | Prints any findings to the console at REPL handoff |
 | `display_welcome_banner(deps, *, memory_count, session_count) -> None` | `co_cli/bootstrap/banner.py` | Renders the boundary banner; `Memory:` row shows backend + degradation + counts |
@@ -242,7 +242,7 @@ These settings most directly affect bootstrap behavior.
 | --- | --- |
 | `co_cli/main.py` | Owns module-load logging and telemetry setup, `_chat_loop()` startup orchestration, and the REPL boundary |
 | `co_cli/bootstrap/core.py` | Owns `create_deps()` and `restore_session()` |
-| `co_cli/bootstrap/check.py` | Provider, embedder, reranker, and Ollama model probe checks |
+| `co_cli/check.py` | Provider, embedder, reranker, and Ollama model probe checks |
 | `co_cli/bootstrap/banner.py` | Renders the welcome banner that marks bootstrap completion |
 | `co_cli/bootstrap/security.py` | Security posture checks run once at startup (`check_security`, `render_security_findings`) |
 | `co_cli/deps.py` | Defines `CoDeps`, path resolution, and sub-agent inheritance rules |

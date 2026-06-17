@@ -23,7 +23,7 @@ class CommandContext:
     # module free of prompt_toolkit imports (design boundary). None outside REPL context.
     completer: Any = None
     frontend: Frontend | None = None
-    # Live REPL input queue (the same deque _ReplRuntime owns), passed by reference
+    # Live REPL input queue (the same deque ReplRuntime owns), passed by reference
     # so /queue can inspect/mutate pending items. None outside REPL context
     # (headless, tests that don't exercise the queue).
     input_queue: deque[str] | None = None

@@ -8,9 +8,9 @@ import os
 import pty
 from dataclasses import dataclass
 
+from co_cli.proc.env import build_subprocess_env
 from co_cli.tools.background import _close_process_transport
 from co_cli.tools.shell_env import (
-    build_subprocess_env,
     kill_process_tree,
     terminate_process_group,
 )

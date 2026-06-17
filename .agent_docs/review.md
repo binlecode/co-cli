@@ -20,23 +20,15 @@
 
 ## Code Regulation Model (how rules get enforced)
 
-A rule's enforcement medium must match how often it is violated. Choosing the wrong medium is why documented rules keep being re-litigated.
+Coding rules are enforced by **judgment and review**, plus **periodic whole-codebase audits that drive one-off cleanup/refactoring**. They are NOT encoded as automated checks in the test suite.
 
-| Tier | Medium | Right when |
-|------|--------|-----------|
-| 0 — Judgment | Stated once in a plan/spec, trusted | Genuinely one-off decisions |
-| 1 — Prose rule | `.agent_docs` + reviewer attention | Violations are rare, **or** the rule cannot be mechanized |
-| 2 — Fitness function | A test / gate step that fails the build | The rule recurs **and** is mechanically checkable |
+- **The test suite is functional-only.** `tests/` exists to protect user-visible behavior against regression (`.agent_docs/testing.md`). A test that asserts on code *structure* — import direction, package boundaries, public-surface shape, naming, file layout, presence of a symbol — is forbidden by `testing.md`: it would still pass after gutting every production function body to `pass`. Do not add structural/architecture "fitness function" tests. If a coding rule is being violated, **fix the offending code**, do not add a test that freezes the violation behind an allowlist.
 
-**Escalation trigger (standing rule):** when a Tier-1 prose rule is re-litigated **≥3 times** — or surfaces as a recurring violation *class* when mining git history (e.g. repeated "remove dead code", "fix private leak", "dedup" commits) — it must **graduate to Tier 2 or be explicitly retired**. Repeating a prose rule that keeps being violated is itself the failure mode: the rule either becomes an executable invariant or is redesigned/dropped. A Tier-1 rule that recurs but genuinely cannot be mechanized is a candidate for retirement or a design change, not for being restated again.
-
-**Graduation is not complete until the Tier-1 source is retired.** When a rule moves to Tier 2, reduce or remove the prose/detection that owned it at Tier 1 — otherwise two layers enforce the same rule and drift against each other (the "one owner per fact" violation). The Tier-1 artifact keeps only what the gate cannot do (judgment-based variants, driving the burn-down of baselined debt) and points to the gate as the authoritative enforcer for new violations. Adding the gate while leaving the full Tier-1 detection in place is a half-graduation.
-
-**Why:** prose + reviewer attention is the weakest enforcement medium — local, context-limited, interpreted — so global invariants defended only at Tier 1 erode as fast as they are cleaned. The proven counter-pattern in this repo is `test_instruction_floor_coupling.py`, which caught a live `skill_create` leak the moment it appeared. Tests don't erode; prose does.
+- **Recurring violations are a cleanup signal, not a test signal.** When a rule (clean boundaries, no private leaks, dedup, dead code, unit suffixes) is violated repeatedly, the response is a scoped refactoring plan that removes the violations at the source — not a guard test. Eliminating the violation class structurally (e.g. moving a shared helper so a back-edge cannot exist) is stronger than detecting it.
 
 **Two review scopes, both needed:**
-- **Diff-scoped review** (`/review-impl`): catches *new* violations introduced by a change. Structurally blind to slow whole-surface accretion.
-- **Whole-surface audit** (periodic): runs the Tier-2 fitness functions, then judgment-scans for recurring classes not yet automated, and proposes which to graduate. This is the feedback loop that grows Tier 2 — review feeds regulation. When authoring a Tier-2 check: baseline-and-ratchet (land green over current debt via an itemized, shrinking allowlist — never a blanket ignore), write it as `pytest` so it runs under `scripts/quality-gate.sh full`, and include a negative case proving a real violation fails.
+- **Diff-scoped review** (`/review-impl`): catches *new* violations introduced by a change. Structurally blind to slow whole-codebase accretion.
+- **Whole-codebase audit** (periodic): judgment-scans the whole tree against the `.agent_docs` coding rules, inventories violations, and feeds a cleanup/refactoring plan. This is the feedback loop that keeps the codebase conformant; review feeds regulation.
 
 ## Clarity by Subtraction (proven refactor rules)
 

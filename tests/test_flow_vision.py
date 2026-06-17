@@ -28,7 +28,7 @@ from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_NON_REASONING_TIMEOUT_SECS
 
 from co_cli.agent.core import build_native_toolset
-from co_cli.bootstrap.check import probe_ollama_model
+from co_cli.check import probe_ollama_model
 from co_cli.context.history_processors import (
     _ELIDED_IMAGE_PLACEHOLDER,
     elide_old_multimodal_prompts,

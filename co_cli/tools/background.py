@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from co_cli.config.core import LOGS_DIR
-from co_cli.tools.shell_env import build_subprocess_env
+from co_cli.proc.env import build_subprocess_env
 
 if TYPE_CHECKING:
     from co_cli.deps import CoSessionState

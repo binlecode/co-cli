@@ -24,6 +24,7 @@ from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
+from co_cli.proc.env import SAFE_ENV_VARS, build_subprocess_env
 from co_cli.tools.background import (
     BackgroundTaskState,
     TaskInputError,
@@ -36,7 +37,6 @@ from co_cli.tools.background import (
     write_to_task,
 )
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.shell_env import SAFE_ENV_VARS, build_subprocess_env
 from co_cli.tools.tasks.control import (
     task_cancel,
     task_close,

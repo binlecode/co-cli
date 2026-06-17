@@ -41,7 +41,7 @@ def _resolve_reranker(
     Hybrid mode requires TEI — False causes the caller to degrade to fts5.
     Skipped on grep — no index means no reranking.
     """
-    from co_cli.bootstrap.check import _check_cross_encoder
+    from co_cli.check import _check_cross_encoder
 
     cross_result = _check_cross_encoder(config)
     if cross_result.status == "ok":
@@ -92,7 +92,7 @@ def _discover_index_backend(
         elif config.memory.embedding_provider == "none":
             logger.info("Hybrid skipped: embedding provider is 'none'")
         else:
-            from co_cli.bootstrap.check import _check_embedder
+            from co_cli.check import _check_embedder
 
             embedder_check = _check_embedder(config)
             if embedder_check.status not in ("ok", "skipped"):
@@ -306,7 +306,7 @@ def _probe_model_ctx(config: Settings) -> tuple[int, bool]:
         )
         return config.llm.max_context_tokens, True
 
-    from co_cli.bootstrap.check import probe_ollama_model, validate_ollama_num_ctx
+    from co_cli.check import probe_ollama_model, validate_ollama_num_ctx
 
     probe = probe_ollama_model(config.llm.host, config.llm.model)
     if probe.num_ctx is not None:

@@ -21,9 +21,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from co_cli.proc.env import build_subprocess_env
 from co_cli.session.filename import parse_session_filename
 from co_cli.session.transcript import ExtractedMessage, extract_messages
-from co_cli.tools.shell_env import build_subprocess_env
 
 logger = logging.getLogger(__name__)
 

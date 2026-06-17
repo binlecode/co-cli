@@ -28,7 +28,7 @@ from co_cli.tools.web.search import _http_get_with_retries
 # Web fetch constants
 # ---------------------------------------------------------------------------
 
-_FETCH_TIMEOUT = 15
+_FETCH_TIMEOUT_SECONDS = 15
 _MAX_FETCH_CHARS = 100_000
 # 1 MB pre-decode limit
 _MAX_FETCH_BYTES = 1_048_576
@@ -143,7 +143,7 @@ async def web_fetch(
     ctx: RunContext[CoDeps],
     url: str,
     format: FetchFormat = "markdown",
-    timeout: int = _FETCH_TIMEOUT,
+    timeout: int = _FETCH_TIMEOUT_SECONDS,
 ) -> ToolReturn:
     """Fetch a web page and return its content as readable markdown text.
 

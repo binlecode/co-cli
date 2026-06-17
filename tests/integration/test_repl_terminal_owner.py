@@ -39,7 +39,7 @@ from co_cli.agent.core import build_native_toolset
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.display._app import _ReplRuntime, build_key_bindings, build_repl_app
+from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import TerminalFrontend
 from co_cli.llm.factory import build_model
 from co_cli.main import _build_accept_handler, _handle_one_input, _IterationState
@@ -103,7 +103,7 @@ async def test_repl_renders_real_turn_under_owned_application(tmp_path: Path) ->
     agent = _make_agent(deps)
     completer = SlashCommandCompleter()
     frontend = TerminalFrontend()
-    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
+    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
 
     async def dispatch(*, user_input, eof):
         runtime.state = await _handle_one_input(

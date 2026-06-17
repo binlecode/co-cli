@@ -345,7 +345,7 @@ Default shipped server: `context7` (npx stdio, approval `auto`).
 | `co_cli/config/mcp.py` | `MCPServerSettings`, `DEFAULT_MCP_SERVERS`, `parse_mcp_servers_from_env()` |
 | `co_cli/llm/factory.py` | `LlmModel` dataclass; `build_model()` — constructs pydantic-ai model + both `ModelSettings` from `LlmSettings` |
 | `co_cli/llm/call.py` | `llm_call()` — single-prompt functional LLM primitive; defaults to `deps.model.settings_noreason` |
-| `co_cli/bootstrap/check.py` | `probe_ollama_model()` — `/api/show` probe for num_ctx + capabilities |
+| `co_cli/check.py` | `probe_ollama_model()` — `/api/show` probe for num_ctx + capabilities |
 | `co_cli/bootstrap/core.py` | `create_deps()` — calls `validate_config()`, `probe_ollama_model()`, `build_model()` at startup |
 | `co_cli/context/summarization.py` | `resolve_compaction_budget(deps)` — returns `deps.model_max_context_tokens` directly |
 

@@ -11,7 +11,7 @@ only consumer.
 from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolReturn
 
-from co_cli.bootstrap.check import CheckResult, RuntimeCheckResult, check_runtime
+from co_cli.check import CheckResult, RuntimeCheckResult, check_runtime
 from co_cli.deps import CoDeps, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
 from co_cli.tools.tool_io import tool_output

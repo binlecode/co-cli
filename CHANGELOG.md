@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.376]
+
+Rules-conformance cleanup — remove the rejected fitness-function scaffolding and fix the real coding-rule violations it was avoiding (behavior-preserving).
+
+### Refactor: enforce coding rules at the source, not via structural tests
+
+- Removed the rejected arch/test-hygiene fitness functions, snapshot/debt artifacts, the `import-linter` dev dep, and both superseded plans. The test suite is functional-only again.
+- Fixed the `display._app` underscore-visibility leak: `display/_app.py` → `display/app.py`, `_ReplRuntime` → `ReplRuntime` (public surface consumed by `main.py`).
+- Broke the `session → tools` and `display → commands` import cycles: relocated `build_subprocess_env` (+ `SAFE_ENV_VARS`/`restricted_env`) to the new low-level `co_cli/proc/env.py`; the REPL app now depends on prompt_toolkit's `Completer` ABC with the concrete completer injected from the composition root.
+- Resolved `bootstrap` back-edges: `bootstrap/check.py` → `co_cli/check.py`, `bootstrap/project_info.py` → `co_cli/project_info.py`, status helpers extracted to `co_cli/commands/status_report.py`.
+- Convention cleanup: dream `_queue.py` full-file write now routes through the shared `atomic_write_text`; unit-suffix added to five constants (`*_BUDGET_CHARS`, `_FETCH_TIMEOUT_SECONDS`, `_SEARCH_TIMEOUT_SECONDS`).
+
 ## [0.8.374]
 
 Batch of ad-hoc cross-team work.

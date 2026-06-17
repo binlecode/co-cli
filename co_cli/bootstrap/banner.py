@@ -1,99 +1,17 @@
 """Welcome banner display for the Co CLI chat startup sequence."""
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from co_cli.bootstrap.project_info import project_info
+from co_cli.commands.status_report import (
+    build_status_counts,
+    dream_status,
+    workspace_dir_label,
+)
 from co_cli.display.core import console
+from co_cli.project_info import project_info
 
 if TYPE_CHECKING:
     from co_cli.deps import CoDeps
-
-
-@dataclass(frozen=True)
-class StatusCounts:
-    """Registered-capability counts shared by the banner and the /status report."""
-
-    tools: int
-    skills: int
-    mcp: int
-    commands: int
-
-
-def build_status_counts(deps: "CoDeps") -> StatusCounts:
-    """Count registered tools, skills, MCP servers, and commands.
-
-    The command count is builtins plus user-invocable skills — the same formula
-    the banner has always used, kept here as the single source of truth so the
-    banner and /status cannot diverge.
-    """
-    from co_cli.commands.registry import BUILTIN_COMMANDS
-    from co_cli.skills.index import get_skill_catalog
-
-    return StatusCounts(
-        tools=len(deps.tool_catalog),
-        skills=len(get_skill_catalog(deps.skill_catalog)),
-        mcp=len(deps.config.mcp_servers or {}),
-        commands=len(BUILTIN_COMMANDS)
-        + sum(1 for s in deps.skill_catalog.values() if s.user_invocable),
-    )
-
-
-def workspace_dir_label(deps: "CoDeps") -> str:
-    """The workspace directory label: full path when configured, else bare name."""
-    return str(deps.workspace_dir) if deps.config.workspace_path else deps.workspace_dir.name
-
-
-def context_pct(deps: "CoDeps") -> float | None:
-    """Fraction of the model context window currently estimated in use.
-
-    None only when the context window is unknown. Before the first turn there is
-    no per-request estimate yet, but the static floor (system prompt + tool/skill
-    schemas) is always resident — so a live session reports that baseline, never None.
-    Shared by the footer snapshot and the /status report so the calc cannot drift.
-    """
-    if deps.model_max_context_tokens <= 0:
-        return None
-    estimate = deps.runtime.current_request_tokens_estimate
-    if estimate is None:
-        estimate = deps.static_floor_tokens
-    return estimate / deps.model_max_context_tokens
-
-
-@dataclass(frozen=True)
-class DreamStatus:
-    """Interpreted dream-daemon state — the single source for the three-branch
-    reading (disabled / running / enabled-but-not-running) shared by the banner
-    and /status. Surfaces format their own wording from these fields.
-    """
-
-    enabled: bool
-    running: bool
-    queue_depth: int
-    last_housekeeping_at: str | None
-
-
-def dream_status(deps: "CoDeps") -> DreamStatus:
-    """Probe the dream daemon once: enabled / running / queue depth / last pass.
-
-    The one place the daemon's filesystem status is interpreted, so the banner and
-    /status can't disagree on whether it is running. When disabled, returns without
-    touching the daemon filesystem (mirrors the banner's prior early-return).
-    """
-    if not deps.config.dream.enabled:
-        return DreamStatus(enabled=False, running=False, queue_depth=0, last_housekeeping_at=None)
-
-    from co_cli.config.core import DREAM_DAEMON_DIR, USER_DIR
-    from co_cli.daemons.dream._state import load_housekeeping_state
-    from co_cli.daemons.dream.process import status_daemon
-
-    status = status_daemon(USER_DIR)
-    return DreamStatus(
-        enabled=True,
-        running=bool(status.get("running")),
-        queue_depth=status.get("queue_depth", 0),
-        last_housekeeping_at=load_housekeeping_state(DREAM_DAEMON_DIR).last_housekeeping_at,
-    )
 
 
 _ASCII_ART = {
@@ -182,7 +100,7 @@ def display_welcome_banner(
 
     lines = [
         f"\n[accent]{art}[/accent]\n",
-        f"    v{info.version} — CLI Assistant",
+        f"    v{info.version} — Personal AI Agent",
         f"    Model: [accent]{llm_provider}[/accent]",
         memory_line,
         dream_line,

@@ -58,8 +58,8 @@ async def _cmd_status(ctx: CommandContext, args: str) -> None:
 
 
 def _session_rows(ctx: CommandContext) -> list[tuple[str, str]]:
-    from co_cli.bootstrap.banner import workspace_dir_label
-    from co_cli.bootstrap.project_info import project_info
+    from co_cli.commands.status_report import workspace_dir_label
+    from co_cli.project_info import project_info
 
     deps = ctx.deps
 
@@ -90,7 +90,7 @@ def _model_rows(ctx: CommandContext) -> list[tuple[str, str]]:
         return f"{llm.provider} / {llm.model}" if llm.model else llm.provider
 
     def _context() -> str:
-        from co_cli.bootstrap.banner import context_pct
+        from co_cli.commands.status_report import context_pct
 
         pct = context_pct(deps)
         if pct is None:
@@ -117,7 +117,7 @@ def _model_rows(ctx: CommandContext) -> list[tuple[str, str]]:
 
 def _dream_rows(ctx: CommandContext) -> list[tuple[str, str]]:
     def _rows() -> list[tuple[str, str]]:
-        from co_cli.bootstrap.banner import dream_status
+        from co_cli.commands.status_report import dream_status
 
         state = dream_status(ctx.deps)
         if not state.enabled:
@@ -154,7 +154,7 @@ def _work_rows(ctx: CommandContext) -> list[tuple[str, str]]:
 
 
 def _capability_rows(ctx: CommandContext) -> list[tuple[str, str]]:
-    from co_cli.bootstrap.banner import build_status_counts
+    from co_cli.commands.status_report import build_status_counts
 
     deps = ctx.deps
 

@@ -19,17 +19,17 @@ from pydantic_ai.messages import BinaryContent, ModelMessage
 
 from co_cli.agent.build import build_orchestrator
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
-from co_cli.bootstrap.banner import context_pct, display_welcome_banner
+from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import (
     create_deps,
     maybe_autospawn_dream,
     start_session,
 )
-from co_cli.bootstrap.project_info import project_info
 from co_cli.commands._queue_control import run_queue_control
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.commands.core import dispatch as dispatch_command
 from co_cli.commands.registry import build_completer_entries
+from co_cli.commands.status_report import context_pct
 from co_cli.commands.types import CommandContext, DelegateToAgent, ReplaceTranscript
 from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
@@ -43,7 +43,7 @@ from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.context.summarization import estimate_message_tokens
 from co_cli.daemons.dream.kick import write_review_kick
 from co_cli.deps import CoDeps
-from co_cli.display._app import _ReplRuntime, build_key_bindings, build_repl_app
+from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import (
     PROMPT_CHAR,
     Frontend,
@@ -53,6 +53,7 @@ from co_cli.display.core import (
     set_theme,
 )
 from co_cli.observability.setup import setup_observability
+from co_cli.project_info import project_info
 from co_cli.session.browser import extract_title
 from co_cli.session.persistence import persist_session_history
 from co_cli.session.usage import ORIGIN_SESSION, append_turn
@@ -494,28 +495,28 @@ async def _handle_one_input(
     )
 
 
-_QUEUE_PREVIEW_BUDGET = 30
+_QUEUE_PREVIEW_BUDGET_CHARS = 30
 
 
 def _queue_head_preview(queue: deque[str]) -> str | None:
     if not queue:
         return None
     head = queue[0].replace("\n", " ").strip()
-    if len(head) <= _QUEUE_PREVIEW_BUDGET:
+    if len(head) <= _QUEUE_PREVIEW_BUDGET_CHARS:
         return head
-    return head[: _QUEUE_PREVIEW_BUDGET - 1] + "…"
+    return head[: _QUEUE_PREVIEW_BUDGET_CHARS - 1] + "…"
 
 
-_SESSION_LABEL_BUDGET = 30
+_SESSION_LABEL_BUDGET_CHARS = 30
 
 
 def _session_label(title: str | None) -> str:
     """Footer label: a placeholder before the first message, else the truncated title."""
     if title is None:
         return "(new session)"
-    if len(title) <= _SESSION_LABEL_BUDGET:
+    if len(title) <= _SESSION_LABEL_BUDGET_CHARS:
         return title
-    return title[: _SESSION_LABEL_BUDGET - 1] + "…"
+    return title[: _SESSION_LABEL_BUDGET_CHARS - 1] + "…"
 
 
 def _build_status_snapshot(
@@ -546,10 +547,10 @@ def _parse_queue_command(text: str) -> tuple[bool, str]:
     return name == "queue", args
 
 
-_QUEUE_NOTICE_BUDGET = 60
+_QUEUE_NOTICE_BUDGET_CHARS = 60
 
 
-def _preview(text: str, budget: int = _QUEUE_NOTICE_BUDGET) -> str:
+def _preview(text: str, budget: int = _QUEUE_NOTICE_BUDGET_CHARS) -> str:
     """One-line preview of a queue item for drop/reject notices."""
     text = text.replace("\n", " ")
     if len(text) <= budget:
@@ -558,7 +559,7 @@ def _preview(text: str, budget: int = _QUEUE_NOTICE_BUDGET) -> str:
 
 
 def _enqueue(
-    runtime: _ReplRuntime,
+    runtime: ReplRuntime,
     text: str,
     deps: CoDeps,
     on_status: Callable[[], None],
@@ -592,7 +593,7 @@ def _enqueue(
 
 
 def _build_accept_handler(
-    runtime: _ReplRuntime,
+    runtime: ReplRuntime,
     dispatch: Callable[..., Awaitable[None]],
     on_status: Callable[[], None],
     deps: CoDeps,
@@ -700,7 +701,7 @@ async def _chat_loop(
         # Single owner of turn state, shared by the accept_handler and the key
         # bindings (Esc cancels the active turn) (F7) — created here in loop
         # scope, never a module global.
-        runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
+        runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=0.0))
 
         async def _dispatch(*, user_input: str | None, eof: bool) -> None:
             """Run one chat-loop iteration, apply its result, and exit when asked.

@@ -39,7 +39,7 @@ from tests._settings import SETTINGS
 
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.deps import CoDeps, CoSessionState
-from co_cli.display._app import _ReplRuntime, build_key_bindings, build_repl_app
+from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import TerminalFrontend, console
 from co_cli.main import _build_accept_handler, _handle_one_input, _IterationState
 from co_cli.tools.shell_backend import ShellBackend
@@ -98,7 +98,7 @@ async def _wait_running(app, *, timeout: float = 10.0) -> None:
         await asyncio.sleep(0.02)
 
 
-async def _wait_armed(runtime: _ReplRuntime, *, timeout: float = 5.0) -> None:
+async def _wait_armed(runtime: ReplRuntime, *, timeout: float = 5.0) -> None:
     deadline = time.monotonic() + timeout
     while runtime.turn_task is None:
         if time.monotonic() > deadline:
@@ -129,7 +129,7 @@ async def drive_repl(deps: CoDeps, keys: str, *, sentinel: str) -> str:
     """
     completer = SlashCommandCompleter()
     frontend = TerminalFrontend()
-    runtime = _ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
+    runtime = ReplRuntime(state=_IterationState(message_history=[], last_interrupt_time=-3.0))
 
     async def dispatch(*, user_input, eof):
         runtime.state = await _handle_one_input(

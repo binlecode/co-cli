@@ -5,7 +5,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-_PYPROJECT = Path(__file__).resolve().parent.parent.parent / "pyproject.toml"
+_PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 
 @dataclass
