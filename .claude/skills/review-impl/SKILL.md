@@ -83,6 +83,7 @@ Check every file listed in `files:` against CLAUDE.md's Engineering Rules. Each 
 
 - **Tool conventions**: correct registration pattern, structured return type, deps from `ctx.deps`, no global state
 - **Test policy**: no mocks, fakes, or patching — real services only
+- **Test bloat** (tests in `files:` only — do not re-sweep the suite): apply the stub-litmus to each new/changed `def test_*` — mentally replace the production function under test with `return []`/`return None`; if the test still passes it is structural/weak (`.agent_docs/testing.md` *Assertion strength*; clean-tests rule 4) → flag to strengthen to assert the observed value. Also flag a new test that duplicates an existing test's branch + observable, adding no unique failure mode (clean-tests rules 5/6) — prove via the same-branch read before flagging. Honor the two stub-litmus exceptions (defensive crash-guard whose correct output genuinely is empty/None; the inclusion half of an inclusion/exclusion pair). Out of scope: Criticality-gate Low-tier volume trimming — that stays a `/clean-tests` decision.
 - **Code hygiene**: dead code, stale imports, misplaced lazy imports
 - **Over-engineering**: abstractions or helpers not required by the spec
 - **Display**: terminal output via the project's shared `console` — not `print()` or hardcoded color names
@@ -123,7 +124,7 @@ The adversarial subagent re-reads every cited file:line cold with no prior conte
 - If false positive: downgrade to minor or remove. If real: confirm as blocking or minor.
 
 **Classification:**
-- **Blocking** = spec requirement missing, `done_when` fails, hard Engineering Rule violated (mock/stub in test, wrong tool pattern, global state), security issue.
+- **Blocking** = spec requirement missing, `done_when` fails, hard Engineering Rule violated (mock/stub in test, wrong tool pattern, global state), security issue. A structural/weak test that survives the stub-litmus is blocking only when it guards a Critical/Important behavior (the regression would otherwise ship silently); a weak test over Low-tier behavior is minor.
 - **Minor** = style, non-required improvement, partial convention drift with no functional impact.
 
 The adversarial subagent returns: the reconciled findings list with each entry marked confirmed-blocking, confirmed-minor, or false-positive (removed). Main agent applies this list. Only confirmed-blocking findings proceed to Phase 4.

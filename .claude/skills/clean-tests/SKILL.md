@@ -42,6 +42,7 @@ grep -rl --include="test_*.py" "from.*_legacy\|from.*_compat\|from.*_old\b" test
 grep -rl --include="test_*.py" "inspect\.signature\|hasattr(" tests/
 grep -rl --include="test_*.py" '"--help"\|CliRunner.*--help\|exit_code == 0' tests/
 grep -rl --include="test_*.py" "assert.*\" in prompt\|assert.*\" in result\b" tests/
+grep -rn --include="test_*.py" "^_[A-Z_]* *= *make_settings(\|\.run(.*\bmodel=\|model_settings=" tests/
 ```
 
 Pre-tag files `SUSPECT_MOCK`, `SUSPECT_STRUCTURAL`, or `SUSPECT_LIB`. Does not replace reading.
@@ -192,6 +193,7 @@ Fix only when: (a) unique coverage AND (b) the fix is rerouting through a public
 | 8 | **Test isolation** — test mutates shared state without cleanup: **(a)** writes to `~/.co-cli/`, `USER_DIR`, `CO_HOME` without routing through `tmp_path`; **(b)** sets/deletes `os.environ` without `try/finally`; **(c)** mutates shared module-level state (registries, caches, singletons, theme/console) without restoration — the classic source of batch-only-flaky failures (passes alone, fails in-suite). Exempt: `SETTINGS`, `SETTINGS_NO_MCP`, cached models. | Fix |
 | 9 | **Async discipline** — incorrect asyncio around external `await`s: **(a)** `ensure_ollama_warm` called inside `asyncio.timeout` (infrastructure prep, not behavior under test); **(b)** multiple LLM awaits sharing one `asyncio.timeout` budget; **(c)** a real-LLM / network / subprocess `await` with no `asyncio.timeout` wrapper at all (a stalled call otherwise hangs to the 180s pytest ceiling). Import constants from `tests._timeouts`. | Fix |
 | 10 | **Underlying library/SDK behavior** — the system under test is a third-party library's own behavior (trafilatura, httpx, anthropic SDK, google-auth, pydantic-ai internals), not co-cli's logic. Decision test: would the assertions still pass if you deleted our wrapper and called the library directly? If yes → library test. Examples: trafilatura extracting article prose from HTML; `google.oauth2.Credentials` round-tripping via google-auth's own serialization; httpx retry/redirect behavior. (Structural assertions made *via* a library — `inspect.signature`, `hasattr(module, "name")`, type-annotation checks — are not "library behavior"; they're structural → rule 4.) | Delete |
+| 11 | **Config discipline** (enforced policy — `.agent_docs/testing.md` *Centralized test config* + *Production config only*). **(a)** module-scope `_CONFIG = make_settings()` / `_CONFIG_NO_MCP = make_settings(mcp_servers={})` that merely re-derives a suite singleton — replace with `SETTINGS` / `SETTINGS_NO_MCP` imported from `tests._settings`. **(b)** `model=` / `model_settings=` passed to `agent.run()` — drop the override and use the production orchestration path. **Exempt** (keep): `make_settings(**overrides)` with a *surgical* override (custom creds path, specific `max_ctx`/provider) and `model_settings=` inside tests whose subject IS the LLM call/orchestration path itself (`test_flow_llm_call`, length-retry). | Fix |
 
 **Rule-failed file:** ≥50% Blocking with no unique coverage surviving → delete the file.
 
@@ -292,6 +294,7 @@ Tests fixed: N total
   Backward-compat (rule 7a/b):  N
   Test isolation (rule 8):      N
   Async discipline (rule 9):    N
+  Config discipline (rule 11):  N
   Private-call rerouted (5a):   N
 Minor findings: N (noted/deferred)
 Degenerate LLM tests: N — [list]
