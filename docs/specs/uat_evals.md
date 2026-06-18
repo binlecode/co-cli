@@ -25,7 +25,7 @@ flowchart TD
 
 | Layer | Purpose | Judge type | Gate |
 |---|---|---|---|
-| **Functional smoke (W1–W4)** | "the wiring works" — judged behavioral cases that survive on the agent loop, continuity, memory, and skills. Pure-structural wiring (FTS rows, session rotate/clear/list, subprocess lifecycle, approvals state, unknown-slash, deny-side-effects) was migrated to pytest — W5 (`eval_background`) and W6 (`eval_trust_visibility`) were retired in phase 2; see the migration note in §4 | Surviving cases are LLM-judged (W1.A/D/E, W2.D/E, W3.G, W4.A/B) | Ship blocker on FAIL |
+| **Functional smoke (W1–W4)** | "the wiring works" — judged behavioral cases that survive on the agent loop, continuity, memory, and skills. Pure-structural wiring (FTS rows, session rotate/clear/list, subprocess lifecycle, approvals state, unknown-slash, deny-side-effects) was migrated to pytest — W5 (`eval_background`) and W6 (`eval_trust_visibility`) were retired in phase 2; see the migration note in §4 | Surviving cases are LLM-judged (W1.A/D/F, W2.D/E, W3.G, W4.A/B) | Ship blocker on FAIL |
 | **Behavioral fidelity (W7–W12)** | "the agent acts like co should act" — groundedness, approval discipline, bounded autonomy, user model continuity, multi-step operator, and the core `05_workflow` loop (effort classification, blocker-vs-doomloop, completeness) | LLM-judged for prose; W11/W12 also assert structural trace signals (tool-call/turn, identical-call streak, shell-error streak, final todo state) — 19 cases | Ship blocker on FAIL; SOFT_FAIL is review signal |
 
 ### Mission → tenet → component map
@@ -70,7 +70,7 @@ One row per architectural component the agent ships. Each component must have at
 | CLI agent loop (Ollama + ReAct) | `eval_daily_chat` (W1.A multi-turn coherence) | `eval_memory` W3.G, `eval_skills` W4.A | adequate |
 | Agent workflow loop (`05_workflow`: classify → act → detect-blocker → completeness) | `eval_agentic_loop` W12 (classify_effort, blocker_not_doomloop, shell_reflection_recovery, completeness_gate) | `eval_multistep_plan` W11 | adequate; deterministic circuit-breakers stay in pytest (`tests/test_flow_*`) |
 | Context / history management | `eval_session_continuity` (W2.D–E: rehydrate, compact-quality) | `eval_daily_chat` (carry-forward); compaction idempotence → pytest | adequate; post-compaction agent quality judged (W2.E) |
-| Tools | `eval_daily_chat` W1.E (spill) + `eval_memory` W3.G (memory tools) | `eval_approval_discipline` W8 (approval-gated tools); all evals exercise some tool | adequate; approval-flow now covered by W8 |
+| Tools | `eval_memory` W3.G (memory tools) | `eval_approval_discipline` W8 (approval-gated tools); all evals exercise some tool | adequate; approval-flow now covered by W8; tool-result spill is pytest-owned (`test_flow_spill`) |
 | Memory (knowledge + session recall) | `eval_memory` W3.G (forget propagates to recall) | `eval_daily_chat` W1.D, `eval_session_continuity` W2.D, `eval_user_model` W10 | adequate; CRUD/index/rank lifecycle → pytest |
 | Skills | `eval_skills` W4.A (dispatch + env), W4.B (documents↔office skill-selection exclusivity) | — | adequate for dispatch + selection; cleanup/CRUD/shadow → pytest |
 | Trust / safety surfaces | `eval_approval_discipline` W8 (proposes-before-destructive, respects-denial) | — | adequate; approvals state / unknown-slash / deny-side-effects → pytest |
@@ -162,7 +162,7 @@ The canonical inventory. New evals append a row here AND a tenet citation in the
 
 | File | Workflow | Cases | Mission tenet | Judge type |
 |---|---|---|---|---|
-| `evals/eval_daily_chat.py` | W1 | A multi_turn_coherence · D dream_propagates_to_recall · E tool_spill_summary | knowledge work — synthesis + voice; trusted — inspectable | All LLM judge |
+| `evals/eval_daily_chat.py` | W1 | A multi_turn_coherence · D dream_propagates_to_recall · F merge_preserves_distinct_facts | knowledge work — synthesis + voice; trusted — inspectable | All LLM judge |
 | `evals/eval_session_continuity.py` | W2 | D rehydrate_uses_context · E compact_quality_holds | continuity across sessions | All LLM judge |
 | `evals/eval_memory.py` | W3 | G forget_propagates_to_recall | local + personal — durable + reversible | LLM judge |
 | `evals/eval_session_recall.py` | — (FM-1) | SR.A concept_expansion (probe-word miss → structural `session_search(pattern=)` recovery of a shaped entity) | continuity across sessions — cross-session recall | LLM judge + structural (recovery gate, route recorded) |
@@ -177,7 +177,7 @@ The canonical inventory. New evals append a row here AND a tenet citation in the
 
 **Retired in phase 2 (migrated to pytest):** `eval_background.py` (W5: launch/tasks/cancel/spill) and `eval_trust_visibility.py` (W6: approvals state/unknown-slash/deny-side-effects) were all-structural wiring checks that re-asserted under a real LLM what a unit test owns deterministically. They were deleted and their coverage migrated to pytest — see the §6 "covered by pytest" note. The behavioral approval flow that W6 only structurally touched is now W8 (`eval_approval_discipline`).
 
-**Phase-1 → phase-2 trim:** the structural cases that survived phase 1 (W1.B tool_chain, W1.C recall_reuse, W2.A/B/C rotate/clear/list, W2.F idempotent, W3.A–F lifecycle, W4.B/C/D cleanup/CRUD/shadow) were migrated to pytest; only the judged behavioral cases remain in eval. W1.D `dream_propagates_to_recall` (after dream merge, next turn doesn't cite duplicates), W1.E `tool_spill_summary`, W2.D/E (judged rehydrate + post-compaction citation), and W3.G `forget_propagates_to_recall` are the survivors. All W1–W4 docstrings carry a mission-tenet citation line.
+**Phase-1 → phase-2 trim:** the structural cases that survived phase 1 (W1.B tool_chain, W1.C recall_reuse, W2.A/B/C rotate/clear/list, W2.F idempotent, W3.A–F lifecycle, W4.B/C/D cleanup/CRUD/shadow) were migrated to pytest; only the judged behavioral cases remain in eval. W1.D `dream_propagates_to_recall` (after dream merge, next turn doesn't cite duplicates), W2.D/E (judged rehydrate + post-compaction citation), and W3.G `forget_propagates_to_recall` are the survivors. W1.F `merge_preserves_distinct_facts` was added later (over-merge guard: a lexically-similar/distinct pair clusters and both facts survive). W1.E `tool_spill_summary` was **retired** when `memory_view` moved to a 26k inline cap (`spill_threshold_chars=math.inf`, no spill) and the spill mechanism became pytest-owned (`test_flow_spill`). All W1–W4 docstrings carry a mission-tenet citation line.
 
 ### Rubric pack (versioned)
 
@@ -221,7 +221,7 @@ Structural wiring gates (FTS rows, session rotate/clear/list, compaction idempot
 |---|---|---|
 | Multi-turn coherence + voice | `eval_daily_chat` | W1.A |
 | Dream merge propagates to recall (no duplicate citations in next turn) | `eval_daily_chat` | W1.D |
-| Large tool-return spills to disk; agent context carries faithful summary | `eval_daily_chat` | W1.E |
+| Merge preserves distinct facts — a lexically-similar but semantically-distinct pair is not over-merged (no fact dropped) | `eval_daily_chat` | W1.F |
 | Rehydrated context is actually used by agent (judged) | `eval_session_continuity` | W2.D |
 | Post-compaction agent answers coherently and cites pre-compaction facts | `eval_session_continuity` | W2.E |
 | Forget propagates to recall (agent stops citing removed artifact) | `eval_memory` | W3.G |
@@ -263,6 +263,7 @@ The phase-2 trim moved every deterministic wiring check out of eval and into pyt
 | Approvals state (W6.A) | `test_flow_approval_subject` |
 | Unknown slash fires no LLM call (W6.B) | `test_flow_phase2_migrated::test_unknown_slash_fires_no_llm_call` |
 | Deny emits no side effect (W6.C) | `test_flow_phase2_migrated::test_deny_emits_no_side_effect` |
+| Tool-result spill to disk + `PERSISTED_OUTPUT_TAG` (W1.E) | `test_flow_spill` (`spill_if_oversized` + routing-wrapper path) |
 
 Robustness rails (tool-cap hard-stop, model-request cap, length-retry, overflow recovery, malformed-tool-call JSON repair, dedup/evict/spill) are likewise pytest-owned (`test_flow_model_request_cap`, `test_flow_orchestrate_length_retry`, `test_flow_compaction_recovery`, `test_flow_tool_call_repair`, `test_flow_compaction_history_processors`). W12.B/C eval the *behavioral* first principle the breakers exist to backstop: given a failing action and NO instruction to retry, does the model naturally stop and surface the blocker rather than loop? The streak threshold is the natural `doom_loop_threshold`; a self-initiated loop reaching it is the FAIL. The warning/hard-cap mechanism firing is pytest-owned; the natural loop-avoidance is eval (the warning never needing to fire is the ideal, not a coverage loss).
 

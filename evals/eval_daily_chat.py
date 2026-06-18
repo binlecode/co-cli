@@ -9,10 +9,10 @@ behavior that single-turn evals can't see — are actually exercised.
 Cases:
   W1.A  multi_turn_coherence        3-turn ask → follow-up → recap. Judge rubric on coherence + voice.
   W1.D  dream_propagates_to_recall  Seed pair → dream merge → merged artifact in active store.
-  W1.E  tool_spill_summary          Oversized memory_view result spills; PERSISTED_OUTPUT_TAG in ToolReturnPart.
+  W1.F  merge_preserves_distinct_facts  Lexically-similar/distinct pair clusters; both facts survive the merge.
 
 Specs: docs/specs/core-loop.md, prompt-assembly.md, dream.md.
-Mission tenet: for knowledge work — synthesis + voice; trusted — inspectable (W1.E)
+Mission tenet: for knowledge work — synthesis + voice; trusted — inspectable
 
 Usage:
     uv run python evals/eval_daily_chat.py
@@ -37,19 +37,15 @@ from evals._settings import apply_eval_window
 from evals._timeouts import (
     CALL_TIMEOUT_S,
     DREAM_CYCLE_BUDGET_S,
-    TOOL_TURN_BUDGET_S,
     TURN_BUDGET_S,
 )
 from evals._trace import record_turn, response_text
 from pydantic_ai.messages import (
-    ModelRequest,
     ModelResponse,
     ToolCallPart,
-    ToolReturnPart,
 )
 
 from co_cli.agent.orchestrate import run_turn
-from co_cli.config.tuning import PERSISTED_OUTPUT_TAG, SPILL_THRESHOLD_CHARS
 from co_cli.daemons.dream._housekeeping import merge_memory
 from co_cli.daemons.dream.state import HousekeepingState
 from co_cli.memory.frontmatter import render_frontmatter
@@ -102,9 +98,6 @@ _DREAM_SHARED_TOKEN = "EVAL_W1D_KEY_NX7"
 # Intersection=7, Union=9, Jaccard≈0.78 >= 0.75 threshold.
 _DREAM_A_BODY = f"{_DREAM_SHARED_TOKEN} staging deploy identifier note eval pipeline alpha"
 _DREAM_B_BODY = f"{_DREAM_SHARED_TOKEN} staging deploy identifier note eval pipeline beta"
-
-_SPILL_FACT_TOKEN = "GOLDEN_W1E"
-_SPILL_STEM = "eval_w1e_spill_payload"
 
 
 def _purge_dream_pair(memory_dir: Path) -> None:
@@ -360,7 +353,11 @@ async def _case_w1_d_dream_propagates_to_recall(
         merged_positive = merged_count > 0
         a_archived = not path_a.exists()
         b_archived = not path_b.exists()
-        one_archived = a_archived != b_archived
+        # Merge consolidates the cluster into a fresh item and archives ALL originals
+        # (both seeds gone), rather than folding one into the other. The collapse is
+        # proven by both originals archiving and the shared token surviving in the
+        # new consolidated item.
+        both_archived = a_archived and b_archived
 
         active_files = [
             p for p in deps.memory_dir.glob("*.md") if p not in (path_a, path_b) and p.is_file()
@@ -374,7 +371,7 @@ async def _case_w1_d_dream_propagates_to_recall(
             f"archived_b={b_archived} token_in_merged={token_in_merged}"
         )
 
-        if not (merged_positive and one_archived):
+        if not (merged_positive and both_archived and token_in_merged):
             duration = time.monotonic() - case_t0
             return CaseResult(
                 name=case_id,
@@ -421,130 +418,6 @@ async def _case_w1_d_dream_propagates_to_recall(
         elif verdict.score >= 6:
             # SOFT_FAIL on borderline miss — per spec § 2 verdict taxonomy.
             case_verdict = Verdict.SOFT_FAIL
-        else:
-            case_verdict = Verdict.FAIL
-    except Exception as exc:
-        case_verdict = Verdict.FAIL
-        reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
-
-    duration = time.monotonic() - case_t0
-    return CaseResult(
-        name=case_id,
-        verdict=case_verdict,
-        duration_s=duration,
-        model_call_seconds=model_call_seconds,
-        token_usage=token_usage,
-        reason=" ".join(reason_parts).strip(),
-    )
-
-
-async def _case_w1_e_tool_spill_summary(
-    deps: Any,
-    agent: Any,
-    frontend: Any,
-    run: Any,
-) -> CaseResult:
-    """W1.E — memory_view on an oversized artifact triggers spill; agent answers from summary."""
-    case_id = "W1.E"
-    case_t0 = time.monotonic()
-    reason_parts: list[str] = [judge_model_annotation(deps)]
-    case_verdict = Verdict.FAIL
-    model_call_seconds = 0.0
-    token_usage: dict[str, int] = {}
-
-    try:
-        # Seed a payload that exceeds the spill threshold. Fact token is near the top
-        # so any truncated preview the agent sees can still carry it.
-        deps.memory_dir.mkdir(parents=True, exist_ok=True)
-        spill_path = deps.memory_dir / f"{_SPILL_STEM}.md"
-        filler_line = "lorem ipsum dolor sit amet consectetur adipiscing elit\n"
-        filler = filler_line * 100
-        spill_body = f"{_SPILL_FACT_TOKEN} is the key fact in this document.\n\n{filler}"
-        assert len(spill_body) > SPILL_THRESHOLD_CHARS, (
-            f"spill body too short: {len(spill_body)} <= {SPILL_THRESHOLD_CHARS}"
-        )
-        frontmatter_dict = {
-            "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, _SPILL_STEM)),
-            "memory_kind": MemoryKindEnum.NOTE.value,
-            "title": _SPILL_STEM,
-            "created_at": datetime.now(UTC).isoformat(),
-        }
-        spill_path.write_text(render_frontmatter(frontmatter_dict, spill_body), encoding="utf-8")
-        deps.memory_store.sync_dir(deps.memory_dir)
-
-        tool_results_dir = deps.tool_results_dir
-        pre_count = len(list(tool_results_dir.glob("*"))) if tool_results_dir.exists() else 0
-
-        user_input = (
-            f"Use the `memory_view` tool to read the artifact with filename_stem "
-            f"`{_SPILL_STEM}`. Quote any special uppercase token you find in the first line."
-        )
-        slices = await _drive_turns(
-            case_id=case_id,
-            deps=deps,
-            agent=agent,
-            frontend=frontend,
-            case_dir_path=run.case_trace_path(case_id),
-            inputs=[user_input],
-        )
-        model_call_seconds, token_usage = _aggregate_trace_stats(slices)
-
-        all_messages = slices[-1].result.messages if slices else []
-
-        # Primary check: PERSISTED_OUTPUT_TAG appears in a ToolReturnPart.
-        spill_in_tool_return = False
-        for msg in all_messages:
-            if not isinstance(msg, ModelRequest):
-                continue
-            for part in msg.parts:
-                if isinstance(part, ToolReturnPart):
-                    content = getattr(part, "content", "") or ""
-                    if PERSISTED_OUTPUT_TAG in str(content):
-                        spill_in_tool_return = True
-                        break
-
-        # Secondary check: a new file appeared in tool_results_dir.
-        post_count = len(list(tool_results_dir.glob("*"))) if tool_results_dir.exists() else 0
-        spill_file_created = post_count > pre_count
-
-        structural_pass = spill_in_tool_return and spill_file_created
-        reason_parts.append(
-            f"spill_in_tool_return={spill_in_tool_return} spill_file_created={spill_file_created} "
-            f"pre={pre_count} post={post_count}"
-        )
-        if not structural_pass:
-            tool_names = [tc.tool_name for tc in (slices[0].tool_calls if slices else [])]
-            reason_parts.append(f"tool_calls={tool_names!r}")
-
-        budget = TOOL_TURN_BUDGET_S
-        budget_ok = model_call_seconds <= budget
-        if not budget_ok:
-            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {budget:.0f}s")
-
-        if structural_pass and budget_ok:
-            rubric = (
-                f"PASS only if the agent's final answer addresses the user's question coherently "
-                f"using information from the memory artifact. "
-                f"The response must quote or reference '{_SPILL_FACT_TOKEN}' — the key fact "
-                "near the top of the artifact. "
-                "FAIL if the agent says it cannot see the content, hallucinates facts not in "
-                "the artifact, or gives a generic non-answer. "
-                "Score 5-6 if the token appears but the response is thin or partially correct."
-            )
-            async with asyncio.timeout(CALL_TIMEOUT_S):
-                verdict = await judge_with_llm(
-                    rubric, all_messages, deps=deps, model=deps.judge_model
-                )
-            reason_parts.append(f"judge.score={verdict.score}")
-            if verdict.rationale:
-                reason_parts.append(verdict.rationale[:160])
-
-            if verdict.passed and verdict.score >= 7:
-                case_verdict = Verdict.PASS
-            elif verdict.score >= 5:
-                case_verdict = Verdict.SOFT_FAIL
-            else:
-                case_verdict = Verdict.FAIL
         else:
             case_verdict = Verdict.FAIL
     except Exception as exc:
@@ -645,7 +518,7 @@ async def _case_w1_f_merge_preserves_distinct_facts(
 
 
 async def main() -> int:
-    """Drive W1.A-W1.F end-to-end, write trace, return exit code."""
+    """Drive W1.A / W1.D / W1.F end-to-end, write trace, return exit code."""
     await ensure_ollama_warm()
 
     async with eval_deps() as (deps, agent, frontend), open_eval_run("daily_chat") as run:
@@ -655,7 +528,6 @@ async def main() -> int:
         for runner in (
             _case_w1_a_multi_turn_coherence,
             _case_w1_d_dream_propagates_to_recall,
-            _case_w1_e_tool_spill_summary,
             _case_w1_f_merge_preserves_distinct_facts,
         ):
             try:
