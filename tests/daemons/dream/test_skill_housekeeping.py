@@ -316,7 +316,7 @@ def test_bump_recall_appends_today_to_recall_days(tmp_path: Path) -> None:
 
 def test_manifest_render_does_not_bump_recall_days(tmp_path: Path) -> None:
     """render_skill_manifest emits description-only; sidecar.recall_days untouched."""
-    from co_cli.context.manifests.skill_manifest import render_skill_manifest
+    from co_cli.skills.manifest import render_skill_manifest
     from co_cli.skills.skill_types import SkillInfo
 
     user_skills_dir = tmp_path / "skills"

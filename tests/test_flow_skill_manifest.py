@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from co_cli.context.manifests.skill_manifest import render_skill_manifest
+from co_cli.skills.manifest import render_skill_manifest
 from co_cli.skills.skill_types import SkillInfo
 
 

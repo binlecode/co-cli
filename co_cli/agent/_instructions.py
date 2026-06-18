@@ -39,7 +39,7 @@ def skill_manifest_prompt(ctx: RunContext[CoDeps]) -> str:
     Lives post-static so newly-created skills become visible to the model on the very next
     turn without process restart, and skill index mutations don't churn the static prefix.
     """
-    from co_cli.context.manifests.skill_manifest import render_skill_manifest
+    from co_cli.skills.manifest import render_skill_manifest
 
     return render_skill_manifest(
         ctx.deps.skill_catalog, ctx.deps.skills_dir, ctx.deps.user_skills_dir

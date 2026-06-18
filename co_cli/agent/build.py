@@ -84,7 +84,7 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
 
     instructions = spec.instructions(deps)
     if spec.include_skill_manifest:
-        from co_cli.context.manifests.skill_manifest import render_skill_manifest
+        from co_cli.skills.manifest import render_skill_manifest
 
         manifest = render_skill_manifest(deps.skill_catalog, deps.skills_dir, deps.user_skills_dir)
         if manifest:

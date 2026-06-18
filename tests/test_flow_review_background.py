@@ -90,9 +90,9 @@ def test_child_deps_refresh_surfaces_disk_skill_when_parent_registry_stale(
     fork → refresh_skills(child_deps) → render_skill_manifest(child_deps.skill_catalog)
     surfaces skills written to disk after parent's index was last loaded.
     """
-    from co_cli.context.manifests.skill_manifest import render_skill_manifest
     from co_cli.deps import fork_deps_for_reviewer
     from co_cli.skills.lifecycle import refresh_skills
+    from co_cli.skills.manifest import render_skill_manifest
 
     deps = _make_deps(tmp_path)
     assert deps.skill_catalog == {}, "parent starts with empty index (stale)"
