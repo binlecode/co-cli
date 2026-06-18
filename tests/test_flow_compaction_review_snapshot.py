@@ -34,7 +34,7 @@ _UNIQUE_FACT = "the deploy key rotates every 90 days"
 
 def _review_config():
     return SETTINGS.model_copy(
-        update={"skills": SETTINGS.skills.model_copy(update={"review_enabled": True})}
+        update={"memory": SETTINGS.memory.model_copy(update={"review_enabled": True})}
     )
 
 
@@ -51,8 +51,8 @@ def _make_ctx(
 def _patch_dirs(monkeypatch, tmp_path):
     snapshots = tmp_path / "snapshots"
     queue = tmp_path / "queue"
-    monkeypatch.setattr("co_cli.context.compaction.DREAM_SNAPSHOTS_DIR", snapshots)
-    monkeypatch.setattr("co_cli.session.review_kick.DREAM_QUEUE_DIR", queue)
+    monkeypatch.setattr("co_cli.dream_queue.DREAM_SNAPSHOTS_DIR", snapshots)
+    monkeypatch.setattr("co_cli.dream_queue.DREAM_QUEUE_DIR", queue)
     return snapshots, queue
 
 

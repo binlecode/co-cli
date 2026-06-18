@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.414]
+
+Bundle ship of rules-conformance-cleanup rounds (plans #2/#3/#4): two leaf-boundary/clarity refactors plus one swallowed-error bugfix.
+
+- **Close context leaf back-edges (#2):** hoisted tool-cap and persisted-output constants into `config/tuning.py`; relocated `spill_if_oversized` to a foundational `co_cli/fileio/spill.py`; moved the dream-snapshot / review-kick producers into a new `co_cli/dream_queue.py` and deleted `session/review_kick.py`. All `context → tools` and `context → session` import edges eliminated; consumers now import downward.
+- **Clarity by subtraction (#3):** stripped three write-only `DaemonState` fields; collapsed the duplicated `_split_frontmatter_raw` into the shared `memory/frontmatter.split_frontmatter_raw`; renamed the `src_` abbreviation to `source_` in `index/_retrieval.py`.
+- **Surface swallowed skill scan error (#4):** `/skills reload` now reports a `[warning]` when `scan_skill_content` raises instead of silently treating the skill as clean (`commands/skills.py`).
+
 ## [0.8.412]
 
 Relocate the turn-loop out of the `context/` leaf up to the `agent/` layer, structurally eliminating the `context → tools` back-edge class (rules-conformance-cleanup round 1).

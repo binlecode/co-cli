@@ -27,7 +27,7 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
-from co_cli.config.tuning import BREAKER_PROBE_EVERY, BREAKER_TRIP
+from co_cli.config.tuning import BREAKER_PROBE_EVERY, BREAKER_TRIP, PERSISTED_OUTPUT_TAG
 from co_cli.context.compaction import (
     STATIC_MARKER_PREFIX,
     SUMMARY_MARKER_PREFIX,
@@ -51,7 +51,6 @@ from co_cli.context.summarization import (
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
 _LLM_MODEL = build_model(SETTINGS_NO_MCP.llm)
 

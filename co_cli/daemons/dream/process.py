@@ -205,11 +205,7 @@ async def _run_foreground(co_home: Path, origin: str, session_id: str) -> None:
 
     write_pid(pid_file, os.getpid(), origin, session_id)
 
-    state = DaemonState(
-        start_time=time.time(),
-        spawn_origin=origin,
-        spawn_session_id=session_id,
-    )
+    state = DaemonState()
 
     logger.info("Dream daemon starting (pid=%d, origin=%s)", os.getpid(), origin)
     try:

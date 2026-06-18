@@ -139,9 +139,9 @@ def _chunks_like_search(
         " JOIN docs d ON d.source = c.source AND d.path = c.doc_path"
         f" WHERE ({like_conds})"
     )
-    src_sql, src_params = source_clause(sources, "c.source")
-    lsql += src_sql
-    lp.extend(src_params)
+    source_sql, source_params = source_clause(sources, "c.source")
+    lsql += source_sql
+    lp.extend(source_params)
     k_sql, k_params = kind_clause(kinds, "d.kind")
     lsql += k_sql
     lp.extend(k_params)
@@ -319,9 +319,9 @@ class RetrievalService:
             return []
         sql = _CHUNKS_FTS_SQL
         params: list[Any] = [fts_query]
-        src_sql, src_params = source_clause(sources, "c.source")
-        sql += src_sql
-        params.extend(src_params)
+        source_sql, source_params = source_clause(sources, "c.source")
+        sql += source_sql
+        params.extend(source_params)
         k_sql, k_params = kind_clause(kinds, "d.kind")
         sql += k_sql
         params.extend(k_params)
@@ -395,9 +395,9 @@ class RetrievalService:
             f" FROM chunks WHERE rowid IN ({placeholders})"
         )
         chunk_params: list[Any] = list(rowids)
-        src_sql, src_params = source_clause(sources, "source")
-        chunk_sql += src_sql
-        chunk_params.extend(src_params)
+        source_sql, source_params = source_clause(sources, "source")
+        chunk_sql += source_sql
+        chunk_params.extend(source_params)
 
         chunk_rows = self._conn.execute(chunk_sql, chunk_params).fetchall()
         if not chunk_rows:

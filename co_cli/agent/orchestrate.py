@@ -68,6 +68,10 @@ _LENGTH_RETRY_BOOST = 2
 assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for retry to terminate"
 
 from co_cli.config.llm import cap_output_tokens
+from co_cli.config.tuning import (
+    MAX_TOOL_CALLS_PER_MODEL_REQUEST,
+    TOOL_CAP_HARD_STOP_CONSECUTIVE,
+)
 from co_cli.context.compaction import is_context_overflow, recover_overflow_history
 from co_cli.context.timeouts import LLM_RUN_TIMEOUT_SECS
 from co_cli.deps import CoDeps
@@ -82,10 +86,6 @@ from co_cli.tools.approvals import (
     resolve_approval_subject,
 )
 from co_cli.tools.display import format_for_display, get_tool_start_args_display
-from co_cli.tools.tool_call_limit import (
-    MAX_TOOL_CALLS_PER_MODEL_REQUEST,
-    TOOL_CAP_HARD_STOP_CONSECUTIVE,
-)
 
 type SessionAgent = Agent[CoDeps, str | DeferredToolRequests]
 type SessionRunResult = AgentRunResult[str | DeferredToolRequests]

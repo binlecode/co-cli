@@ -89,6 +89,23 @@ EVICT_KEEP_RECENT = 5
 SPILL_THRESHOLD_CHARS = 4_000
 SPILL_PREVIEW_CHARS = 1_500
 
+# Sentinel tags wrapping a spilled tool result's preview placeholder. Open/close
+# pair — keep them co-located; the spill writer emits both and history_processors
+# detects an already-spilled part by the opening tag.
+PERSISTED_OUTPUT_TAG = "<persisted-output>"
+PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
+
+# ---------------------------------------------------------------------------
+# TOOLCAP_* — per-model-request tool-call cap (agent/toolset.py, orchestrate.py)
+# ---------------------------------------------------------------------------
+
+# Small ollama models lose coherence past ~3 parallel calls per response; well
+# within the 64K-floor tail.
+MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3
+
+# Consecutive cap violations before the loop hard-stops the turn.
+TOOL_CAP_HARD_STOP_CONSECUTIVE: int = 3
+
 # ---------------------------------------------------------------------------
 # ESTIMATE_* — char->token proxy (tokens.py)
 # ---------------------------------------------------------------------------

@@ -20,9 +20,6 @@ _HOUSEKEEPING_STATE_FILENAME = "_dream_state.json"
 class DaemonState:
     """Mutable runtime state for the dream daemon process."""
 
-    start_time: float
-    spawn_origin: str
-    spawn_session_id: str
     current_item: str | None = field(default=None)
 
 

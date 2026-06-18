@@ -26,6 +26,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
+from co_cli.config.tuning import PERSISTED_OUTPUT_TAG
 from co_cli.context.compaction import is_compaction_marker, proactive_window_processor
 from co_cli.context.history_processors import (
     dedup_tool_results,
@@ -34,7 +35,6 @@ from co_cli.context.history_processors import (
 )
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
 
 def _make_deps(

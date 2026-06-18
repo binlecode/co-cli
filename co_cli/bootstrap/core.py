@@ -326,8 +326,7 @@ def _emit_tool_budget_span(
     spill_ratio: float,
     spill_threshold_tokens: int,
 ) -> None:
-    from co_cli.config.tuning import SPILL_THRESHOLD_CHARS
-    from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
+    from co_cli.config.tuning import MAX_TOOL_CALLS_PER_MODEL_REQUEST, SPILL_THRESHOLD_CHARS
 
     span = current_span()
     span.set_attribute("budget.context_window_tokens", model_max_context_tokens)
@@ -371,8 +370,7 @@ async def create_deps(
 
     model_max_context_tokens, agent_vision_capable = _probe_model_ctx(config)
 
-    from co_cli.config.tuning import SPILL_THRESHOLD_CHARS
-    from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
+    from co_cli.config.tuning import MAX_TOOL_CALLS_PER_MODEL_REQUEST, SPILL_THRESHOLD_CHARS
 
     spill_ratio = config.compaction.spill_ratio
     spill_threshold_tokens = int(spill_ratio * model_max_context_tokens)

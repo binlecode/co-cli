@@ -16,7 +16,7 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.agent.toolset import _CallSeamToolset
-from co_cli.config.tuning import SPILL_THRESHOLD_CHARS
+from co_cli.config.tuning import PERSISTED_OUTPUT_TAG, SPILL_THRESHOLD_CHARS
 from co_cli.deps import (
     CoDeps,
     CoRuntimeState,
@@ -25,11 +25,8 @@ from co_cli.deps import (
     ToolSourceEnum,
     VisibilityPolicyEnum,
 )
+from co_cli.fileio.spill import spill_if_oversized
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_io import (
-    PERSISTED_OUTPUT_TAG,
-    spill_if_oversized,
-)
 
 # ---------------------------------------------------------------------------
 # spill_if_oversized — per-call helper

@@ -8,7 +8,6 @@ at full fidelity. The snapshot is unlinked on the terminal (done) transition.
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 
 import pytest
@@ -68,7 +67,7 @@ async def test_override_snapshot_is_read_then_cleaned_up(monkeypatch, tmp_path: 
     monkeypatch.setattr("co_cli.agent.run.run_standalone", _fake_run_standalone)
 
     deps = _make_deps(tmp_path)
-    state = DaemonState(start_time=time.time(), spawn_origin="test", spawn_session_id="s")
+    state = DaemonState()
     cfg = DreamSettings(tick_interval_seconds=1, review_timeout_seconds=30)
     shutdown = asyncio.Event()
 

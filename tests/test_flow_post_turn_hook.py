@@ -32,8 +32,8 @@ def _restore_co_home() -> Generator[None, None, None]:
     import importlib
 
     import co_cli.config.core as core_mod
+    import co_cli.dream_queue as kick_mod
     import co_cli.main as main_mod
-    import co_cli.session.review_kick as kick_mod
 
     importlib.reload(core_mod)
     importlib.reload(kick_mod)
@@ -53,8 +53,8 @@ def _make_deps(
     import importlib
 
     import co_cli.config.core as core_mod
+    import co_cli.dream_queue as kick_mod
     import co_cli.main as main_mod
-    import co_cli.session.review_kick as kick_mod
 
     # Reload the kick producer (and main) so the module-level DREAM_QUEUE_DIR the
     # producer writes to is re-resolved against the updated USER_DIR (CO_HOME
@@ -68,13 +68,14 @@ def _make_deps(
 
     config = SETTINGS_NO_MCP.model_copy(
         update={
+            "memory": SETTINGS_NO_MCP.memory.model_copy(update={"review_enabled": review_enabled}),
             "skills": SETTINGS_NO_MCP.skills.model_copy(
                 update={
                     "review_enabled": review_enabled,
                     "review_memory_nudge_interval": memory_interval,
                     "review_skill_nudge_interval": skill_interval,
                 }
-            )
+            ),
         }
     )
     if with_model:

@@ -12,11 +12,13 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS
 from tests._timeouts import FILE_DB_TIMEOUT_SECS
 
+from co_cli.config.tuning import PERSISTED_OUTPUT_TAG
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.fileio.spill import spill_if_oversized
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR
 from co_cli.tools.files.read import file_read, file_search
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, READ_MAX_LINES, spill_if_oversized
+from co_cli.tools.tool_io import READ_MAX_LINES
 
 
 def _make_deps(workspace: Path, tool_results_dir: Path | None = None) -> CoDeps:

@@ -1,9 +1,12 @@
-"""Tool-call cap constant and rejection payload."""
+"""Tool-call cap rejection payload.
+
+The cap constants themselves live in ``config/tuning.py`` (foundational); this
+module owns the rejection payload that references them.
+"""
 
 from typing import Literal, TypedDict
 
-MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3  # small ollama models lose coherence past ~3 parallel calls per response; well within the 64K-floor tail
-TOOL_CAP_HARD_STOP_CONSECUTIVE: int = 3
+from co_cli.config.tuning import MAX_TOOL_CALLS_PER_MODEL_REQUEST
 
 
 class MaxToolCallsExceededPayload(TypedDict):

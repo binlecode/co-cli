@@ -51,7 +51,7 @@ from pydantic_ai.messages import (
 from co_cli.agent.orchestrate import run_turn
 from co_cli.config.tuning import PERSISTED_OUTPUT_TAG, SPILL_THRESHOLD_CHARS
 from co_cli.daemons.dream._housekeeping import merge_memory
-from co_cli.daemons.dream._state import HousekeepingState
+from co_cli.daemons.dream.state import HousekeepingState
 from co_cli.memory.frontmatter import render_frontmatter
 from co_cli.memory.item import MemoryKindEnum
 
@@ -133,6 +133,64 @@ def _seed_dream_pair(memory_dir: Path) -> tuple[Path, Path]:
         return path
 
     return _write(_DREAM_A_STEM, _DREAM_A_BODY), _write(_DREAM_B_STEM, _DREAM_B_BODY)
+
+
+_DISTINCT_A_STEM = "eval_w1f_distinct_a"
+_DISTINCT_B_STEM = "eval_w1f_distinct_b"
+
+
+def _purge_distinct_pair(memory_dir: Path) -> None:
+    """Remove W1.F distinct-pair seed files to prevent stale-seed interference."""
+    for stem in (_DISTINCT_A_STEM, _DISTINCT_B_STEM):
+        (memory_dir / f"{stem}.md").unlink(missing_ok=True)
+
+
+def _seed_distinct_pair(memory_dir: Path) -> tuple[Path, Path, str]:
+    """Write two items that clear the Jaccard gate yet carry two DISTINCT facts.
+
+    Built exactly like the W1.D pair so the deterministic Jaccard gate *guarantees*
+    clustering by construction — the model is reached regardless of whether it then
+    fuses or keeps the pair distinct (``merge_memory``'s int return cannot tell those
+    apart, so clustering is established here, not at runtime). The pair diverges from
+    W1.D only in payload: each body carries a genuinely different fact (one about
+    backup timing, one about certificate renewal), not an alpha/beta variant.
+
+    The per-run token is folded into the *substance* of each fact (``backups<run>``,
+    ``certificate<run>``) rather than carried as a standalone filler marker — the
+    merge prompt explicitly drops filler ("keep it short") but preserves facts, so a
+    run token embedded in a fact survives a lossless fuse and stays locatable.
+
+    Token accounting (lowercased, single-char + STOPWORDS dropped, set-based):
+      shared (15): {production, server, maintenance, runbook, scheduled, recurring,
+                    operations, team, standard, procedure, documented, internal,
+                    reference, notes, baseline}
+      unique A (2): {backups<run>, sunday}   unique B (2): {certificate<run>, march}
+      Jaccard = 15 / (15 + 4) = 0.789 >= 0.75 threshold.
+
+    Returns ``(path_a, path_b, run)`` — ``run`` (embedded in both fact phrases)
+    locates this run's surviving/consolidated bodies among unrelated store items.
+    """
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    run = uuid.uuid4().hex[:8]
+    shared = (
+        "production server maintenance runbook scheduled recurring operations team "
+        "standard procedure documented internal reference notes baseline"
+    )
+    body_a = f"{shared} backups{run} sunday"
+    body_b = f"{shared} certificate{run} march"
+
+    def _write(stem: str, body: str) -> Path:
+        path = memory_dir / f"{stem}.md"
+        frontmatter_dict = {
+            "id": str(uuid.uuid5(uuid.NAMESPACE_DNS, stem)),
+            "memory_kind": MemoryKindEnum.NOTE.value,
+            "title": stem,
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        path.write_text(render_frontmatter(frontmatter_dict, body), encoding="utf-8")
+        return path
+
+    return _write(_DISTINCT_A_STEM, body_a), _write(_DISTINCT_B_STEM, body_b), run
 
 
 async def _drive_turns(
@@ -504,8 +562,90 @@ async def _case_w1_e_tool_spill_summary(
     )
 
 
+async def _case_w1_f_merge_preserves_distinct_facts(
+    deps: Any,
+    agent: Any,
+    frontend: Any,
+    run: Any,
+) -> CaseResult:
+    """W1.F — merge over-merge guard: a lexically-similar pair carrying two DISTINCT facts.
+
+    The complement of W1.D (which proves a genuine duplicate pair fuses). Here the
+    seed pair clears the Jaccard gate *by construction* (so the model is reached),
+    but carries two genuinely distinct facts. Judges that BOTH facts survive the
+    pass — whether the model kept two items or fused them losslessly. A regression
+    that conflates distinct facts (dropping one as "redundant") fails the judge.
+    """
+    case_id = "W1.F"
+    case_t0 = time.monotonic()
+    reason_parts: list[str] = [judge_model_annotation(deps)]
+    case_verdict = Verdict.FAIL
+
+    try:
+        _purge_distinct_pair(deps.memory_dir)
+        _path_a, _path_b, run = _seed_distinct_pair(deps.memory_dir)
+
+        async with asyncio.timeout(DREAM_CYCLE_BUDGET_S):
+            merged_count = await merge_memory(deps, HousekeepingState())
+
+        # Locate this run's surviving bodies by the run token folded into each fact —
+        # location-agnostic across the merge's possible outcomes (two items kept, a
+        # new consolidated item, or an in-place anchor merge). The run token is unique
+        # per run, so this never picks up unrelated store items or prior-run residue.
+        candidates = [
+            p
+            for p in deps.memory_dir.glob("*.md")
+            if p.is_file() and run in p.read_text(encoding="utf-8")
+        ]
+        reason_parts.append(f"merged={merged_count} surviving_bodies={len(candidates)}")
+
+        if not candidates:
+            reason_parts.append("structural: no surviving body carries this run's facts")
+            duration = time.monotonic() - case_t0
+            return CaseResult(
+                name=case_id,
+                verdict=Verdict.FAIL,
+                duration_s=duration,
+                reason=" ".join(reason_parts).strip(),
+            )
+
+        bodies = "\n\n---\n\n".join(p.read_text(encoding="utf-8") for p in candidates)
+        rubric = (
+            "Two memory notes were just run through a consolidation pass. One note recorded "
+            "that BACKUPS run on SUNDAY; the other that a CERTIFICATE renews in MARCH. These "
+            "are two genuinely distinct facts, not variants of one.\n"
+            "PASS only if BOTH facts are present across the surviving memory item(s) below — "
+            "whether kept as two separate items or fused into one combined item.\n"
+            "FAIL if either fact was dropped (e.g. only the backup fact OR only the certificate "
+            "fact survives), or a fact absent from the originals was invented.\n"
+            "Ignore filler and boilerplate wording — judge only whether both distinct facts survive."
+        )
+        async with asyncio.timeout(CALL_TIMEOUT_S):
+            verdict = await judge_with_llm(
+                rubric,
+                [{"role": "assistant", "content": bodies}],
+                deps=deps,
+                model=deps.judge_model,
+            )
+        reason_parts.append(f"judge.score={verdict.score}")
+        if verdict.rationale:
+            reason_parts.append(verdict.rationale[:160])
+        case_verdict = Verdict.PASS if verdict.passed else Verdict.SOFT_FAIL
+    except Exception as exc:
+        case_verdict = Verdict.FAIL
+        reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
+
+    duration = time.monotonic() - case_t0
+    return CaseResult(
+        name=case_id,
+        verdict=case_verdict,
+        duration_s=duration,
+        reason=" ".join(reason_parts).strip(),
+    )
+
+
 async def main() -> int:
-    """Drive W1.A-W1.E end-to-end, write trace, return exit code."""
+    """Drive W1.A-W1.F end-to-end, write trace, return exit code."""
     await ensure_ollama_warm()
 
     async with eval_deps() as (deps, agent, frontend), open_eval_run("daily_chat") as run:
@@ -516,6 +656,7 @@ async def main() -> int:
             _case_w1_a_multi_turn_coherence,
             _case_w1_d_dream_propagates_to_recall,
             _case_w1_e_tool_spill_summary,
+            _case_w1_f_merge_preserves_distinct_facts,
         ):
             try:
                 case = await runner(deps, agent, frontend, run)

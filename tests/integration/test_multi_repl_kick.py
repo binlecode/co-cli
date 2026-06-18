@@ -5,7 +5,7 @@ Verifies that two calls with different domains each write a distinct KICK file
 calls with the same domain also each produce a separate file.
 
 CO_HOME override pattern: we reload co_cli.config.core and the kick producer
-(co_cli.session.review_kick) so that DREAM_QUEUE_DIR re-binds to the tmp path
+(co_cli.dream_queue) so that DREAM_QUEUE_DIR re-binds to the tmp path
 before write_review_kick is called.
 
 No LLM calls. Filesystem only.
@@ -31,7 +31,7 @@ def _restore_co_home() -> Generator[None, None, None]:
     else:
         os.environ["CO_HOME"] = original
     import co_cli.config.core as core_mod
-    import co_cli.session.review_kick as kick_mod
+    import co_cli.dream_queue as kick_mod
 
     importlib.reload(core_mod)
     importlib.reload(kick_mod)
@@ -41,7 +41,7 @@ def _setup(tmp_path: Path):
     """Set CO_HOME, reload core + kick producer, return the kick module."""
     os.environ["CO_HOME"] = str(tmp_path)
     import co_cli.config.core as core_mod
-    import co_cli.session.review_kick as kick_mod
+    import co_cli.dream_queue as kick_mod
 
     importlib.reload(core_mod)
     importlib.reload(kick_mod)

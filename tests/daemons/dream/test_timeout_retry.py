@@ -29,7 +29,7 @@ from co_cli.tools.shell_backend import ShellBackend
 
 
 def _make_state() -> DaemonState:
-    return DaemonState(start_time=time.time(), spawn_origin="test", spawn_session_id="sess-test")
+    return DaemonState()
 
 
 def _make_deps(tmp_path: Path) -> CoDeps:

@@ -218,7 +218,7 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Per-turn fields a
 
 L0 caps how many tool calls a single `ModelResponse` can issue (the first row of §1.2). Calls beyond the cap never execute and never produce a `ToolReturnPart` for the lower layers to handle.
 
-**Constant.** `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3` in `co_cli/tools/tool_call_limit.py`; non-configurable. Sized for small-ollama-model coherence (small models lose plan coherence past ~3 parallel calls per response); 3 non-spilling (≤ 4K char) tool returns aggregate well inside the per-request spill threshold.
+**Constant.** `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3` in `co_cli/config/tuning.py`; non-configurable. Sized for small-ollama-model coherence (small models lose plan coherence past ~3 parallel calls per response); 3 non-spilling (≤ 4K char) tool returns aggregate well inside the per-request spill threshold.
 
 **Trigger surface.** `_CallSeamToolset.call_tool` (`co_cli/agent/toolset.py`) — the routing toolset's per-call wrapper, invoked once per `ToolCallPart` as the agent loop dispatches it.
 
@@ -742,14 +742,15 @@ so a single module holds every fixed sizing knob; the consuming module is named 
 | `BREAKER_TRIP` | `co_cli/config/tuning.py` | `3` | Consecutive failures that trip the circuit breaker (`compaction.py`) |
 | `BREAKER_PROBE_EVERY` | `co_cli/config/tuning.py` | `10` | Skips between probe attempts when circuit breaker is tripped (`compaction.py`) |
 | `SUMMARY_FIT_SAFETY_MARGIN` | `co_cli/config/tuning.py` | `2,000` | Fixed token headroom (not a ratio) reserved against the window in the pre-flight summarizer fit guard; biased toward attempting the summary (`summarization.py`) |
-| `MAX_TOOL_CALLS_PER_MODEL_REQUEST` | `co_cli/tools/tool_call_limit.py` | `3` | L0 admission cap on tool calls per `ModelResponse` (see §2.1) |
+| `MAX_TOOL_CALLS_PER_MODEL_REQUEST` | `co_cli/config/tuning.py` | `3` | L0 admission cap on tool calls per `ModelResponse` (see §2.1) |
+| `TOOL_CAP_HARD_STOP_CONSECUTIVE` | `co_cli/config/tuning.py` | `3` | Consecutive L0 cap violations before the turn hard-stops (see §2.1) |
 
 **Spill / request-budget constants** (also centralized in `co_cli/config/tuning.py`; not user-configurable):
 
 | Constant | Source | Value | Purpose |
 |---|---|---|---|
-| `SPILL_THRESHOLD_CHARS` | `co_cli/config/tuning.py` | `4,000` | `spill_if_oversized` default per-tool emit-time spill threshold (`tool_io.py`) |
-| `SPILL_PREVIEW_CHARS` | `co_cli/config/tuning.py` | `1,500` | Preview chars included in the `<persisted-output>` placeholder (`tool_io.py`) |
+| `SPILL_THRESHOLD_CHARS` | `co_cli/config/tuning.py` | `4,000` | `spill_if_oversized` default per-tool emit-time spill threshold (`fileio/spill.py`) |
+| `SPILL_PREVIEW_CHARS` | `co_cli/config/tuning.py` | `1,500` | Preview chars included in the `<persisted-output>` placeholder (`fileio/spill.py`) |
 | `ESTIMATE_CHARS_PER_TOKEN` | `co_cli/config/tuning.py` | `4` | Fast chars→tokens proxy used by `spill_largest_tool_results` aggregate estimate (`tokens.py`) |
 
 **Enrichment char caps** (module-level; not user-configurable; see §2.6 callstack diagram for usage):
@@ -794,9 +795,10 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `spill_if_oversized(content, tool_results_dir, tool_name, force=False, threshold=SPILL_THRESHOLD_CHARS) -> str` | `co_cli/tools/tool_io.py` | Persist oversized content to `tool-results/<sha16>.txt`; returns inline `<persisted-output>` placeholder |
-| `SPILL_THRESHOLD_CHARS = 4_000`, `SPILL_PREVIEW_CHARS = 1_500` | `co_cli/config/tuning.py` | Module constants (non-configurable); consumed by `tool_io.py` |
-| `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3` | `co_cli/tools/tool_call_limit.py` | L0 admission cap; non-configurable |
+| `spill_if_oversized(content, tool_results_dir, tool_name, *, force=False) -> str` | `co_cli/fileio/spill.py` | Persist oversized content to `tool-results/<sha16>.txt`; returns inline `<persisted-output>` placeholder |
+| `spill_with_span(content, *, tool_name, tool_results_dir, threshold_chars, forced=False) -> str` | `co_cli/fileio/spill.py` | Wraps `spill_if_oversized`, always emitting the `tool_budget.spill_tool_result` span |
+| `SPILL_THRESHOLD_CHARS = 4_000`, `SPILL_PREVIEW_CHARS = 1_500` | `co_cli/config/tuning.py` | Module constants (non-configurable); consumed by `fileio/spill.py` and `tool_io.py` |
+| `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3` | `co_cli/config/tuning.py` | L0 admission cap; non-configurable |
 
 ### Error classification
 
@@ -823,9 +825,10 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `co_cli/agent/orchestrate.py` | `run_turn` overflow dispatch and anti-thrash gate reset. |
 | `co_cli/main.py` | `_finalize_turn()` — session persistence bridge; reads `compaction_applied_this_turn` and calls `persist_session_history(history_compacted=True)` to rewrite the transcript. |
 | `co_cli/tools/categories.py` | `FILE_TOOLS`. |
-| `co_cli/tools/tool_io.py` | `spill_if_oversized`: `spill_if_oversized`, `tool_output`, `check_tool_results_size`; imports `SPILL_THRESHOLD_CHARS`, `SPILL_PREVIEW_CHARS` from `config/tuning.py`. |
+| `co_cli/fileio/spill.py` | Foundational spill primitive: `spill_if_oversized`, `spill_with_span`; imports `SPILL_THRESHOLD_CHARS`, `SPILL_PREVIEW_CHARS`, `PERSISTED_OUTPUT_TAG` from `config/tuning.py`. Consumed by both `tools/tool_io.py` and `context/history_processors.py`. |
+| `co_cli/tools/tool_io.py` | `tool_output`, `tool_error`, `check_tool_results_size`, `sweep_tool_result_orphans`; calls `spill_with_span` (from `fileio/spill.py`) at emit time. |
 | `co_cli/tools/files/read.py` | `file_read` per-tool `spill_threshold_chars=math.inf` override (never spills). |
-| `co_cli/tools/tool_call_limit.py` | `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `MaxToolCallsExceededPayload`, `make_exceeded_payload`. |
+| `co_cli/tools/tool_call_limit.py` | `MaxToolCallsExceededPayload`, `make_exceeded_payload` (cap constants live in `config/tuning.py`). |
 | `co_cli/config/llm.py` | `max_context_tokens` (Ollama probe ceiling). |
 | `co_cli/context/assembly.py` | Prompt assembly: `build_base_instructions`. |
 | `co_cli/context/rules/` | Base system prompt rule files (identity, safety, reasoning, tool protocol, workflow). |

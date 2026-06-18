@@ -51,10 +51,10 @@ from co_cli.display.core import (
     console,
     set_theme,
 )
+from co_cli.dream_queue import write_review_kick
 from co_cli.observability.setup import setup_observability
 from co_cli.session.browser import extract_title
 from co_cli.session.persistence import persist_session_history
-from co_cli.session.review_kick import write_review_kick
 from co_cli.session.usage import ORIGIN_SESSION, append_turn
 from co_cli.skills.lifecycle import cleanup_skill_run_state
 from co_cli.tools.tool_io import sweep_tool_result_orphans

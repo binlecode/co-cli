@@ -25,7 +25,7 @@ from co_cli.daemons.dream.state import (
 )
 from co_cli.llm.call import llm_call
 from co_cli.memory.archive import archive_artifacts
-from co_cli.memory.frontmatter import parse_frontmatter
+from co_cli.memory.frontmatter import parse_frontmatter, split_frontmatter_raw
 from co_cli.memory.item import (
     MemoryItem,
     MemoryKindEnum,
@@ -308,25 +308,10 @@ def _archive_user_skill(deps: CoDeps, path: Path) -> bool:
 def _write_consolidated_skill(deps: CoDeps, anchor: _SkillCandidate, merged_body: str) -> Path:
     """Overwrite the anchor's skill file with the merged body (frontmatter preserved)."""
     text = anchor.path.read_text(encoding="utf-8")
-    meta_raw, _ = _split_frontmatter_raw(text)
+    meta_raw, _ = split_frontmatter_raw(text)
     new_text = f"{meta_raw}{merged_body.strip()}\n" if meta_raw else f"{merged_body.strip()}\n"
     anchor.path.write_text(new_text, encoding="utf-8")
     return anchor.path
-
-
-def _split_frontmatter_raw(text: str) -> tuple[str, str]:
-    """Return (raw_frontmatter_block_with_delimiters_and_trailing_newline, body).
-
-    If no frontmatter, returns ("", text).
-    """
-    if not text.startswith("---\n"):
-        return "", text
-    end = text.find("\n---\n", 4)
-    if end == -1:
-        return "", text
-    raw = text[: end + len("\n---\n")]
-    body = text[end + len("\n---\n") :]
-    return raw, body
 
 
 async def _merge_skill_cluster(deps: CoDeps, cluster: list[_SkillCandidate]) -> Path | None:

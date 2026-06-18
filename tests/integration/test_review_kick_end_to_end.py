@@ -6,7 +6,7 @@ real CoDeps with a live LLM model reference — no LLM calls are made; the model
 handle is only needed to pass the `deps.model is None` guard in _post_turn_hook.
 
 CO_HOME override + importlib.reload pattern:
-  write_review_kick (co_cli.session.review_kick) uses a module-level DREAM_QUEUE_DIR
+  write_review_kick (co_cli.dream_queue) uses a module-level DREAM_QUEUE_DIR
   binding. Reloading co_cli.config.core alone only updates that module's symbols.
   We also reload the kick producer (and main) so the binding the producer writes
   to re-resolves to the new tmp path.
@@ -33,8 +33,8 @@ def _restore_co_home() -> Generator[None, None, None]:
     else:
         os.environ["CO_HOME"] = original
     import co_cli.config.core as core_mod
+    import co_cli.dream_queue as kick_mod
     import co_cli.main as main_mod
-    import co_cli.session.review_kick as kick_mod
 
     importlib.reload(core_mod)
     importlib.reload(kick_mod)
@@ -45,8 +45,8 @@ def _setup_co_home(tmp_path: Path) -> None:
     """Set CO_HOME and reload config.core, the kick producer, and main so paths align."""
     os.environ["CO_HOME"] = str(tmp_path)
     import co_cli.config.core as core_mod
+    import co_cli.dream_queue as kick_mod
     import co_cli.main as main_mod
-    import co_cli.session.review_kick as kick_mod
 
     importlib.reload(core_mod)
     importlib.reload(kick_mod)
@@ -63,13 +63,14 @@ def _make_deps(tmp_path: Path, *, memory_interval: int, skill_interval: int):
 
     config = SETTINGS_NO_MCP.model_copy(
         update={
+            "memory": SETTINGS_NO_MCP.memory.model_copy(update={"review_enabled": True}),
             "skills": SETTINGS_NO_MCP.skills.model_copy(
                 update={
                     "review_enabled": True,
                     "review_memory_nudge_interval": memory_interval,
                     "review_skill_nudge_interval": skill_interval,
                 }
-            )
+            ),
         }
     )
     model = build_model(SETTINGS_NO_MCP.llm)

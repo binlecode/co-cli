@@ -70,8 +70,8 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
             try:
                 for w in scan_skill_content(p.read_text(encoding="utf-8")):
                     console.print(f"[yellow]Security warning in {name}: {w}[/yellow]")
-            except Exception:
-                pass
+            except Exception as e:
+                console.print(f"[warning]Could not security-scan {name}: {e}[/warning]")
     old_names = set(ctx.deps.skill_catalog.keys())
     set_skill_catalog(new_skills, ctx.deps)
     refresh_completer(ctx)

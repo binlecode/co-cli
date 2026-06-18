@@ -9,8 +9,9 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset, WrapperToolset
 from pydantic_ai.toolsets.abstract import ToolsetTool
 
-from co_cli.config.tuning import SPILL_THRESHOLD_CHARS
+from co_cli.config.tuning import MAX_TOOL_CALLS_PER_MODEL_REQUEST, SPILL_THRESHOLD_CHARS
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
+from co_cli.fileio.spill import spill_with_span
 from co_cli.observability.serialize import serialize_tool_args, truncate_tool_result
 from co_cli.observability.tracing import current_span, pop_span, push_span
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY
@@ -55,8 +56,7 @@ from co_cli.tools.tasks.control import (  # noqa: F401
     task_write,
 )
 from co_cli.tools.todo.rw import todo_read, todo_write  # noqa: F401
-from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST, make_exceeded_payload
-from co_cli.tools.tool_io import spill_with_span
+from co_cli.tools.tool_call_limit import make_exceeded_payload
 from co_cli.tools.vision.view import image_view  # noqa: F401
 from co_cli.tools.web.fetch import web_fetch  # noqa: F401
 from co_cli.tools.web.search import web_search  # noqa: F401

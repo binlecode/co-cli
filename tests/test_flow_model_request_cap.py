@@ -21,10 +21,10 @@ from co_cli.agent.orchestrate import run_turn
 from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.config.core import load_config
 from co_cli.config.llm import MAX_MODEL_REQUESTS_PER_TURN, LlmSettings
+from co_cli.config.tuning import MAX_TOOL_CALLS_PER_MODEL_REQUEST
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
 
 # ---------------------------------------------------------------------------
 # Unit: LlmSettings defaults and env var override

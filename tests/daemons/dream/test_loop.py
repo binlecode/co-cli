@@ -11,7 +11,6 @@ immediately (transcript file absent → early return, no exception).
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 
 import pytest
@@ -26,7 +25,7 @@ from co_cli.tools.shell_backend import ShellBackend
 
 
 def _make_state() -> DaemonState:
-    return DaemonState(start_time=time.time(), spawn_origin="test", spawn_session_id="sess-test")
+    return DaemonState()
 
 
 def _make_cfg(**overrides) -> DreamSettings:

@@ -339,7 +339,8 @@ on shared mutation keys is a complementary guard — both layers apply.
 |--------|--------|----------|
 | `tool_output(display, *, ctx, **metadata) -> ToolReturn` | `co_cli/tools/tool_io.py` | Standard tool result emit; runs `spill_with_span` against the per-tool threshold before returning |
 | `tool_error(message, *, ctx) -> ToolReturn` | `co_cli/tools/tool_io.py` | Terminal (non-retryable) tool failure — `tool_output(message, ctx=ctx, error=True)`, spills like any other output |
-| `spill_if_oversized(content, tool_results_dir, tool_name, *, force=False) -> str` | `co_cli/tools/tool_io.py` | Persist oversized content; returns inline placeholder block |
+| `spill_if_oversized(content, tool_results_dir, tool_name, *, force=False) -> str` | `co_cli/fileio/spill.py` | Persist oversized content; returns inline placeholder block |
+| `spill_with_span(content, *, tool_name, tool_results_dir, threshold_chars, forced=False) -> str` | `co_cli/fileio/spill.py` | Wraps `spill_if_oversized`, always emitting the spill span; called by `tool_output` |
 | `check_tool_results_size(tool_results_dir) -> str | None` | `co_cli/tools/tool_io.py` | Returns warning text when `tool-results/` exceeds 100 MB |
 
 ### Tool lifecycle and approval
@@ -369,7 +370,8 @@ on shared mutation keys is a complementary guard — both layers apply.
 | `co_cli/tools/approvals.py` | approval subject resolution and session-rule persistence |
 | `co_cli/tools/deferred_prompt.py` | per-tool awareness stub list for DEFERRED tools, grouped by integration family under sub-headers |
 | `co_cli/tools/agent_tool.py` | `@agent_tool` decorator, `TOOL_REGISTRY` self-populating list, `TOOL_REGISTRY_BY_NAME` lookup dict |
-| `co_cli/tools/tool_io.py` | `tool_output()`, `tool_error()`, `spill_if_oversized()`, `spill_with_span()`, `check_tool_results_size()` |
+| `co_cli/fileio/spill.py` | `spill_if_oversized()`, `spill_with_span()` — foundational spill primitive shared by `tools/tool_io.py` and `context/history_processors.py` |
+| `co_cli/tools/tool_io.py` | `tool_output()`, `tool_error()`, `check_tool_results_size()`, `sweep_tool_result_orphans()` |
 | `co_cli/tools/shell_policy.py` | `shell_exec` and `task_start` command-safety policy |
 | `co_cli/tools/files/read.py` | `file_read`, `file_search` |
 | `co_cli/tools/files/write.py` | `file_write`, `file_patch` |

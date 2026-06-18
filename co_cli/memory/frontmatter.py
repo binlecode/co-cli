@@ -46,6 +46,28 @@ def parse_frontmatter(content: str) -> tuple[dict[str, Any], str]:
         return {}, content
 
 
+def split_frontmatter_raw(text: str) -> tuple[str, str]:
+    """Return (raw_frontmatter_block_with_delimiters_and_trailing_newline, body).
+
+    Unlike ``parse_frontmatter`` (which parses the YAML into a dict), this is a
+    lossless raw split that preserves the exact delimiter block verbatim for
+    rewriting. It deliberately uses a strict ``---\\n`` delimiter contract (no
+    surrounding whitespace tolerance) — do not "unify" it with
+    ``parse_frontmatter``'s ``---\\s*\\n`` regex; the two serve different needs
+    and changing this splitter's rules would silently alter rewrite behavior.
+
+    If no frontmatter, returns ("", text).
+    """
+    if not text.startswith("---\n"):
+        return "", text
+    end = text.find("\n---\n", 4)
+    if end == -1:
+        return "", text
+    raw = text[: end + len("\n---\n")]
+    body = text[end + len("\n---\n") :]
+    return raw, body
+
+
 def strip_frontmatter(content: str) -> str:
     """Return the markdown body with any YAML frontmatter removed."""
     _, body = parse_frontmatter(content)

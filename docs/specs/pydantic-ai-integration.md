@@ -281,8 +281,8 @@ discover_mcp_tools: connect all servers concurrently; list_tools(); register nam
 | `tool_retries` | `config/core.py` | `Agent(tool_retries=…)` and per-tool `ModelRetry` budget |
 | `mcp_servers` (url / command / args / env / prefix / approval / timeout_seconds) | `config/core.py` | `_build_mcp_toolsets` transport + `approval_required()` + discovery timeout |
 | HTTP timeouts (connect/read/write/pool) | `llm/factory.py` constants | Ollama `httpx.AsyncClient` |
-| `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `TOOL_CAP_HARD_STOP_CONSECUTIVE` | `tools/tool_call_limit.py` | Call-seam cap + hard-stop |
-| `SPILL_THRESHOLD_CHARS` | `tools/tool_io.py` | MCP-result spill threshold default |
+| `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `TOOL_CAP_HARD_STOP_CONSECUTIVE` | `config/tuning.py` | Call-seam cap + hard-stop |
+| `SPILL_THRESHOLD_CHARS` | `config/tuning.py` | MCP-result spill threshold default |
 
 Orchestrator `usage_limits` is **not** config-driven — it is fixed `request_limit=None` (unbounded); task-agent `request_limit` comes from `spec.default_budget` or a per-call override.
 

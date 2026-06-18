@@ -16,9 +16,9 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.agent.toolset import _CallSeamToolset
+from co_cli.config.tuning import MAX_TOOL_CALLS_PER_MODEL_REQUEST
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
 
 CAP = MAX_TOOL_CALLS_PER_MODEL_REQUEST
 

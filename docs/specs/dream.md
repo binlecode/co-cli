@@ -56,16 +56,18 @@ Key properties:
 
 **Unit rationale:** memory tracks user-intent signal (~1 per turn); skill tracks agent-action signal (~tool + reasoning steps per turn). Conflating the units would over-fire skill reviews on chatty users or under-fire memory reviews on tool-heavy turns.
 
-Counter flow in `_post_turn_hook` (guarded by `review_enabled` and `deps.model is not None`):
+Counter flow in `_post_turn_hook` (guarded by `deps.model is not None`, then each domain by its own flag — memory by `memory.review_enabled`, skill by `skills.review_enabled`):
 
 ```python
-deps.session.turns_since_memory_review += 1
-deps.session.model_requests_since_skill_review += model_request_count
-_maybe_kick_memory_review(deps)
-_maybe_kick_skill_review(deps)
+if deps.config.memory.review_enabled:
+    deps.session.turns_since_memory_review += 1
+    _maybe_kick_memory_review(deps)
+if deps.config.skills.review_enabled:
+    deps.session.model_requests_since_skill_review += model_request_count
+    _maybe_kick_skill_review(deps)
 ```
 
-Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, resets the counter to 0, and calls `write_review_kick(domain=..., session_id=..., persisted_message_count=...)` (the shared producer in `co_cli/session/review_kick.py`).
+Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, resets the counter to 0, and calls `write_review_kick(domain=..., session_id=..., persisted_message_count=...)` (the shared producer in `co_cli/dream_queue.py`).
 
 **Inline tool-write resets** (domain-scoped):
 
@@ -78,7 +80,7 @@ Each `_maybe_kick_*` checks whether the counter has reached its nudge interval, 
 
 **Session-end always-fire** in `_drain_and_cleanup`: both KICKs (memory + skill) fire regardless of counter state at REPL shutdown.
 
-**`write_review_kick`** (`co_cli/session/review_kick.py`, the single producer shared by both the REPL and compaction) is fire-and-forget against the filesystem: atomic-write a KICK JSON file to `$CO_HOME/daemons/dream/queue/<ts>-<uuid>.json` (write to `<name>.tmp` sibling → fsync → `os.replace` into `<name>.json`) so the daemon never observes a torn file. The producer never touches the daemon's address space — daemon picks the file up on its next polling iteration (default 5 s).
+**`write_review_kick`** (`co_cli/dream_queue.py`, the single producer shared by both the REPL and compaction) is fire-and-forget against the filesystem: atomic-write a KICK JSON file to `$CO_HOME/daemons/dream/queue/<ts>-<uuid>.json` (write to `<name>.tmp` sibling → fsync → `os.replace` into `<name>.json`) so the daemon never observes a torn file. The producer never touches the daemon's address space — daemon picks the file up on its next polling iteration (default 5 s).
 
 ### 1.3 KICK File Queue
 
@@ -527,7 +529,8 @@ The daemon wires the same observability stack as the main app via `setup_observa
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Master switch for the reviewer subsystem |
+| `memory.review_enabled` | `CO_MEMORY_REVIEW_ENABLED` | `false` | Per-domain switch for memory reviewer KICKs (turn-boundary + session-end + compaction-snapshot) |
+| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Per-domain switch for skill reviewer KICKs |
 | `skills.review_memory_nudge_interval` | `CO_SKILLS_REVIEW_MEMORY_NUDGE_INTERVAL` | `10` | Turns between mid-session memory KICKs |
 | `skills.review_skill_nudge_interval` | `CO_SKILLS_REVIEW_SKILL_NUDGE_INTERVAL` | `10` | Iterations between mid-session skill KICKs |
 
@@ -573,7 +576,8 @@ Internal caps (housekeeping — apply to both domains):
 | `create_deps(*, on_status, stack=None, theme_override=None) -> CoDeps` | `co_cli/bootstrap/core.py` | Shared bootstrap for REPL and daemon; daemon passes `stack=None` to skip MCP |
 | `MEMORY_REVIEW_SPEC` / `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | Domain reviewer task specs |
 | `process_review(deps, domain, session_id, persisted_message_count, transcript_override=None)` | `co_cli/daemons/dream/_reviewer.py` | Load transcript + dispatch to domain reviewer. With `transcript_override` set, reads that snapshot uncapped; else the live file truncated at `persisted_message_count`. Raises `ValueError` on unknown domain (corrupt kick → `failed/`). Missing transcript/snapshot is a benign no-op. |
-| `write_review_kick(*, domain, session_id, persisted_message_count, transcript_override=None)` | `co_cli/session/review_kick.py` | Shared KICK producer (REPL + compaction); atomic write to the queue; omits `transcript_override` from the payload when None |
+| `write_review_kick(*, domain, session_id, persisted_message_count, transcript_override=None)` | `co_cli/dream_queue.py` | Shared KICK producer (REPL + compaction); atomic write to the queue; omits `transcript_override` from the payload when None |
+| `write_dream_snapshot(session_id, messages) -> Path` | `co_cli/dream_queue.py` | Writes pre-compaction messages as a JSONL snapshot under `DREAM_SNAPSHOTS_DIR`; returns the path the caller passes as `transcript_override` |
 | `maybe_autospawn_dream(deps, frontend)` | `co_cli/bootstrap/core.py` | REPL auto-spawn hook |
 | `build_dream_line(deps) -> str` | `co_cli/bootstrap/banner.py` | Banner `Dream:` line builder |
 | `handle_dream_slash(ctx, args)` | `co_cli/commands/dream.py` | `/dream` slash handler |
@@ -632,7 +636,7 @@ Internal caps (housekeeping — apply to both domains):
 | `co_cli/daemons/dream/prompts/skill_review.md` | Skill reviewer instructions |
 | `co_cli/commands/dream.py` | `co dream` CLI group + `handle_dream_slash` |
 | `co_cli/config/dream.py` | `DreamSettings` Pydantic model + `DREAM_ENV_MAP` |
-| `co_cli/session/review_kick.py` | `write_review_kick` — shared KICK producer (REPL + compaction) |
+| `co_cli/dream_queue.py` | `write_review_kick` — shared KICK producer (REPL + compaction); `write_dream_snapshot` — pre-compaction JSONL snapshot writer |
 | `co_cli/bootstrap/banner.py` | `build_dream_line` — `Dream:` banner row |
 | `co_cli/bootstrap/core.py` | `maybe_autospawn_dream` — REPL auto-spawn hook |
 | `co_cli/main.py` | `_maybe_kick_memory_review`, `_maybe_kick_skill_review`, `_fire_session_end_kicks` (all call `write_review_kick`) |
@@ -677,7 +681,7 @@ Internal caps (housekeeping — apply to both domains):
 | Crash mid-process → restart re-processes file (idempotent) | `tests/integration/test_daemon_crash_recovery.py` |
 | Per-prompt extraction quality (real model + real stores) | `evals/eval_domain_review.py` |
 
-> **Test-hygiene caveat (compaction snapshot path).** `_snapshot_and_kick_review` writes to the module-level `DREAM_SNAPSHOTS_DIR` / `DREAM_QUEUE_DIR` constants. Any test that exercises `compact_messages` with `skills.review_enabled=True` AND a non-None model AND a real `session_path` MUST monkeypatch both `co_cli.context.compaction.DREAM_SNAPSHOTS_DIR` and `co_cli.session.review_kick.DREAM_QUEUE_DIR` to temp dirs (see `tests/test_flow_compaction_review_snapshot.py`) — otherwise it silently writes into the real `~/.co-cli`, and no assertion will catch the leak. Existing compaction tests are safe only because `review_enabled` defaults False and the default `session_path` (`Path(".")`, stem `""`) trips the empty-session-id guard.
+> **Test-hygiene caveat (compaction snapshot path).** `_snapshot_and_kick_review` delegates the snapshot write and KICK to `co_cli/dream_queue.py`, which references the module-level `DREAM_SNAPSHOTS_DIR` / `DREAM_QUEUE_DIR` constants. Any test that exercises `compact_messages` with `memory.review_enabled=True` AND a non-None model AND a real `session_path` MUST monkeypatch both `co_cli.dream_queue.DREAM_SNAPSHOTS_DIR` and `co_cli.dream_queue.DREAM_QUEUE_DIR` to temp dirs (see `tests/test_flow_compaction_review_snapshot.py`) — otherwise it silently writes into the real `~/.co-cli`, and no assertion will catch the leak. Existing compaction tests are safe only because `memory.review_enabled` defaults False and the default `session_path` (`Path(".")`, stem `""`) trips the empty-session-id guard.
 
 ### Housekeeping
 

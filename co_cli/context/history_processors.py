@@ -42,6 +42,7 @@ from pydantic_ai.messages import (
 from co_cli.config.tuning import (
     ESTIMATE_CHARS_PER_TOKEN,
     EVICT_KEEP_RECENT,
+    PERSISTED_OUTPUT_TAG,
     SPILL_PREVIEW_CHARS,
 )
 from co_cli.context._compaction_boundaries import (
@@ -59,11 +60,8 @@ from co_cli.context.summarization import (
     resolve_compaction_budget,
 )
 from co_cli.deps import CoDeps
+from co_cli.fileio.spill import spill_if_oversized
 from co_cli.observability.tracing import current_span
-from co_cli.tools.tool_io import (
-    PERSISTED_OUTPUT_TAG,
-    spill_if_oversized,
-)
 
 _CLEARED_PLACEHOLDER = "[tool result cleared]"
 """Last-resort fallback when ToolReturnPart.content is non-string (multimodal).

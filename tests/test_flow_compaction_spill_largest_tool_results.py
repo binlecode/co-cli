@@ -23,12 +23,12 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RequestUsage, RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
+from co_cli.config.tuning import PERSISTED_OUTPUT_TAG
 from co_cli.context.history_processors import spill_largest_tool_results
 from co_cli.context.summarization import estimate_message_tokens
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState
 from co_cli.observability import tracing
 from co_cli.tools.shell_backend import ShellBackend
-from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
 
 def _make_deps(
@@ -402,7 +402,7 @@ def _spill_content_lengths_for_drift(tmp_path: Path) -> list[int]:
     multiple of 4, the single-division aggregate equals a fresh full recount
     exactly (within 0 tokens), pinning the success_signal.
     """
-    from co_cli.tools.tool_io import spill_if_oversized
+    from co_cli.fileio.spill import spill_if_oversized
 
     probe = "z" * 30_000
     stub_len = len(spill_if_oversized(probe, tmp_path, "shell_exec", force=True))

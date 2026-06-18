@@ -15,9 +15,7 @@ Submodule map:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from enum import StrEnum
-from uuid import uuid4
 
 from pydantic_ai import RunContext
 from pydantic_ai.messages import (
@@ -28,7 +26,6 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.config.core import DREAM_SNAPSHOTS_DIR
 from co_cli.config.tuning import BREAKER_PROBE_EVERY, BREAKER_TRIP
 from co_cli.context._compaction_boundaries import (
     CompactionBoundaries,
@@ -61,9 +58,8 @@ from co_cli.context.summarization import (
     summarize_messages,
 )
 from co_cli.deps import CoDeps
+from co_cli.dream_queue import write_dream_snapshot, write_review_kick
 from co_cli.observability.tracing import current_span, trace
-from co_cli.session.persistence import append_messages
-from co_cli.session.review_kick import write_review_kick
 
 __all__ = [
     "STATIC_MARKER_PREFIX",
@@ -317,10 +313,7 @@ def _snapshot_and_kick_review(ctx: RunContext[CoDeps], messages: list[ModelMessa
     if not session_id:
         return
     try:
-        DREAM_SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now(UTC).strftime("%Y-%m-%dT%H%M%S.%f")
-        snapshot_path = DREAM_SNAPSHOTS_DIR / f"{session_id}-{ts}-{uuid4()}.jsonl"
-        append_messages(snapshot_path, messages)
+        snapshot_path = write_dream_snapshot(session_id, messages)
         write_review_kick(
             domain="memory",
             session_id=session_id,
@@ -614,7 +607,7 @@ async def proactive_window_processor(
             "compaction.applied_this_turn", ctx.deps.runtime.compaction_applied_this_turn
         )
 
-        from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
+        from co_cli.config.tuning import MAX_TOOL_CALLS_PER_MODEL_REQUEST
 
         span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_REQUEST)
         span.set_attribute(
