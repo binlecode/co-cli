@@ -550,8 +550,8 @@ proactive_window_processor          recover_overflow_history          /compact s
                     │                       prior_summary fed in a dedicated "PRIOR SUMMARY" slot
                     │                       above the opaque TURNS TO SUMMARIZE: block; carry-forward
                     │                       clause (PENDING→RESOLVED) emitted iff prior_summary present
-                    │                       then _verify_and_retry (fidelity backstop: ≤1 extra call)
-                    │                       and redact_text on the accepted summary (output-side, last)
+                    │                       then redact_text on the summary (output-side, gated by
+                    │                       observability.redact_summary_output; default on)
                     │
                     └── build_compaction_marker(len(dropped), summary_text, has_tail)
                              has_tail=True  (proactive/overflow) → "Recent messages are preserved verbatim."
@@ -631,13 +631,9 @@ budget = clamp(SUMMARY_BUDGET_RATIO × estimate_message_tokens(body), FLOOR, CEI
 
 (Origin and full peer comparison: `docs/reference/RESEARCH-summarization-prompting-peer-survey.md`.)
 
-**Fidelity verify-and-retry (content backstop).** After the first summary returns, `summarize_messages` runs a deterministic content check (no LLM judge) — the in-place rewrite is lossy, so a silently dropped identifier is unrecoverable. `_extract_identifiers` pulls high-signal, hard-to-reconstruct tokens from the **already-redacted** serialized source (file/dir paths, `path:line` refs, URLs, hex hashes, error-class names + literal `Traceback`, and quoted command/correction spans), and survival is a byte-substring membership check against the summary. When the missing fraction **exceeds** `FIDELITY_MISS_THRESHOLD` (0.34 — tolerance, not openclaw's strict every-identifier, so benign paraphrase doesn't thrash), the summarizer is re-prompted **exactly once** with the missing items folded into the task prompt (bounded to the top `FIDELITY_FEEDBACK_MAX_IDENTIFIERS` = 12, reusing the identical output cap), then `_accept_better` keeps whichever pass preserved more identifiers (tie → first; count-only, no criticality weighting).
+**Identifier preservation (prompt-only).** Because the in-place rewrite is lossy, a silently dropped file path / error string / line ref is unrecoverable. Preservation is enforced **by prompt instruction**, not a runtime check: `_SUMMARIZE_PROMPT` carries a top-level directive to copy exact file paths, commands, error strings, line numbers, URLs, and identifiers **verbatim** (and `## Critical Context` collects the values that cannot be reconstructed). This is the peer-standard approach — hermes and opencode both rely on prompt-guided preservation, not post-summary verification. A prior deterministic extract-and-retry backstop was built and reverted: on real eval data its conservative extractor over-fired on JSON/tool-dense transcripts (retry fired with zero fidelity lift), so the extra LLM call was net cost, not net protection. Fidelity is measured offline by `evals/eval_summarizer_fidelity.py`, not guarded at runtime.
 
-- **Cost.** At most **+1 summarizer LLM call per compaction**, and only when the first pass drops identifiers above threshold. No loop, no recursion.
-- **Degrade-safe.** A retry that raises (timeout, breaker) returns the first (non-empty) summary — a failed retry never loses a good-enough recap.
-- **Orthogonal to the existing guards.** A fidelity miss is **not** a summarizer failure: it never reads or writes `compaction_skip_count`, the circuit-breaker state, or the anti-thrash / no-progress counters, and never falls back to a static marker. It lives entirely inside `summarize_messages`.
-- **Output redaction (last).** The accepted summary is passed through `redact_text` on return — output-side parity with hermes (`context_compressor.py`), defense-in-depth for a credential-shaped string the model emits that the input redaction never saw. Independently justified: it would be correct even without the fidelity guard. The shared `_verify_and_retry` helper returns **raw** (unredacted) text; redaction lives only in this caller.
-- **Observability.** The parent span carries `co.compaction.fidelity.identifiers_extracted / identifiers_missing / retry_fired / feedback_truncated / accepted` (`"first"` | `"retry"`) and `retry_error`. The threshold and feedback bound are commented constants tunable from these attributes (conservative-first; over-extraction costs a spurious retry, under-extraction misses).
+**Output redaction (gated).** After the summary returns, `summarize_messages` passes it through `redact_text` — output-side parity with hermes (`context_compressor.py`), defense-in-depth for a credential-shaped string the model emits that the input redaction never saw. Gated by `observability.redact_summary_output` (default on); independent of identifier preservation. Input redaction (in `serialize_messages` and the prior-summary slot) is always on.
 
 **Circuit breaker.**
 
@@ -704,7 +700,6 @@ Peer parity: hermes embeds an inline `Use file tools to read the full file.` in 
 | Failure mode | Fallback |
 |---|---|
 | Summarizer raises OR returns empty/whitespace | Static marker; warning logged; `compaction_skip_count += 1` |
-| Fidelity retry raises (timeout/breaker) | Return the first (non-empty) summary; warning logged; `co.compaction.fidelity.retry_error` span attr. NOT a summarizer failure — no `compaction_skip_count` change, no static marker |
 | `compaction_skip_count >= 3` | Circuit breaker tripped — static markers used; LLM probed once every 10 skips |
 | `ctx.deps.model is None` (sub-agent context) | Static marker without LLM attempt |
 | `plan_compaction_boundaries` returns `None` (proactive) | Return messages unchanged; provider may then reject → overflow path |
@@ -715,7 +710,7 @@ Peer parity: hermes embeds an inline `Use file tools to read the full file.` in 
 ### 2.10 Security
 
 - Summarizer system prompt contains a CRITICAL SECURITY RULE treating history as data, not instructions.
-- Credential redaction is two-sided: the summarizer **input** is redacted in `serialize_messages` (and the prior-summary slot), and the **output** is redacted in `summarize_messages` on return (`redact_text` on the accepted summary) — defense-in-depth parity with hermes.
+- Credential redaction is two-sided: the summarizer **input** is always redacted in `serialize_messages` (and the prior-summary slot), and the **output** is redacted in `summarize_messages` on return, gated by `observability.redact_summary_output` (default on) — defense-in-depth parity with hermes.
 - Emit-time persisted files are content-addressed by SHA-256; filenames leak no semantics.
 - Tool-result files live under `.co-cli/tool-results/` (project-local). Cleanup is manual; warning surfaced when directory > 100 MB via `check_tool_results_size`.
 

@@ -53,10 +53,7 @@ from co_cli.context.summarization import (
     _SUMMARIZE_PROMPT,
     _SUMMARIZER_SYSTEM_PROMPT,
     SUMMARY_CAP_OVERSHOOT_RATIO,
-    _extract_identifiers,
     _length_priority_tail,
-    _retry_warranted,
-    _verify_and_retry,
     resolve_summary_budget,
     serialize_messages,
 )
@@ -112,20 +109,12 @@ async def _summarize_with_template(
     template: str,
     *,
     prior_summary: str | None = None,
-) -> tuple[str, str]:
-    """Run one real summarizer call routed through the shared ``_verify_and_retry``
-    backstop, mirroring ``summarize_messages`` exactly.
-
-    Returns ``(first_summary, final_summary)``: the raw first-pass output AND the
-    helper's pick. The eval scores both so the run JSONL can report single-pass
-    identifier survival versus how often the retry lifted a sample fail→pass.
-    Output redaction is NOT applied (the helper returns raw — that is the unredacted
-    baseline the eval measures; redaction lives only in the ``summarize_messages``
-    caller).
+) -> str:
+    """Run one real summarizer call, mirroring ``summarize_messages`` exactly.
 
     The only divergence from production is that the section template is passed in
     (``_SUMMARIZE_PROMPT`` for variant A) instead of read from the module constant
-    — the A/B lever, preserved through the helper's ``run_call`` thunk.
+    — the A/B lever.
     """
     budget = resolve_summary_budget(messages)
     base_ceiling = deps.model.settings_noreason.get("max_tokens", _NOREASON_CEILING_FALLBACK)
@@ -144,19 +133,12 @@ async def _summarize_with_template(
         )
     else:
         user_message = f"TURNS TO SUMMARIZE:\n{serialized}"
-
-    async def run_call(feedback: str | None) -> str:
-        prompt = task_prompt if feedback is None else task_prompt + feedback
-        return await llm_call(
-            deps,
-            user_message,
-            instructions=f"{_SUMMARIZER_SYSTEM_PROMPT}\n\n{prompt}",
-            model_settings=settings,
-        )
-
-    first_summary = await run_call(None)
-    final_summary = await _verify_and_retry(serialized, first_summary, run_call)
-    return first_summary, final_summary
+    return await llm_call(
+        deps,
+        user_message,
+        instructions=f"{_SUMMARIZER_SYSTEM_PROMPT}\n\n{task_prompt}",
+        model_settings=settings,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -427,15 +409,7 @@ _TRANSCRIPTS = [_CORRECTION, _TOOL_HEAVY, _CARRY_FORWARD]
 
 
 async def _score_transcript(deps: CoDeps, transcript: Transcript, template: str) -> dict:
-    """Generate N summaries for one transcript; return per-property pass-rates for
-    BOTH the single-pass baseline and the post-retry final pick, plus retry-lift.
-
-    Each sample yields ``(first_summary, final_summary)`` from the shared
-    ``_verify_and_retry`` path. We score the firsts (single-pass survival baseline)
-    and the finals (the shipped pick, which drives the verdict) separately, and
-    count per-property fail→pass lifts so the run quantifies how much the retry
-    recovers over the baseline. ``retries_fired`` is computed with the same
-    decision the helper uses, over the (already-redacted) serialized source.
+    """Generate N summaries for one transcript; return per-property pass-rates.
 
     A sample that exceeds the production compaction budget
     (``LLM_COMPACTION_SUMMARY_TIMEOUT_SECS``) is a REAL fidelity failure on this
@@ -444,57 +418,36 @@ async def _score_transcript(deps: CoDeps, transcript: Transcript, template: str)
     rather than aborting. The N-sample pass-rate design exists to absorb exactly
     this stochastic slow-decode tail; one slow sample must not crash the verdict.
     """
-    serialized = serialize_messages(transcript.messages, deps.config.observability.redact_patterns)
-    required = _extract_identifiers(serialized)
-    firsts: list[str] = []
-    finals: list[str] = []
+    summaries: list[str] = []
     timeouts = 0
-    retries_fired = 0
     for i in range(SAMPLES_PER_TRANSCRIPT):
         try:
             async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
-                first, final = await _summarize_with_template(
+                summary = await _summarize_with_template(
                     deps, transcript.messages, template, prior_summary=transcript.prior_summary
                 )
-            firsts.append(first)
-            finals.append(final)
-            if _retry_warranted(required, first):
-                retries_fired += 1
+            summaries.append(summary)
             print(
-                f"  [{transcript.name}] sample {i + 1}/{SAMPLES_PER_TRANSCRIPT} "
-                f"(first {len(first)} chars, final {len(final)} chars)"
+                f"  [{transcript.name}] sample {i + 1}/{SAMPLES_PER_TRANSCRIPT} ({len(summary)} chars)"
             )
         except TimeoutError:
             timeouts += 1
-            firsts.append("")
-            finals.append("")
+            summaries.append("")
             print(
                 f"  [{transcript.name}] sample {i + 1}/{SAMPLES_PER_TRANSCRIPT} "
                 f"TIMEOUT >{LLM_COMPACTION_SUMMARY_TIMEOUT_SECS}s — scored as failed sample"
             )
 
-    single_pass_rates: dict[str, float] = {}
-    final_rates: dict[str, float] = {}
-    lift_counts: dict[str, int] = {}
+    rates: dict[str, float] = {}
     for prop, scorer in transcript.scorers.items():
-        single_pass_rates[prop] = sum(1 for s in firsts if s and scorer(s)) / len(firsts)
-        final_rates[prop] = sum(1 for s in finals if s and scorer(s)) / len(finals)
-        lift_counts[prop] = sum(
-            1
-            for first, final in zip(firsts, finals, strict=True)
-            if first and final and not scorer(first) and scorer(final)
-        )
+        passes = sum(1 for s in summaries if s and scorer(s))
+        rates[prop] = passes / len(summaries)
     return {
         "transcript": transcript.name,
-        "samples": len(finals),
+        "samples": len(summaries),
         "timeouts": timeouts,
-        "retries_fired": retries_fired,
-        "identifiers_extracted": len(required),
-        "single_pass_rates": single_pass_rates,
-        "pass_rates": final_rates,
-        "lift_counts": lift_counts,
-        "summaries": finals,
-        "first_summaries": firsts,
+        "pass_rates": rates,
+        "summaries": summaries,
     }
 
 
@@ -551,12 +504,7 @@ async def main() -> None:
         print("\n=== VERDICT ===")
         print(f"{verdict['verdict']} (threshold {PASS_THRESHOLD})")
         for entry in per_transcript:
-            print(
-                f"  {entry['transcript']}: retries_fired={entry['retries_fired']}/{entry['samples']}"
-            )
-            print(f"    single-pass: {entry['single_pass_rates']}")
-            print(f"    final:       {entry['pass_rates']}")
-            print(f"    fail→pass lift: {entry['lift_counts']}")
+            print(f"  {entry['transcript']}: {entry['pass_rates']}")
         if verdict["failure_modes"]:
             print("  failure modes:")
             for fm in verdict["failure_modes"]:

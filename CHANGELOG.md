@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.406]
+
+Revert the summarizer fidelity verify-and-retry backstop (0.8.402) — net cost, not net protection.
+
+- Removed `_verify_and_retry` and the identifier extract/survival machinery (`_extract_identifiers`, `_retry_warranted`, `_accept_better`, `FIDELITY_*` constants, regex pattern sets) and the `co.compaction.fidelity.*` span attributes. On real eval data the conservative extractor over-fired on JSON/tool-dense transcripts (retry fired with zero fidelity lift), so the extra LLM call added latency without recovering identifiers.
+- Identifier preservation is now prompt-only, following opencode's/hermes's design: `_SUMMARIZE_PROMPT` gained a top-level directive to copy exact file paths, commands, error strings, line numbers, URLs, and identifiers verbatim. Runtime fidelity is measured offline by `eval_summarizer_fidelity.py`, not guarded per-compaction.
+- Kept the output-side credential redaction (hermes parity, independently justified) but gated it behind a new `observability.redact_summary_output` flag (default on); input redaction stays always-on.
+- Reverted `eval_summarizer_fidelity.py` to its single-pass form; spec `compaction.md` updated (§2.6/2.9/2.10).
+
 ## [0.8.404]
 
 Behavioral rules audit — peer-comparison + per-section effectiveness measurement of co's 7 behavioral rule files, with one evidence-scoped cleanup edit. The shippable contract was the two evidence artifacts; the rule edit is opportunistic.

@@ -74,3 +74,12 @@ class ObservabilitySettings(BaseModel):
             "This list is not exhaustive — users with custom secret formats should extend it via settings.json."
         ),
     )
+    redact_summary_output: bool = Field(
+        default=True,
+        description=(
+            "When True, the compaction summary is passed through redact_patterns on the way out "
+            "(in addition to the always-on input redaction), guarding against a credential-shaped "
+            "string the model emits that the input redaction never saw. Disable where summary "
+            "throughput matters more than this output-side defense-in-depth."
+        ),
+    )
