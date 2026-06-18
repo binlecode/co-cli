@@ -32,20 +32,35 @@ import json
 import os
 import secrets
 import time
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
 
 from evals._deps import EvalFrontend, make_eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._settings import apply_eval_window
-from evals._timeouts import CALL_TIMEOUT_S, TOOL_TURN_BUDGET_S
+from evals._timeouts import CALL_TIMEOUT_S, DREAM_CYCLE_BUDGET_S, TOOL_TURN_BUDGET_S
 from evals._trace import TurnTrace, record_turn, response_text
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
 
 from co_cli.agent.orchestrate import run_turn
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, DelegateToAgent, SlashOutcome
+from co_cli.daemons.dream._reviewer import process_review
 from co_cli.deps import CoDeps
+from co_cli.session.filename import session_filename
+from co_cli.session.persistence import append_messages
 from co_cli.skills.lifecycle import refresh_skills
+
+_SKILL_REVIEWER_FIXTURE_UUID8 = "c4d5e6f7"
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -365,6 +380,187 @@ async def case_w4_b_skill_selection(
 
 
 # ---------------------------------------------------------------------------
+# Skill-reviewer cognition — process_review(domain="skill")
+# ---------------------------------------------------------------------------
+
+
+def _make_correction_token() -> str:
+    """Per-run-unique marker that is the substance of the corrected deploy step.
+
+    Unique per run so a skill body left by a prior run can never satisfy the
+    structural gate — only this run's reviewer output carries this token. It is
+    embedded as a concrete command the user demands, not an opaque marker, so a
+    faithful reviewer must reproduce it verbatim when encoding the correction.
+    """
+    return f"verify-{uuid4().hex[:12]}"
+
+
+def _seed_skill_reviewer_transcript(sessions_dir: Path) -> tuple[Path, str]:
+    """Write a real JSONL transcript carrying one clear, reusable user correction.
+
+    The user corrects HOW the deploy class of task is handled: a required first
+    step (run ``make <token>``) the assistant kept skipping. The per-run token is
+    the substance of the corrected step, so a faithful skill update must embed it.
+    Signal lives in user/assistant text only (the reviewer serializes with
+    ``include_tool_results=False``). Mirrors ``eval_memory._seed_reviewer_transcript``:
+    real ``ModelRequest``/``ModelResponse`` via ``append_messages``, deterministic
+    fixture uuid8 with stale-purge, per-run token.
+
+    Returns the transcript path and the per-run correction token.
+    """
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    for stale in sessions_dir.glob(f"*-{_SKILL_REVIEWER_FIXTURE_UUID8}.jsonl"):
+        stale.unlink()
+    token = _make_correction_token()
+    messages: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="Go ahead and deploy the staging build.")]),
+        ModelResponse(parts=[TextPart(content="Done — I pushed the staging build out.")]),
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=(
+                        "You skipped the smoke check again. Stop doing that. From now on, "
+                        f"every single deploy must run `make {token}` as the very first step "
+                        "before anything else — if that check fails, abort the deploy. This "
+                        "is a hard rule for all future deploys, not just this one."
+                    )
+                )
+            ]
+        ),
+        ModelResponse(
+            parts=[
+                TextPart(
+                    content=(
+                        f"Understood — I'll run `make {token}` first on every deploy from now "
+                        "on and abort if it fails."
+                    )
+                )
+            ]
+        ),
+        ModelRequest(
+            parts=[UserPromptPart(content="Thanks. Different topic — what's the weather like?")]
+        ),
+        ModelResponse(
+            parts=[TextPart(content="I can't check live weather, but happy to help otherwise.")]
+        ),
+    ]
+    created_at = datetime.now(UTC)
+    path = sessions_dir / session_filename(created_at, _SKILL_REVIEWER_FIXTURE_UUID8)
+    append_messages(path, messages)
+    return path, token
+
+
+def _user_skill_bodies(user_skills_dir: Path) -> dict[Path, str]:
+    """Map each user ``<name>/SKILL.md`` path to its current body text."""
+    if not user_skills_dir.exists():
+        return {}
+    return {p: p.read_text(encoding="utf-8") for p in user_skills_dir.glob("*/SKILL.md")}
+
+
+async def case_skill_reviewer_encodes_correction(
+    deps: CoDeps,
+    agent,
+    frontend: EvalFrontend,
+    run,
+) -> CaseResult:
+    """Skill-reviewer cognition — process_review(domain="skill") encodes a correction.
+
+    Drives the real skill reviewer end-to-end against a seeded transcript carrying
+    one clear, reusable user correction about how deploys are handled. Structural
+    gate: the per-run token appears in a user skill body that did not contain it
+    before (created OR patched — the prompt prefers updating an existing skill).
+    Judged: the skill faithfully encodes the correction and does not fabricate a
+    procedure absent from the transcript.
+
+    ``agent``/``frontend`` are unused (this case calls ``process_review`` directly,
+    not ``run_turn``) but kept for the ``case_fn(deps, agent, frontend, run)``
+    tuple-dispatch signature.
+    """
+    case_id = "W4.R"
+    t0 = time.monotonic()
+
+    before = _user_skill_bodies(deps.user_skills_dir)
+    try:
+        seed_path, token = _seed_skill_reviewer_transcript(deps.sessions_dir)
+    except Exception as exc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"seed failed: {type(exc).__name__}: {exc}",
+        )
+
+    try:
+        async with asyncio.timeout(DREAM_CYCLE_BUDGET_S):
+            await process_review(deps, "skill", seed_path.stem, persisted_message_count=None)
+    except Exception as exc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"reviewer failed: {type(exc).__name__}: {exc}",
+        )
+
+    after = _user_skill_bodies(deps.user_skills_dir)
+    encoded = [
+        (path, body)
+        for path, body in after.items()
+        if token in body and token not in before.get(path, "")
+    ]
+    if not encoded:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=(
+                f"structural gate: no user skill body newly carries token {token!r}; "
+                f"skills={[p.parent.name for p in after]}"
+            ),
+        )
+
+    skill_path, skill_body = encoded[0]
+    rubric = (
+        "A skill maintainer read a short conversation and wrote/patched the skill below. "
+        "The conversation contained exactly ONE durable correction: the user demanded that "
+        f"every deploy must run `make {token}` as the first step and abort if it fails. The "
+        "rest was transient chatter — a one-off weather question — that should NOT be encoded. "
+        "PASS if the skill faithfully encodes the deploy correction (the required first step). "
+        "FAIL if it fabricates a procedure not in the conversation, distorts the correction, or "
+        "encodes the transient chatter. Judge faithfulness only; a faithful skill may legitimately "
+        "scope or condense what it keeps."
+    )
+    try:
+        async with asyncio.timeout(CALL_TIMEOUT_S):
+            jverdict = await judge_with_llm(
+                rubric,
+                [{"role": "assistant", "content": skill_body}],
+                deps=deps,
+                model=deps.judge_model,
+            )
+    except Exception as jexc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"skill={skill_path.parent.name} | judge_error: {type(jexc).__name__}",
+        )
+
+    verdict = Verdict.PASS if jverdict.passed else Verdict.SOFT_FAIL
+    reason = (
+        f"skill={skill_path.parent.name} judge.score={jverdict.score} "
+        f"{judge_model_annotation(deps)}"
+    )
+    if jverdict.rationale:
+        reason += f" {jverdict.rationale[:120]}"
+    return CaseResult(
+        name=case_id,
+        verdict=verdict,
+        duration_s=time.monotonic() - t0,
+        reason=reason,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -411,6 +607,23 @@ async def main() -> int:
                 f"[skills] {cr_b.name}: {'PASS' if cr_b.passed else 'FAIL'} — "
                 f"{cr_b.reason or 'ok'}"
             )
+            try:
+                cr_r = await case_skill_reviewer_encodes_correction(deps, agent, frontend, run)
+            except Exception as exc:
+                cr_r = CaseResult(
+                    name="W4.R",
+                    verdict=Verdict.FAIL,
+                    duration_s=0.0,
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+            cases.append(cr_r)
+            run.append(cr_r)
+            label = (
+                "SOFT_FAIL"
+                if cr_r.verdict is Verdict.SOFT_FAIL
+                else ("PASS" if cr_r.passed else "FAIL")
+            )
+            print(f"[skills] {cr_r.name}: {label} — {cr_r.reason or 'ok'}")
     finally:
         await stack.aclose()
     return 0 if all(c.passed for c in cases) else 1

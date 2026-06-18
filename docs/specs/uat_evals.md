@@ -165,6 +165,7 @@ The canonical inventory. New evals append a row here AND a tenet citation in the
 | `evals/eval_daily_chat.py` | W1 | A multi_turn_coherence · D dream_propagates_to_recall · E tool_spill_summary | knowledge work — synthesis + voice; trusted — inspectable | All LLM judge |
 | `evals/eval_session_continuity.py` | W2 | D rehydrate_uses_context · E compact_quality_holds | continuity across sessions | All LLM judge |
 | `evals/eval_memory.py` | W3 | G forget_propagates_to_recall | local + personal — durable + reversible | LLM judge |
+| `evals/eval_session_recall.py` | — (FM-1) | SR.A concept_expansion (probe-word miss → structural `session_search(pattern=)` recovery of a shaped entity) | continuity across sessions — cross-session recall | LLM judge + structural (recovery gate, route recorded) |
 | `evals/eval_skills.py` | W4 | A dispatch_user_skill (dispatch + env) · B skill_selection_mutual_exclusivity (documents↔office) | operator (procedural capability) | All LLM judge |
 | `evals/eval_groundedness.py` | W7 | tool_up_when_unsure · decline_when_unknown · resist_leading_prompt | trusted — grounded + inspectable | All LLM judge |
 | `evals/eval_approval_discipline.py` | W8 | proposes_before_destructive · respects_denial · adjusts_plan_after_denial | trusted — explicit operator control | LLM judge + structural (deny via eval frontend; files-intact assert) |

@@ -63,7 +63,7 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart
 
 from co_cli.agent.orchestrate import run_turn
 from co_cli.daemons.dream._housekeeping import merge_memory
-from co_cli.daemons.dream._state import HousekeepingState
+from co_cli.daemons.dream.state import HousekeepingState
 
 _FIXTURE_NAME = "user_model_baseline"
 
