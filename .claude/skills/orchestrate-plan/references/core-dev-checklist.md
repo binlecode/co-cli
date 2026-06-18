@@ -26,6 +26,10 @@
   enough to test or enforce without interpretation (not "should not fail" — must be
   "must never do X in condition Y"). Absence or vague constraints are blocking.
 
+## Module layer home (`review.md:40`)
+
+- When a task proposes new code in a leaf package (`context`/`tools`/`memory`/`session`), ask: does this concern belong in this layer, or is it a loop/prompt-assembly/agent concern that belongs at the `agent` layer? Flag as blocking if the proposed home is a generic leaf but the logic is agent-loop or orchestration logic. This is a judgment prompt, not a structural test.
+
 ## Operational risk
 
 - Schema or data model changes without migration or rollback path

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.408]
+
+Add leaf-boundary enforcement tooling to workflow skills.
+
+- `audit-conformance`: Pass 0 now contains a verbatim import-edge detector script (AST-based, scope-tagged MODULE/TYPE_CHECKING/LOCAL + PRIVATE flag) as a manual audit aid; no re-derivation needed each run.
+- `review-impl`: added per-diff leaf-boundary judgment check citing `review.md:40` — flags new import edges from leaf packages (`context`/`tools`/`memory`/`session`) into `tools`/`agent`/`bootstrap`; framed as judgment, not a fitness test.
+- `orchestrate-plan` core-dev-checklist: added module layer-home question for tasks proposing new code in a leaf package.
+
 ## [0.8.406]
 
 Revert the summarizer fidelity verify-and-retry backstop (0.8.402) — net cost, not net protection.

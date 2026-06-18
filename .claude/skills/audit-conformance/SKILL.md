@@ -48,11 +48,81 @@ Every finding maps to one of these. Source of truth: `.agent_docs/review.md` *Cl
 
 1. Resolve scope from `$ARGUMENTS` (default `co_cli/`). State it in the summary.
 2. **Pick up any open plan:** `ls docs/exec-plans/active/*-rules-conformance-cleanup.md`. If one exists, read it — fold new findings in and do not re-list already-tracked violations as new.
-3. **Build the import edge map** (no grimp/import-linter in this repo — use AST in `tmp/`). The builder MUST tag each cross-package edge with its **scope** (`MODULE` / `TYPE_CHECKING` / `LOCAL` — walk the AST tracking whether the import node is under an `if TYPE_CHECKING:` block or nested inside a function/method) and a **PRIVATE** flag (imported module path contains `._x` or an imported name starts with `_`):
+3. **Build the import edge map** (no grimp/import-linter in this repo — use AST in `tmp/`). The builder MUST tag each cross-package edge with its **scope** (`MODULE` / `TYPE_CHECKING` / `LOCAL` — walk the AST tracking whether the import node is under an `if TYPE_CHECKING:` block or nested inside a function/method) and a **PRIVATE** flag (imported module path contains `._x` or an imported name starts with `_`).
+
+   Paste the script below verbatim into `tmp/import_edges.py` (manual audit aid — never a CI gate or `tests/` member) and run it:
+
+   ```python
+   # tmp/import_edges.py — manual audit aid; NOT a CI gate or tests/ member
+   import ast, os, sys
+   from pathlib import Path
+
+   ROOT = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("co_cli")
+
+   def pkg_of(path: Path) -> str:
+       parts = path.with_suffix("").parts
+       return ".".join(parts)
+
+   def is_private(name: str) -> bool:
+       return any(part.startswith("_") and part not in ("__init__", "__main__")
+                  for part in name.split("."))
+
+   def walk_imports(tree: ast.Module):
+       """Yield (scope, node) for each import node in the AST."""
+       def _walk(nodes, scope):
+           for node in nodes:
+               if isinstance(node, ast.If):
+                   # detect `if TYPE_CHECKING:`
+                   test = node.test
+                   if (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+                       isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+                   ):
+                       yield from _walk(node.body, "TYPE_CHECKING")
+                       continue
+               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                   yield from _walk(node.body, "LOCAL")
+                   continue
+               if isinstance(node, (ast.Import, ast.ImportFrom)):
+                   yield scope, node
+               if hasattr(node, "body"):
+                   yield from _walk(getattr(node, "body", []), scope)
+               if hasattr(node, "orelse"):
+                   yield from _walk(getattr(node, "orelse", []), scope)
+       yield from _walk(tree.body, "MODULE")
+
+   for py in sorted(ROOT.rglob("*.py")):
+       try:
+           tree = ast.parse(py.read_text(encoding="utf-8"))
+       except SyntaxError:
+           continue
+       src_pkg = ".".join(py.relative_to(ROOT.parent).with_suffix("").parts)
+       src_top = py.relative_to(ROOT.parent).parts[1] if len(py.relative_to(ROOT.parent).parts) > 1 else ""
+       for scope, node in walk_imports(tree):
+           if isinstance(node, ast.ImportFrom) and node.module:
+               mod = node.module
+               # resolve relative imports
+               if node.level:
+                   anchor_parts = list(py.relative_to(ROOT.parent).with_suffix("").parts)
+                   up = node.level
+                   base = anchor_parts[:-up] if up <= len(anchor_parts) else []
+                   mod = ".".join(base + ([mod] if mod else []))
+               if not mod.startswith("co_cli"):
+                   continue
+               dst_top = mod.split(".")[1] if mod.count(".") >= 1 else ""
+               names = [a.name for a in node.names]
+               private = is_private(mod) or any(n.startswith("_") for n in names)
+               for name in names:
+                   print(f"{src_pkg}\t{mod}.{name}\t{py}:{node.lineno}\t{scope}\t{'PRIVATE' if private or name.startswith('_') else 'PUBLIC'}\t{name}")
+           elif isinstance(node, ast.Import):
+               for alias in node.names:
+                   if not alias.name.startswith("co_cli"):
+                       continue
+                   private = is_private(alias.name)
+                   print(f"{src_pkg}\t{alias.name}\t{py}:{node.lineno}\t{scope}\t{'PRIVATE' if private else 'PUBLIC'}\t{alias.name}")
+   ```
 
    ```bash
    mkdir -p tmp
-   # tmp/import_edges.py: walk co_cli/, AST-parse, emit:  src_pkg -> dst_pkg \t file:line \t scope \t private \t symbol
    uv run python tmp/import_edges.py > tmp/edges.txt
    ```
 

@@ -92,6 +92,7 @@ Check every file listed in `files:` against CLAUDE.md's Engineering Rules. Each 
 - **Visibility**: `_prefix` convention — leading-underscore modules must not be imported outside the package
 - **API shape**: parameter order, return types, signature width — consistent with existing callers and peer public APIs
 - **Modular structure**: logic placed in the wrong module or layer; cohesion/coupling violations
+- **Leaf-boundary judgment** (`review.md:40`): if the diff adds an import edge *from* a leaf package (`context`/`tools`/`memory`/`session`) *into* `tools`/`agent`/`bootstrap`, or places loop/prompt-assembly logic inside a leaf package, flag it and ask: is this module correctly homed, or does it belong at the `agent` layer? Frame as judgment, not a structural test — the goal is a conscious siting decision, not an allowlist gate.
 - **Anti-patterns**: module-level mutable state (global state); speculative abstractions (helpers or wrappers with a single caller)
 
 - **Clarity by subtraction**: apply the full ruleset in `.agent_docs/review.md` (delete one-sided members; collapse redundant same-lifecycle state; flatten wrapper bags; module home = owning domain; underscore visibility both directions; no import-time side effects; flags only after success; renames are hard and total). Flag any violation introduced or left by the change as blocking.
