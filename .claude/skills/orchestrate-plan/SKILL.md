@@ -16,6 +16,8 @@ argument-hint: "<slug>"
 
 ## Phase 1 — TL: Draft
 
+> **Scope check first.** For atomic/single-file changes, use Claude Code's built-in plan flow directly — no skill needed (per CLAUDE.md). This skill's full critique loop is for major features, doc restructuring, or refactoring. Do not coin a divergent threshold.
+
 **Before writing:**
 1. Read relevant source, tests, and `docs/reference/RESEARCH-<scope>.md` if it exists. Glob `docs/exec-plans/active/*-<slug>.md` — if found, read it and skip already-implemented work.
 2. **Current-state check:** scan source and specs for accuracy against the planned scope. If too inconsistent to plan safely: `✗ Current state inconsistent — run /sync-doc first.`
@@ -30,6 +32,7 @@ argument-hint: "<slug>"
 - `Problem & Outcome` must include a `Failure cost:` line — what silently breaks without this fix.
 - Each task must have: stable ID (TASK-1…), `files:` list, `done_when:` (single verifiable criterion), `success_signal:` (one sentence; N/A for pure refactors), `prerequisites:` (if any).
 - `done_when` for user-facing tasks (non-N/A `success_signal`) must exercise the runtime path — a test run, CLI command, or assertion at the integration boundary. Grep-only is insufficient.
+- `done_when` for rename / drop / refactor tasks must require a **repo-wide stale-reference grep** AND the full test suite, per `review.md` line 19 ("Done only when grep finds zero stale references AND tests pass"). Scoped tests cannot catch cross-file ripple; grep-only cannot prove nothing broke.
 - No task may list `docs/specs/` in `files:` — specs are updated by `sync-doc` post-delivery.
 
 **Append to the plan** (after `---` / `# Audit Log` heading on first cycle):
@@ -126,4 +129,4 @@ Plan approved.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev <slug>`
 ```
-2. Strip the Audit Log — remove `---` and everything from `# Audit Log` to (but not including) `## Final`. Leave only plan content and the Final section.
+2. Condense to a Decisions ledger — collapse the Audit Log (`---` and everything from `# Audit Log` to, but not including, `## Final`) into a single `## Decisions` table above `## Final`. First migrate every row from the per-cycle `## Cycle Cn — Team Lead Decisions` tables into that one table (one row per issue: adopt / modify / **reject** + rationale — the reject rows are the overdesign-avoidance record and must survive). Then delete the verbose critique sections (`## Cycle Cn — Core Dev`, `## Cycle Cn — PO`, and the `## Cycle Cn — Team Lead` submission stubs). Leave plan content, the consolidated `## Decisions` table, and the Final section.

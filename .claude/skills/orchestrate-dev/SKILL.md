@@ -17,6 +17,7 @@ description: Execute a reviewed plan as a dev team — TL leads and codes alongs
 
 1. Glob `docs/exec-plans/active/*-<slug>.md`. If no match: `✗ No plan found — run /orchestrate-plan first.`
 2. Extract each task: `id`, `title`, `files:`, `done_when:`, `prerequisites:`. Build execution order via topological sort on prerequisites.
+   - **Solo path:** when the plan has a single independent task (or a trivial linear chain with no parallel branches), skip the Team announcement (step 6) and topological-sort step — TL takes all tasks and runs Phase 2 directly, then proceeds to Phase 3.
 3. **Pre-flight:** every task must have a non-empty `files:` and a machine-verifiable `done_when:`. If any task fails: `✗ Plan invalid: TASK-<id> missing files/done_when — fix the plan first.` Stop at the first invalid task.
 4. **Assign:** TL takes critical-path and cross-cutting tasks (shared modules, schema changes, renames). Spawn one Dev subagent per independent parallel group. Never spawn a Dev subagent for a task whose prerequisites are unfinished.
 5. Run `git status`. Warn if uncommitted changes unrelated to this plan are present.
@@ -31,6 +32,7 @@ description: Execute a reviewed plan as a dev team — TL leads and codes alongs
 **When spawning a Dev subagent**, pass the task spec and this contract:
 ```
 Apply Engineering Rules from CLAUDE.md in full.
+Clean up dead code before reporting (per review.md line 14: each subagent cleans up dead code before returning).
 Only modify files listed in `files:`. Announce any extra file: ⚠ Extra file: <path> — <reason>
 No mocks, fakes, or patching in tests.
 Run pytest scoped to your affected test files. Fix failures before reporting.
@@ -61,6 +63,7 @@ Write or edit only the files in `files:`. Announce any extra file touched.
 
 ### Step 4 — Self-review
 Run `scripts/quality-gate.sh lint --fix`. Fix any violations before Step 5.
+Apply `review.md`'s "Clarity by Subtraction" rules to your change — no one-sided members (a field/flag/param with only a write or only a read site is dead; delete it), minimum abstraction. A pointer, not a per-field grep ritual.
 
 ### Step 5 — Verify done_when
 Execute the `done_when` criterion literally. On failure, stop immediately:
