@@ -29,6 +29,7 @@ from pydantic_ai.messages import (
 )
 
 from co_cli.config.core import DREAM_SNAPSHOTS_DIR
+from co_cli.config.tuning import BREAKER_PROBE_EVERY, BREAKER_TRIP
 from co_cli.context._compaction_boundaries import (
     CompactionBoundaries,
     TurnGroup,
@@ -53,6 +54,7 @@ from co_cli.context._http_error_classifier import is_context_overflow
 from co_cli.context._tool_result_markers import is_cleared_marker
 from co_cli.context.history_processors import strip_all_tool_returns
 from co_cli.context.summarization import (
+    SummarizerInputTooLargeError,
     effective_request_tokens,
     estimate_message_tokens,
     resolve_compaction_budget,
@@ -107,29 +109,20 @@ def _reset_thrash_state(ctx: RunContext[CoDeps]) -> None:
     ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
 
 
-_COMPACTION_BREAKER_TRIP: int = 3
-"""Consecutive summarization failures that trip the circuit breaker."""
-
-_COMPACTION_BREAKER_PROBE_EVERY: int = 10
-"""Once tripped, allow one LLM probe attempt every N blocked calls.
-First probe fires at skip_count == TRIP + PROBE_EVERY (i.e. 13), then every
-PROBE_EVERY counts thereafter (23, 33, …). A successful probe resets the counter.
-"""
-
-
 class CompactionFallbackReason(StrEnum):
     """Why a compaction pass degraded to a static marker instead of an LLM summary.
 
     Emitted as the ``reason`` on the ``compaction_fallback`` span event so a silent
     degradation (the 71.95s-scare failure mode) is attributable in ``co trace``
     rather than surfacing only as a log line. Each cause is distinct — a single
-    opaque reason would make all four look identical at triage.
+    opaque reason would make them all look identical at triage.
     """
 
     MODEL_ABSENT = "model_absent"
     CIRCUIT_BREAKER_OPEN = "circuit_breaker_open"
     SUMMARIZER_ERROR = "summarizer_error"
     EMPTY_SUMMARY = "empty_summary"
+    INPUT_TOO_LARGE = "input_too_large"
 
 
 def _emit_compaction_fallback(reason: CompactionFallbackReason) -> None:
@@ -157,10 +150,10 @@ def _summarization_gate_open(ctx: RunContext[CoDeps]) -> tuple[bool, bool]:
 
     count = ctx.deps.runtime.compaction_skip_count
     # skips_since_trip == 0 blocks the initial trip; probes fire every PROBE_EVERY skips after that
-    skips_since_trip = count - _COMPACTION_BREAKER_TRIP
-    if count < _COMPACTION_BREAKER_TRIP:
+    skips_since_trip = count - BREAKER_TRIP
+    if count < BREAKER_TRIP:
         return (True, False)
-    if skips_since_trip != 0 and skips_since_trip % _COMPACTION_BREAKER_PROBE_EVERY == 0:
+    if skips_since_trip != 0 and skips_since_trip % BREAKER_PROBE_EVERY == 0:
         return (True, True)
     log.warning("Compaction: circuit breaker active (count=%d), static marker", count)
     _emit_compaction_fallback(CompactionFallbackReason.CIRCUIT_BREAKER_OPEN)
@@ -243,19 +236,24 @@ async def _gated_summarize_or_none(
     *,
     focus: str | None,
     prior_summary: str | None = None,
-) -> str | None:
-    """Run the summarizer if the gate is open, else return None.
+) -> tuple[str | None, bool]:
+    """Run the summarizer if the gate is open; return ``(summary_or_none, input_too_large)``.
 
     Fires the user-visible "Compacting conversation..." status callback once
     the gate is confirmed open (so static-marker / model-absent paths stay
     silent). Resets ``compaction_skip_count`` on a valid (non-empty) summary,
     and falls through to a None return when the summarizer raises or returns
     empty. Lets ``asyncio.CancelledError`` propagate.
+
+    The second tuple element is True only on the ``SummarizerInputTooLargeError``
+    bail — a *deliberate* degrade that does not erode the circuit breaker. The
+    caller uses it to report a non-failure status, distinct from a genuine
+    ``SUMMARIZER_ERROR`` (which leaves it False).
     """
     gate_open, is_probe = _summarization_gate_open(ctx)
     if not gate_open:
         ctx.deps.runtime.compaction_skip_count += 1
-        return None
+        return None, False
     if is_probe:
         log.info(
             "Compaction: circuit breaker probe (count=%d)", ctx.deps.runtime.compaction_skip_count
@@ -268,13 +266,20 @@ async def _gated_summarize_or_none(
         summary_text = await summarize_dropped_messages(
             ctx, dropped, focus=focus, prior_summary=prior_summary
         )
+    except SummarizerInputTooLargeError:
+        log.warning(
+            "Compaction: summarizer input exceeds the window — static marker, breaker untouched",
+            exc_info=True,
+        )
+        _emit_compaction_fallback(CompactionFallbackReason.INPUT_TOO_LARGE)
+        return None, True
     except Exception:
         log.warning(
             "Compaction summarization failed — falling back to static marker", exc_info=True
         )
         _emit_compaction_fallback(CompactionFallbackReason.SUMMARIZER_ERROR)
         ctx.deps.runtime.compaction_skip_count += 1
-        return None
+        return None, False
     if not _is_valid_summary(summary_text):
         log.warning(
             "Compaction summarizer returned empty output — counting as failure (count=%d)",
@@ -282,9 +287,9 @@ async def _gated_summarize_or_none(
         )
         _emit_compaction_fallback(CompactionFallbackReason.EMPTY_SUMMARY)
         ctx.deps.runtime.compaction_skip_count += 1
-        return None
+        return None, False
     ctx.deps.runtime.compaction_skip_count = 0
-    return summary_text
+    return summary_text, False
 
 
 def _snapshot_and_kick_review(ctx: RunContext[CoDeps], messages: list[ModelMessage]) -> None:
@@ -306,7 +311,7 @@ def _snapshot_and_kick_review(ctx: RunContext[CoDeps], messages: list[ModelMessa
     deps = ctx.deps
     if deps.runtime.skip_compaction_snapshot:
         return
-    if not messages or not deps.config.skills.review_enabled or deps.model is None:
+    if not messages or not deps.config.memory.review_enabled or deps.model is None:
         return
     session_id = deps.session.session_path.stem if deps.session.session_path else ""
     if not session_id:
@@ -333,7 +338,7 @@ async def compact_messages(
     *,
     focus: str | None = None,
     summarize: bool = True,
-) -> tuple[list[ModelMessage], str | None]:
+) -> tuple[list[ModelMessage], str | None, bool]:
     """Compact ``messages[head_end:tail_start]`` into a marker; assemble result.
 
     Slices by ``bounds`` and assembles ``head | marker | [todo_snapshot] |
@@ -344,9 +349,11 @@ async def compact_messages(
     ``prior_summary`` slot; when ``summarize`` is False, the summarizer is skipped
     entirely
     and ``summary_text`` stays None, driving ``build_compaction_marker`` down
-    its static-marker branch (no LLM call). Returns ``(result, summary_text)``;
-    ``summary_text`` is None when the summarizer fell back to a static marker
-    *or* when ``summarize=False`` forced the static path.
+    its static-marker branch (no LLM call). Returns
+    ``(result, summary_text, input_too_large)``; ``summary_text`` is None when the
+    summarizer fell back to a static marker *or* when ``summarize=False`` forced
+    the static path. ``input_too_large`` is True only on the pre-flight fit-guard
+    bail — a deliberate degrade the caller reports as a non-failure.
 
     Does NOT write runtime — the caller commits via ``commit_compaction`` as
     its last step (Task-3 invariant: any exception before commit leaves
@@ -360,11 +367,12 @@ async def compact_messages(
     dropped = messages[head_end:tail_start]
     tail = messages[tail_start:]
     body, prior_summary = _partition_dropped(dropped)
-    summary_text = (
-        await _gated_summarize_or_none(ctx, body, focus=focus, prior_summary=prior_summary)
-        if summarize
-        else None
-    )
+    if summarize:
+        summary_text, input_too_large = await _gated_summarize_or_none(
+            ctx, body, focus=focus, prior_summary=prior_summary
+        )
+    else:
+        summary_text, input_too_large = None, False
     has_tail = len(tail) > 0
     marker = build_compaction_marker(len(dropped), summary_text, has_tail=has_tail)
     todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
@@ -374,7 +382,7 @@ async def compact_messages(
         *([todo_snapshot] if todo_snapshot is not None else []),
         *tail,
     ]
-    return result, summary_text
+    return result, summary_text, input_too_large
 
 
 def commit_compaction(
@@ -399,6 +407,7 @@ def _record_proactive_outcome(
     *,
     token_count: int,
     summary_skipped: bool = False,
+    input_too_large: bool = False,
 ) -> int:
     """Apply proactive-specific post-compaction policy; return the post-pass token count.
 
@@ -412,19 +421,21 @@ def _record_proactive_outcome(
     before ``commit_compaction`` leaves runtime untouched — single-writer
     atomicity for the "applied" fields.
 
-    The closing status callback has four cases. ``summary_skipped`` is True
-    only on the anti-thrash static fallback, where the summarizer was *never
-    run by design* — so it must NOT report "Summarizer failed". A successful
-    summary reports "Compacted."; a missing model reports unavailability; a
-    genuine summarizer failure (model present, summary came back None, not a
-    deliberate skip) keeps the "Summarizer failed" wording.
+    The closing status callback has five cases. Two are *deliberate* static
+    degrades that must NOT report "Summarizer failed": ``summary_skipped`` (the
+    anti-thrash fallback, summarizer never run by design) and ``input_too_large``
+    (the pre-flight fit guard bailed before the call — retrying won't help, and
+    it does not erode the breaker). Both report "Compacted (static marker).". A
+    successful summary reports "Compacted."; a missing model reports
+    unavailability; a genuine summarizer failure (model present, summary came
+    back None, not a deliberate degrade) keeps the "Summarizer failed" wording.
     """
     cfg = ctx.deps.config.compaction
 
     if (cb := ctx.deps.runtime.status_callback) is not None:
         if summary_text is not None:
             cb("Compacted.")
-        elif summary_skipped:
+        elif summary_skipped or input_too_large:
             cb("Compacted (static marker).")
         elif ctx.deps.model is None:
             cb("LLM compaction unavailable — used static marker.")
@@ -510,7 +521,7 @@ async def recover_overflow_history(
         return None
 
     # PATH 2: summarize, assemble, commit.
-    result, _ = await compact_messages(ctx, stripped, bounds, focus=None)
+    result, _, _ = await compact_messages(ctx, stripped, bounds, focus=None)
     commit_compaction(ctx, result)
     _reset_thrash_state(ctx)
     return result
@@ -672,7 +683,7 @@ async def proactive_window_processor(
         )
 
         focus = _resolve_proactive_focus(ctx, messages)
-        result, summary_text = await compact_messages(
+        result, summary_text, input_too_large = await compact_messages(
             ctx, messages, bounds, focus=focus, summarize=summarize
         )
         if summary_text is not None:
@@ -685,6 +696,7 @@ async def proactive_window_processor(
             summary_text,
             token_count=token_count,
             summary_skipped=not summarize,
+            input_too_large=input_too_large,
         )
         # No-progress guard: if the applied pass did not shrink the payload, a
         # re-fired identical pass would thrash forever. Escalate once to overflow

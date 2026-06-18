@@ -462,7 +462,7 @@ async def test_three_spills_under_threshold_classified_below_not_fallback(tmp_pa
 async def test_many_small_returns_emit_zero_spill_errors(tmp_path: Path):
     """Many ≤1500-char tool returns are not spill candidates: spill_errors stays 0.
 
-    Each return is below ``TOOL_RESULT_PREVIEW_CHARS`` (1500), so
+    Each return is below ``SPILL_PREVIEW_CHARS`` (1500), so
     ``spill_if_oversized`` would return it unchanged — formerly counted as a
     spill I/O error per candidate. With the size pre-filter these are excluded
     from the spillable set entirely, so the terminal reason is ``all_spilled``

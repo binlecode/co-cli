@@ -306,7 +306,7 @@ Compaction behavior:
 - token count is `effective_request_tokens` — the floor-inclusive realtime-local estimate (`deps.static_floor_tokens + estimate_message_tokens()`, where the message estimate counts `ToolCallPart.args` and `(dict, list)` content); no provider-reported floor (peer-aligned with hermes/openclaw). Adding the bootstrap-measured static-instruction + ALWAYS-schema floor keeps the trigger from undercounting live size by one floor (see [compaction.md](compaction.md) §1.5)
 - the budget is resolved by `resolve_compaction_budget()` in `context/summarization.py`: returns `deps.model_max_context_tokens` directly (Ollama probe result capped by `llm.max_context_tokens`, set at bootstrap)
 - when `deps.model` is absent (sub-agents, tests), it uses a static marker directly without incrementing the failure counter
-- a circuit breaker (`deps.runtime.compaction_skip_count`) trips at `_COMPACTION_BREAKER_TRIP` (3) consecutive failures; tripped state uses static markers but probes the LLM once every `_COMPACTION_BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
+- a circuit breaker (`deps.runtime.compaction_skip_count`) trips at `BREAKER_TRIP` (3) consecutive failures; tripped state uses static markers but probes the LLM once every `BREAKER_PROBE_EVERY` (10) skips — probe success resets the counter to 0
 - a `[dim]Compacting conversation...[/dim]` indicator is shown before the LLM call
 - successful history replacement sets `deps.runtime.compaction_applied_this_turn`, which later tells `_finalize_turn()` to persist into a child transcript instead of appending into the parent transcript
 

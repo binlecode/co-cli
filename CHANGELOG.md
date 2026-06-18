@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.410]
+
+Centralize the context-pipeline size-control constants, and finish the summarizer input fit guard (degrade label + sibling-test fixes).
+
+- **Constant centralization:** all 13 non-configurable size-control constants now live in `co_cli/config/tuning.py` under function-driven prefixes (`SUMMARY_*`, `BREAKER_*`, `BOUNDARY_*`, `EVICT_*`, `SPILL_*`, `ESTIMATE_*`), replacing scattered per-module definitions. Five formerly underscore-private names dropped their underscore on crossing the package boundary; three cross-concern renames (`COMPACTABLE_KEEP_RECENT`→`EVICT_KEEP_RECENT`, `TOOL_RESULT_PREVIEW_CHARS`→`SPILL_PREVIEW_CHARS`, `CHARS_PER_TOKEN`→`ESTIMATE_CHARS_PER_TOKEN`). Pure move+rename, zero behavior change.
+- **Fit-guard degrade label:** the `INPUT_TOO_LARGE` pre-flight fit-guard bail no longer reports the user-facing "Summarizer failed — used static marker." status — it is a deliberate, non-failure degrade and now reports "Compacted (static marker)." (same as the anti-thrash skip). Threaded via a new `input_too_large` element on `compact_messages`' return.
+- Spec `compaction.md` §3 constant tables + module map re-homed to `config/tuning.py`; §2.6 closing-status line updated; `core-loop.md` breaker refs renamed.
+
 ## [0.8.408]
 
 Add leaf-boundary enforcement tooling to workflow skills.

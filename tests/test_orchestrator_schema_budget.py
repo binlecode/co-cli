@@ -23,9 +23,10 @@ import pytest
 from co_cli.agent.core import build_native_toolset
 from co_cli.bootstrap.core import create_deps
 from co_cli.bootstrap.schema_budget import measure_always_schema_budget
+from co_cli.config.tuning import ESTIMATE_CHARS_PER_TOKEN
 from co_cli.context.assembly import build_base_instructions
 from co_cli.context.guidance import build_toolset_guidance
-from co_cli.context.tokens import CHARS_PER_TOKEN, estimate_text_tokens
+from co_cli.context.tokens import estimate_text_tokens
 from co_cli.personality.prompts.loader import load_soul_critique
 
 # Measured 2026-06-07 after defer-recall-and-skill-edit-tools (TASK A2): session_search,
@@ -109,7 +110,7 @@ async def test_static_floor_tokens_measured_at_bootstrap() -> None:
     instruction_tokens += estimate_text_tokens(build_toolset_guidance(deps.tool_catalog))
     if deps.config.personality:
         instruction_tokens += estimate_text_tokens(load_soul_critique(deps.config.personality))
-    expected = instruction_tokens + budget.total_chars // CHARS_PER_TOKEN
+    expected = instruction_tokens + budget.total_chars // ESTIMATE_CHARS_PER_TOKEN
 
     assert deps.static_floor_tokens > 0
     assert deps.static_floor_tokens == expected

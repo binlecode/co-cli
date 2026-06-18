@@ -17,17 +17,19 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
-from co_cli.context.summarization import (
+from co_cli.config.tuning import (
+    ESTIMATE_CHARS_PER_TOKEN,
     SUMMARY_BUDGET_CEIL,
     SUMMARY_BUDGET_FLOOR,
     SUMMARY_BUDGET_RATIO,
+)
+from co_cli.context.summarization import (
     _build_summarizer_prompt,
     effective_request_tokens,
     estimate_message_tokens,
     resolve_summary_budget,
     summarize_messages,
 )
-from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
@@ -256,7 +258,11 @@ def test_effective_request_tokens_default_floor_is_messages_only():
 
 def _messages_of_token_size(approx_tokens: int) -> list[ModelRequest]:
     """A single-message fixture whose estimate_message_tokens ≈ approx_tokens."""
-    return [ModelRequest(parts=[UserPromptPart(content="x" * (approx_tokens * CHARS_PER_TOKEN))])]
+    return [
+        ModelRequest(
+            parts=[UserPromptPart(content="x" * (approx_tokens * ESTIMATE_CHARS_PER_TOKEN))]
+        )
+    ]
 
 
 def test_resolve_summary_budget_clamps_to_floor_for_small_region():

@@ -12,9 +12,9 @@ from pydantic_ai.messages import (
 from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
+from co_cli.config.tuning import EVICT_KEEP_RECENT
 from co_cli.context.compaction import is_cleared_marker
 from co_cli.context.history_processors import (
-    COMPACTABLE_KEEP_RECENT,
     dedup_tool_results,
     evict_old_tool_results,
 )
@@ -127,7 +127,7 @@ def test_dedup_distinct_content_not_replaced():
 
 def test_evict_clears_oldest_when_over_keep_limit():
     """The oldest compactable return must be content-cleared once more than 5 exist."""
-    total = COMPACTABLE_KEEP_RECENT + 1
+    total = EVICT_KEEP_RECENT + 1
     messages = []
     for i in range(total):
         messages.extend(_file_read_exchange(f"call{i}", f"content{i} " * 20))
@@ -154,9 +154,9 @@ def test_evict_clears_oldest_when_over_keep_limit():
 
 
 def test_evict_keeps_all_when_at_limit():
-    """Exactly COMPACTABLE_KEEP_RECENT returns must all be kept — nothing evicted."""
+    """Exactly EVICT_KEEP_RECENT returns must all be kept — nothing evicted."""
     messages = []
-    for i in range(COMPACTABLE_KEEP_RECENT):
+    for i in range(EVICT_KEEP_RECENT):
         messages.extend(_file_read_exchange(f"call{i}", f"content{i} " * 20))
         messages.append(ModelResponse(parts=[TextPart(content="ok")]))
     messages.append(ModelRequest(parts=[UserPromptPart(content="pending")]))
@@ -175,7 +175,7 @@ def test_evict_keeps_all_when_at_limit():
 
 def test_evict_clears_unknown_tool_via_generic_fallback():
     """Unknown tool names follow the same recency policy as known ones (no whitelist)."""
-    total = COMPACTABLE_KEEP_RECENT + 1
+    total = EVICT_KEEP_RECENT + 1
     messages: list = []
     for i in range(total):
         messages.append(ModelRequest(parts=[UserPromptPart(content=f"call {i}")]))
@@ -222,7 +222,7 @@ def test_evict_protects_tool_returns_in_last_turn():
     """Tool returns in the last user turn must never be evicted regardless of count."""
     protected_content = "protected " * 30
     messages = []
-    for i in range(COMPACTABLE_KEEP_RECENT + 1):
+    for i in range(EVICT_KEEP_RECENT + 1):
         messages.extend(_file_read_exchange(f"old{i}", f"old{i} " * 20))
         messages.append(ModelResponse(parts=[TextPart(content="ok")]))
     messages.append(ModelRequest(parts=[UserPromptPart(content="current turn")]))

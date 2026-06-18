@@ -16,6 +16,7 @@ from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.agent.toolset import _CallSeamToolset
+from co_cli.config.tuning import SPILL_THRESHOLD_CHARS
 from co_cli.deps import (
     CoDeps,
     CoRuntimeState,
@@ -27,7 +28,6 @@ from co_cli.deps import (
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.tool_io import (
     PERSISTED_OUTPUT_TAG,
-    SPILL_THRESHOLD_CHARS,
     spill_if_oversized,
 )
 
@@ -64,9 +64,9 @@ def test_spill_large_content(tmp_path: Path):
 
 
 def test_force_spill_at_preview_size_unchanged(tmp_path: Path):
-    """force=True at exactly TOOL_RESULT_PREVIEW_CHARS=1_500 chars returns content unchanged.
+    """force=True at exactly SPILL_PREVIEW_CHARS=1_500 chars returns content unchanged.
 
-    The guard 'len(content) <= TOOL_RESULT_PREVIEW_CHARS' prevents spill when the
+    The guard 'len(content) <= SPILL_PREVIEW_CHARS' prevents spill when the
     resulting stub would be no smaller than the original content.
     """
     content = "x" * 1_500
@@ -76,7 +76,7 @@ def test_force_spill_at_preview_size_unchanged(tmp_path: Path):
 
 
 def test_force_spill_above_preview_size_spills(tmp_path: Path):
-    """force=True with 1_501 chars (just above TOOL_RESULT_PREVIEW_CHARS) must spill."""
+    """force=True with 1_501 chars (just above SPILL_PREVIEW_CHARS) must spill."""
     content = "x" * 1_501
     result = spill_if_oversized(content, tmp_path / "tool_results", "shell_exec", force=True)
     assert PERSISTED_OUTPUT_TAG in result

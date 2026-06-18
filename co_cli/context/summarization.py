@@ -27,8 +27,16 @@ from pydantic_ai.messages import (
 
 from co_cli.config.llm import cap_output_tokens
 from co_cli.config.observability import redact_text
+from co_cli.config.tuning import (
+    ESTIMATE_CHARS_PER_TOKEN,
+    SUMMARY_BUDGET_CEIL,
+    SUMMARY_BUDGET_FLOOR,
+    SUMMARY_BUDGET_RATIO,
+    SUMMARY_CAP_OVERSHOOT_RATIO,
+    SUMMARY_FIT_SAFETY_MARGIN,
+    SUMMARY_NOREASON_CEILING_FALLBACK,
+)
 from co_cli.context._timeouts import LLM_RUN_TIMEOUT_SECS
-from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.llm.call import llm_call
 from co_cli.observability.tracing import current_span
@@ -41,7 +49,7 @@ from co_cli.observability.tracing import current_span
 # length — a 5MB image is still a small, bounded number of vision tokens, so
 # counting the serialized bytes (~1.7M "tokens" for 5MB) would spuriously trigger
 # compaction / overflow-recovery. Held in tokens and re-inflated to chars below so
-# it survives the final `// CHARS_PER_TOKEN` division.
+# it survives the final `// ESTIMATE_CHARS_PER_TOKEN` division.
 _IMAGE_TOKEN_ESTIMATE = 1_000
 
 
@@ -69,7 +77,7 @@ def estimate_message_tokens(messages: list[ModelMessage]) -> int:
                     if isinstance(item, str):
                         total_chars += len(item)
                     elif isinstance(item, BinaryContent):
-                        total_chars += _IMAGE_TOKEN_ESTIMATE * CHARS_PER_TOKEN
+                        total_chars += _IMAGE_TOKEN_ESTIMATE * ESTIMATE_CHARS_PER_TOKEN
                     else:
                         total_chars += len(json.dumps(item, ensure_ascii=False))
             elif isinstance(content, dict):
@@ -78,40 +86,34 @@ def estimate_message_tokens(messages: list[ModelMessage]) -> int:
                 args = part.args_as_dict()
                 if args:
                     total_chars += len(json.dumps(args, ensure_ascii=False))
-    return total_chars // CHARS_PER_TOKEN
+    return total_chars // ESTIMATE_CHARS_PER_TOKEN
 
 
 # ---------------------------------------------------------------------------
 # Budget resolution
 # ---------------------------------------------------------------------------
 
-# Summary output budget — bounds the summarizer output proportionally to the
-# region it compresses, instead of letting it drift toward the flat noreason
-# ceiling (8192 on Ollama). hermes-informed (its _SUMMARY_RATIO=0.20,
-# _MIN_SUMMARY_TOKENS=2000, max_tokens=budget*1.3), with RATIO nudged up and
-# CEIL pulled down so the worst-case cap stays under co's 8192 noreason ceiling.
-# All tunable from traces (see resolve_summary_budget / summarize_messages) —
-# adjust the constants, not the mechanism.
-#
-# Aim the summary at ~1/4 of the compressed region.
-SUMMARY_BUDGET_RATIO = 0.25
-# Floor mirrors hermes _MIN_SUMMARY_TOKENS; high enough that the worst-case cap
-# (2000 * 1.3 = 2600) comfortably clears the fixed-section template scaffold plus
-# the two mandatory verbatim quotes (## Active Task, ## Next Step), so a small
-# region never truncates mid-structure (the Mode-B failure this guards against).
-SUMMARY_BUDGET_FLOOR = 2_000
-# Ceil pulled down from hermes' 12000 to fit co's 8192 ceiling: 6000 * 1.3 = 7800 < 8192.
-SUMMARY_BUDGET_CEIL = 6_000
-# Overshoot-tolerance cushion (not a bare cut-off margin — a margin would be
-# ~1.04-1.13): hard cap = budget * this. Deliberately loose because over-running
-# a summary target slightly is cheap while truncating a trailing section is not.
-# Tunable from traces (output_tokens / budget = overshoot); headroom to ~1.36
-# before CEIL * ratio reaches 8192.
-SUMMARY_CAP_OVERSHOOT_RATIO = 1.3
-# Defensive fallback for the noreason output ceiling when a future noreason
-# settings entry omits max_tokens (every current config carries it: Ollama 8192,
-# Gemini 16384). Matches the Ollama default so a missing entry never raises the cap.
-_NOREASON_CEILING_FALLBACK = 8_192
+# Summary output budget + cap/fit constants are centralized in config/tuning.py
+# (SUMMARY_* prefix) — they bound the summarizer output proportionally to the
+# region it compresses. Imported above; tune there, not here.
+
+
+class SummarizerInputTooLargeError(Exception):
+    """The assembled summarizer prompt won't fit the model context window.
+
+    Raised by ``summarize_messages`` *before* the provider call when the local
+    char/token estimate exceeds the window minus the reserved output and safety
+    margin. Caught distinctly by the compaction fallback so an oversized region
+    degrades to a static marker without counting against the circuit breaker —
+    retrying the same region won't help, so it is not a model failure.
+    """
+
+    def __init__(self, estimated_tokens: int, budget_tokens: int) -> None:
+        self.estimated_tokens = estimated_tokens
+        self.budget_tokens = budget_tokens
+        super().__init__(
+            f"Summarizer input ~{estimated_tokens} tokens exceeds window {budget_tokens}"
+        )
 
 
 def resolve_summary_budget(messages: list[ModelMessage]) -> int:
@@ -379,7 +381,9 @@ async def summarize_messages(
     ``settings_noreason``; only this summarizer call passes a capped override.
     """
     budget = resolve_summary_budget(messages)
-    base_ceiling = deps.model.settings_noreason.get("max_tokens", _NOREASON_CEILING_FALLBACK)
+    base_ceiling = deps.model.settings_noreason.get(
+        "max_tokens", SUMMARY_NOREASON_CEILING_FALLBACK
+    )
     cap = min(math.ceil(budget * SUMMARY_CAP_OVERSHOOT_RATIO), base_ceiling)
     # budget/cap land on the active parent span (e.g. compaction.proactive_check),
     # not the llm_call child span where output_tokens lives — they cannot share a
@@ -414,13 +418,24 @@ async def summarize_messages(
     else:
         user_message = f"TURNS TO SUMMARIZE:\n{serialized}"
 
+    instruction_str = f"{_SUMMARIZER_SYSTEM_PROMPT}\n\n{task_prompt}"
+    # Pre-flight fit guard — estimate the EXACT strings sent (instructions +
+    # user_message), reserve the output cap and a flat safety margin, and refuse
+    # an oversized region locally instead of discovering it via a 400 round-trip.
+    # serialized dominates, so the coarse char/ESTIMATE_CHARS_PER_TOKEN estimate is fine.
+    # Raised before the asyncio.timeout context: a local size check must not be
+    # wrapped in the LLM timeout.
+    assembled_tokens = (len(instruction_str) + len(user_message)) // ESTIMATE_CHARS_PER_TOKEN
+    if assembled_tokens + cap > deps.model_max_context_tokens - SUMMARY_FIT_SAFETY_MARGIN:
+        raise SummarizerInputTooLargeError(assembled_tokens, deps.model_max_context_tokens)
+
     # Needed only for the /compact command path, which has no outer run timeout.
     # On the proactive path the run timeout already caps this call.
     async with asyncio.timeout(LLM_RUN_TIMEOUT_SECS):
         summary = await llm_call(
             deps,
             user_message,
-            instructions=f"{_SUMMARIZER_SYSTEM_PROMPT}\n\n{task_prompt}",
+            instructions=instruction_str,
             model_settings=settings,
         )
     # Output-side redaction (defense-in-depth parity with hermes): the model may

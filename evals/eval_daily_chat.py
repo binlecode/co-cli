@@ -48,12 +48,13 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
+from co_cli.config.tuning import SPILL_THRESHOLD_CHARS
 from co_cli.context.orchestrate import run_turn
 from co_cli.daemons.dream._housekeeping import merge_memory
 from co_cli.daemons.dream._state import HousekeepingState
 from co_cli.memory.frontmatter import render_frontmatter
 from co_cli.memory.item import MemoryKindEnum
-from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG, SPILL_THRESHOLD_CHARS
+from co_cli.tools.tool_io import PERSISTED_OUTPUT_TAG
 
 
 @dataclass(frozen=True)

@@ -326,8 +326,8 @@ def _emit_tool_budget_span(
     spill_ratio: float,
     spill_threshold_tokens: int,
 ) -> None:
+    from co_cli.config.tuning import SPILL_THRESHOLD_CHARS
     from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
-    from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     span = current_span()
     span.set_attribute("budget.context_window_tokens", model_max_context_tokens)
@@ -371,8 +371,8 @@ async def create_deps(
 
     model_max_context_tokens, agent_vision_capable = _probe_model_ctx(config)
 
+    from co_cli.config.tuning import SPILL_THRESHOLD_CHARS
     from co_cli.tools.tool_call_limit import MAX_TOOL_CALLS_PER_MODEL_REQUEST
-    from co_cli.tools.tool_io import SPILL_THRESHOLD_CHARS
 
     spill_ratio = config.compaction.spill_ratio
     spill_threshold_tokens = int(spill_ratio * model_max_context_tokens)
@@ -472,9 +472,10 @@ async def create_deps(
     )
 
     from co_cli.bootstrap.schema_budget import measure_always_schema_budget
+    from co_cli.config.tuning import ESTIMATE_CHARS_PER_TOKEN
     from co_cli.context.assembly import build_base_instructions
     from co_cli.context.guidance import build_toolset_guidance
-    from co_cli.context.tokens import CHARS_PER_TOKEN, estimate_text_tokens
+    from co_cli.context.tokens import estimate_text_tokens
     from co_cli.personality.prompts.loader import load_soul_critique
 
     # Full delivered instruction floor — the three static builders that the
@@ -486,7 +487,9 @@ async def create_deps(
     if config.personality:
         instruction_tokens += estimate_text_tokens(load_soul_critique(config.personality))
     schema_budget = await measure_always_schema_budget(deps, native_toolset)
-    deps.static_floor_tokens = instruction_tokens + schema_budget.total_chars // CHARS_PER_TOKEN
+    deps.static_floor_tokens = (
+        instruction_tokens + schema_budget.total_chars // ESTIMATE_CHARS_PER_TOKEN
+    )
 
     return deps
 

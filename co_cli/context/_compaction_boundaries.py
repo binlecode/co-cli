@@ -18,6 +18,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from co_cli.config.tuning import BOUNDARY_MIN_RETAINED_TURN_GROUPS
 from co_cli.context.summarization import estimate_message_tokens
 
 
@@ -35,15 +36,6 @@ class TurnGroup:
 
 CompactionBoundaries = tuple[int, int, int]
 """(head_end, tail_start, dropped_count) — planner callers receive ``| None`` when no valid boundary exists."""
-
-
-_MIN_RETAINED_TURN_GROUPS: int = 1
-"""Minimum number of turn groups the planner must retain in the tail.
-
-Hardcoded correctness invariant — setting it to 0 breaks the planner.
-Not user-configurable. The last turn group is retained unconditionally
-even when its tokens alone exceed ``tail_fraction * budget``.
-"""
 
 
 def _make_turn_group(msgs: list[ModelMessage], start: int) -> TurnGroup:
@@ -140,10 +132,10 @@ def plan_compaction_boundaries(
     Algorithm:
       1. ``head_end = find_first_run_end(messages) + 1``
       2. ``groups = group_by_turn(messages)``; abort when
-         ``len(groups) < _MIN_RETAINED_TURN_GROUPS + 1``.
+         ``len(groups) < BOUNDARY_MIN_RETAINED_TURN_GROUPS + 1``.
       3. Walk groups from the end, accumulating token estimates. Stop BEFORE
          adding a group that would push accumulated tokens over ``tail_budget``,
-         UNLESS fewer than ``_MIN_RETAINED_TURN_GROUPS`` groups have been
+         UNLESS fewer than ``BOUNDARY_MIN_RETAINED_TURN_GROUPS`` groups have been
          accumulated. In that case the group is retained regardless.
       4. ``tail_start = accumulated_groups[0].start_index``.
       5. Abort when ``tail_start <= head_end`` (head/tail overlap — nothing to drop).
@@ -163,10 +155,10 @@ def plan_compaction_boundaries(
     step: ``group_by_turn`` splits at every ``UserPromptPart``, so the last
     group's ``start_index`` equals the latest user message index. The backward
     walk retains that group unconditionally on its first iteration due to
-    ``_MIN_RETAINED_TURN_GROUPS=1``, so ``tail_start <= last_user_idx`` always holds.
+    ``BOUNDARY_MIN_RETAINED_TURN_GROUPS=1``, so ``tail_start <= last_user_idx`` always holds.
 
     Shared between proactive compaction (``proactive_window_processor``) and
-    overflow recovery (``recover_overflow_history``). ``_MIN_RETAINED_TURN_GROUPS=1``
+    overflow recovery (``recover_overflow_history``). ``BOUNDARY_MIN_RETAINED_TURN_GROUPS=1``
     is a hardcoded correctness invariant: the last turn group is always kept even
     when its tokens alone exceed the tail budget.
     """
@@ -177,7 +169,7 @@ def plan_compaction_boundaries(
     head_end = first_run_end + 1
 
     groups = group_by_turn(messages)
-    if len(groups) < _MIN_RETAINED_TURN_GROUPS + 1:
+    if len(groups) < BOUNDARY_MIN_RETAINED_TURN_GROUPS + 1:
         return None
 
     usable_trigger = max(0, int(budget * compaction_ratio) - static_floor_tokens)
@@ -192,7 +184,7 @@ def plan_compaction_boundaries(
             break
         group_tokens = estimate_message_tokens(group.messages)
         if (
-            len(acc_groups) >= _MIN_RETAINED_TURN_GROUPS
+            len(acc_groups) >= BOUNDARY_MIN_RETAINED_TURN_GROUPS
             and acc_tokens + group_tokens > tail_budget
         ):
             break
@@ -203,7 +195,7 @@ def plan_compaction_boundaries(
         return None
 
     tail_start = acc_groups[0].start_index
-    # Last group is always retained by _MIN_RETAINED_TURN_GROUPS=1: the walk
+    # Last group is always retained by BOUNDARY_MIN_RETAINED_TURN_GROUPS=1: the walk
     # adds the final group unconditionally on its first iteration. Since
     # group_by_turn splits at every UserPromptPart, the latest user prompt
     # is structurally guaranteed to land in acc_groups[0] — no anchoring needed.

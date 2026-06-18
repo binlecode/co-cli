@@ -39,6 +39,11 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from co_cli.config.tuning import (
+    ESTIMATE_CHARS_PER_TOKEN,
+    EVICT_KEEP_RECENT,
+    SPILL_PREVIEW_CHARS,
+)
 from co_cli.context._compaction_boundaries import (
     _find_last_turn_start,
     plan_compaction_boundaries,
@@ -53,24 +58,12 @@ from co_cli.context.summarization import (
     estimate_message_tokens,
     resolve_compaction_budget,
 )
-from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.observability.tracing import current_span
 from co_cli.tools.tool_io import (
     PERSISTED_OUTPUT_TAG,
-    TOOL_RESULT_PREVIEW_CHARS,
     spill_if_oversized,
 )
-
-COMPACTABLE_KEEP_RECENT = 5
-"""Keep the N most-recent tool returns per tool name; clear older.
-
-Borrowed from ``fork-claude-code/services/compact/timeBasedMCConfig.ts:33``
-(``keepRecent: 5``). Not convergent across peers — codex, hermes, and
-opencode do not have per-tool recency retention. Not tuned specifically for
-co-cli's tool surface; revisit via ``evals/eval_compaction_quality.py`` if a
-retention/fidelity tradeoff becomes measurable.
-"""
 
 _CLEARED_PLACEHOLDER = "[tool result cleared]"
 """Last-resort fallback when ToolReturnPart.content is non-string (multimodal).
@@ -149,7 +142,7 @@ def _build_durable_call_ids(messages: list[ModelMessage], boundary: int) -> set[
     """Return tool_call_ids that will survive ``evict_old_tool_results``.
 
     A part is durable if it lives in the protected tail (``messages[boundary:]``)
-    or is among the ``COMPACTABLE_KEEP_RECENT`` most recent per tool_name in
+    or is among the ``EVICT_KEEP_RECENT`` most recent per tool_name in
     ``messages[:boundary]``. Used by ``dedup_tool_results`` to avoid emitting
     back-references that ``evict_old_tool_results`` will subsequently clear.
     """
@@ -165,7 +158,7 @@ def _build_durable_call_ids(messages: list[ModelMessage], boundary: int) -> set[
     seen_counts: dict[str, int] = {}
     for part in _iter_tool_returns_reversed(messages[:boundary]):
         count = seen_counts.get(part.tool_name, 0)
-        if count < COMPACTABLE_KEEP_RECENT:
+        if count < EVICT_KEEP_RECENT:
             durable.add(part.tool_call_id)
         seen_counts[part.tool_name] = count + 1
     return durable
@@ -216,12 +209,12 @@ def dedup_tool_results(
 
 
 def _build_keep_ids(older: list[ModelMessage]) -> set[int]:
-    """Reverse scan: collect ids of the COMPACTABLE_KEEP_RECENT most recent parts per tool."""
+    """Reverse scan: collect ids of the EVICT_KEEP_RECENT most recent parts per tool."""
     keep_ids: set[int] = set()
     seen_counts: dict[str, int] = {}
     for part in _iter_tool_returns_reversed(older):
         count = seen_counts.get(part.tool_name, 0)
-        if count < COMPACTABLE_KEEP_RECENT:
+        if count < EVICT_KEEP_RECENT:
             keep_ids.add(id(part))
         seen_counts[part.tool_name] = count + 1
     return keep_ids
@@ -352,7 +345,7 @@ def _spill_largest_first(
     spilled_count = 0
     spill_errors = 0
     for part in sorted(spillable, key=lambda p: len(p.content), reverse=True):
-        aggregate = starting_tokens - chars_freed // CHARS_PER_TOKEN
+        aggregate = starting_tokens - chars_freed // ESTIMATE_CHARS_PER_TOKEN
         if aggregate <= threshold:
             break
         old_content = part.content
@@ -372,7 +365,7 @@ def _spill_largest_first(
         )
         chars_freed += len(old_content) - len(new_content)
         spilled_count += 1
-    aggregate = starting_tokens - chars_freed // CHARS_PER_TOKEN
+    aggregate = starting_tokens - chars_freed // ESTIMATE_CHARS_PER_TOKEN
     return spilled_by_id, aggregate, spilled_count, spill_errors
 
 
@@ -437,7 +430,7 @@ def spill_largest_tool_results(
         for index, part in candidates
         if index < tail_start
         and not part.content.startswith(PERSISTED_OUTPUT_TAG)
-        and len(part.content) > TOOL_RESULT_PREVIEW_CHARS
+        and len(part.content) > SPILL_PREVIEW_CHARS
     ]
     tail_protected_count = sum(1 for index, _ in candidates if index >= tail_start)
 

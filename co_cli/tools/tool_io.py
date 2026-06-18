@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic_ai import ModelRetry
 from pydantic_ai.messages import ToolReturn
 
+from co_cli.config.tuning import SPILL_PREVIEW_CHARS, SPILL_THRESHOLD_CHARS
 from co_cli.fileio.atomic import atomic_write_text
 from co_cli.observability.tracing import current_span
 
@@ -43,8 +44,6 @@ log = logging.getLogger(__name__)
 # Result persistence
 # ---------------------------------------------------------------------------
 
-TOOL_RESULT_PREVIEW_CHARS = 1_500
-SPILL_THRESHOLD_CHARS = 4_000
 PERSISTED_OUTPUT_TAG = "<persisted-output>"
 PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
 
@@ -84,7 +83,7 @@ def spill_if_oversized(
     """Persist content to disk if oversized, returning a preview placeholder.
 
     If not forced and content length <= SPILL_THRESHOLD_CHARS, returns content unchanged.
-    If content length <= TOOL_RESULT_PREVIEW_CHARS, returns content unchanged regardless.
+    If content length <= SPILL_PREVIEW_CHARS, returns content unchanged regardless.
     Otherwise, writes content to a content-addressed file and returns an XML
     placeholder with tool name, file path, human-readable size, and a preview.
 
@@ -100,7 +99,7 @@ def spill_if_oversized(
     """
     if not force and len(content) <= SPILL_THRESHOLD_CHARS:
         return content
-    if len(content) <= TOOL_RESULT_PREVIEW_CHARS:
+    if len(content) <= SPILL_PREVIEW_CHARS:
         return content
 
     try:
@@ -110,7 +109,7 @@ def spill_if_oversized(
         if not file_path.exists():
             atomic_write_text(file_path, content, errors="replace")
 
-        preview, has_more = _generate_preview(content, TOOL_RESULT_PREVIEW_CHARS)
+        preview, has_more = _generate_preview(content, SPILL_PREVIEW_CHARS)
         elision = "\n..." if has_more else ""
 
         size_chars = len(content)

@@ -27,9 +27,8 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_COMPACTION_SUMMARY_TIMEOUT_SECS
 
+from co_cli.config.tuning import BREAKER_PROBE_EVERY, BREAKER_TRIP
 from co_cli.context.compaction import (
-    _COMPACTION_BREAKER_PROBE_EVERY,
-    _COMPACTION_BREAKER_TRIP,
     STATIC_MARKER_PREFIX,
     SUMMARY_MARKER_PREFIX,
     TODO_SNAPSHOT_PREFIX,
@@ -74,6 +73,28 @@ def _tight_settings():
     non-None and compaction can proceed.
     """
     return SETTINGS_NO_MCP
+
+
+def _summary_fit_settings():
+    """Settings for the success-path tests: a realistic window so the pre-flight fit
+    guard passes, with a low trigger ratio so the same small 320-token fixture still
+    fires compaction.
+
+    The fit guard requires ``window > assembled_prompt + reserved_cap + safety_margin``
+    (the margin alone is 2,000 tokens, so the legacy 200-token window can never admit a
+    real summary). Pairing an 8,192 window with ``compaction_ratio=0.03`` keeps the
+    threshold (~245) below the fixture's ~320 tokens, so the trigger fires and the
+    dropped region stays small — the summary is the same cheap call it always was.
+    ``tail_fraction`` is dropped under the ratio to satisfy ``tail_fraction < ratio``.
+    """
+    base = SETTINGS_NO_MCP
+    return base.model_copy(
+        update={
+            "compaction": base.compaction.model_copy(
+                update={"compaction_ratio": 0.03, "tail_fraction": 0.01}
+            )
+        }
+    )
 
 
 def _above_threshold_messages() -> list:
@@ -434,8 +455,8 @@ def test_gate_open_before_trip(count: int) -> None:
 @pytest.mark.parametrize(
     "count",
     [
-        _COMPACTION_BREAKER_TRIP,
-        _COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY - 1,
+        BREAKER_TRIP,
+        BREAKER_TRIP + BREAKER_PROBE_EVERY - 1,
     ],
 )
 def test_gate_closed_after_trip(count: int) -> None:
@@ -455,7 +476,7 @@ def test_gate_open_at_first_probe() -> None:
     Deletion regression: would not detect permanent blocking (probe window
     silently skipped), leaving the LLM permanently bypassed after any 3 failures.
     """
-    ctx, _ = _gate_ctx(_COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY)
+    ctx, _ = _gate_ctx(BREAKER_TRIP + BREAKER_PROBE_EVERY)
     gate_open, _ = _summarization_gate_open(ctx)
     assert gate_open is True
 
@@ -463,8 +484,8 @@ def test_gate_open_at_first_probe() -> None:
 @pytest.mark.parametrize(
     "count",
     [
-        _COMPACTION_BREAKER_TRIP + _COMPACTION_BREAKER_PROBE_EVERY + 1,
-        _COMPACTION_BREAKER_TRIP + 2 * _COMPACTION_BREAKER_PROBE_EVERY - 1,
+        BREAKER_TRIP + BREAKER_PROBE_EVERY + 1,
+        BREAKER_TRIP + 2 * BREAKER_PROBE_EVERY - 1,
     ],
 )
 def test_gate_closed_between_probes(count: int) -> None:
@@ -484,7 +505,7 @@ def test_gate_open_at_second_probe() -> None:
     Deletion regression: would not detect the probe cadence stopping after one
     cycle, leaving the LLM permanently blocked after the first probe fails.
     """
-    ctx, _ = _gate_ctx(_COMPACTION_BREAKER_TRIP + 2 * _COMPACTION_BREAKER_PROBE_EVERY)
+    ctx, _ = _gate_ctx(BREAKER_TRIP + 2 * BREAKER_PROBE_EVERY)
     gate_open, _ = _summarization_gate_open(ctx)
     assert gate_open is True
 
@@ -503,9 +524,9 @@ async def test_successful_compaction_resets_skip_count() -> None:
     deps = CoDeps(
         shell=ShellBackend(),
         model=_TIGHT_MODEL,
-        config=_tight_settings(),
+        config=_summary_fit_settings(),
         session=CoSessionState(),
-        model_max_context_tokens=200,
+        model_max_context_tokens=8192,
     )
     # Below trip threshold (< 3) so the gate remains open for the LLM call.
     deps.runtime.compaction_skip_count = 2
@@ -595,9 +616,9 @@ async def test_closing_callback_fires_compacted_on_success() -> None:
     deps = CoDeps(
         shell=ShellBackend(),
         model=_TIGHT_MODEL,
-        config=_tight_settings(),
+        config=_summary_fit_settings(),
         session=CoSessionState(),
-        model_max_context_tokens=200,
+        model_max_context_tokens=8192,
     )
     captured: list[str] = []
     deps.runtime.status_callback = captured.append
@@ -651,7 +672,7 @@ async def test_closing_callback_fires_failed_when_breaker_tripped() -> None:
         session=CoSessionState(),
         model_max_context_tokens=200,
     )
-    deps.runtime.compaction_skip_count = _COMPACTION_BREAKER_TRIP
+    deps.runtime.compaction_skip_count = BREAKER_TRIP
     captured: list[str] = []
     deps.runtime.status_callback = captured.append
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
@@ -837,7 +858,7 @@ async def test_prior_summary_partitioned_into_dedicated_slot() -> None:
         ),
     )
     ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
-    result, summary_text = await compact_messages(ctx, messages, (1, 5, 4), summarize=False)
+    result, summary_text, _ = await compact_messages(ctx, messages, (1, 5, 4), summarize=False)
 
     assert summary_text is None
     assert result[0] is head

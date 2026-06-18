@@ -47,12 +47,14 @@ from pydantic_ai.messages import (
 
 from co_cli.config.llm import cap_output_tokens
 from co_cli.config.observability import redact_text
+from co_cli.config.tuning import (
+    SUMMARY_CAP_OVERSHOOT_RATIO,
+    SUMMARY_NOREASON_CEILING_FALLBACK,
+)
 from co_cli.context.summarization import (
-    _NOREASON_CEILING_FALLBACK,
     _PRIOR_SUMMARY_CLAUSE,
     _SUMMARIZE_PROMPT,
     _SUMMARIZER_SYSTEM_PROMPT,
-    SUMMARY_CAP_OVERSHOOT_RATIO,
     _length_priority_tail,
     resolve_summary_budget,
     serialize_messages,
@@ -117,7 +119,9 @@ async def _summarize_with_template(
     — the A/B lever.
     """
     budget = resolve_summary_budget(messages)
-    base_ceiling = deps.model.settings_noreason.get("max_tokens", _NOREASON_CEILING_FALLBACK)
+    base_ceiling = deps.model.settings_noreason.get(
+        "max_tokens", SUMMARY_NOREASON_CEILING_FALLBACK
+    )
     cap = min(math.ceil(budget * SUMMARY_CAP_OVERSHOOT_RATIO), base_ceiling)
     task_prompt = _assemble_task_prompt(template, budget, prior_summary=prior_summary)
     patterns = deps.config.observability.redact_patterns

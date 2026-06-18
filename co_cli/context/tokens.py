@@ -1,8 +1,8 @@
-"""Shared token-estimation constants and helpers."""
+"""Shared token-estimation helper."""
 
-CHARS_PER_TOKEN = 4  # fast proxy, not a tokenizer
+from co_cli.config.tuning import ESTIMATE_CHARS_PER_TOKEN
 
 
 def estimate_text_tokens(text: str) -> int:
     """Rough token estimate for a raw string: ~4 chars/token."""
-    return len(text) // CHARS_PER_TOKEN
+    return len(text) // ESTIMATE_CHARS_PER_TOKEN
