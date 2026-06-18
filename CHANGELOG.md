@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.398]
+
+Conformance cleanup — dead-code removal surfaced by an audit pass, plus the dev-workflow skill lessons that audit produced.
+
+- Removed dead code: `RuntimeCheckResult.summary_lines` (`check.py`), `REVIEW_TIMEOUT_SECONDS` (`config/skills.py`), and the unused `_VERSION`/`project_info` import (`main.py`).
+- `personality.md` doc-sync: documents the `personality = None` (disabled-by-default) behavior already shipped in code.
+- `audit-conformance` skill: dead-code (R10) supersedes lifecycle remedies; every DELETE proposal goes through a blind cold-read refuter; repeated-workaround detection across completed-plan verdicts is a top-priority finding.
+- `review-impl` skill: corrected phantom `co status`/`co logs` behavioral checks to `co --help`/`co tail`, added live-log-tail guidance for the full-suite phase.
+
 ## [0.8.396]
 
 Recall degradation is now visible to both the operator and the model. A hybrid query can silently answer in a weaker mode — embedder unreachable (semantic leg lost → FTS-only) or reranker unavailable (breaker open / TEI fails → the `rerank_score_floor` never runs) — and previously nothing surfaced that the answer was degraded.

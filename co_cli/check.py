@@ -44,18 +44,6 @@ class RuntimeCheckResult:
     mcp_probes: list[tuple[str, "CheckResult"]] = field(default_factory=list)  # bare server names
     component_status: list[dict[str, str]] = field(default_factory=list)
 
-    def summary_lines(self) -> list[str]:
-        lines: list[str] = []
-        for f in self.findings:
-            severity = f.get("severity", "error")
-            icon = "✗" if severity == "error" else "⚠"
-            lines.append(f"  {icon} {f['component']} — {f['issue']}")
-        for fb in self.fallbacks:
-            lines.append(f"  · {fb}")
-        if not lines:
-            lines.append("  ✓ All systems operational")
-        return lines
-
 
 @dataclass
 class CheckResult:

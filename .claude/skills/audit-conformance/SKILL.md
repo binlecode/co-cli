@@ -73,7 +73,7 @@ Every finding maps to one of these. Source of truth: `.agent_docs/review.md` *Cl
    uv run python tmp/check_inits.py                                  # emits only truly-populated __init__.py
    ```
 
-   R8's `\b_old\b` matters: a bare `_old\b` flags the local `t_old` in `tools/files/write.py`. The `__init__` check must use `ast` — a line-counter counts docstring body lines as code and false-flags docstring-only packages (proven on `index`/`session`/`personality.prompts`).
+   Proof anchors for the two non-obvious filters above: the unbounded `_old` flags the local `t_old` in `tools/files/write.py`; a line-counter `__init__` check false-flags the docstring-only `index`/`session`/`personality.prompts` packages.
 
 ---
 
@@ -101,10 +101,11 @@ Subagents systematically **over-flag** R1/R3/R10 (a "one-sided" field is often r
 
 The orchestrator (not a subagent) does this — keeps source-verification and cross-cutting judgment in one place.
 
-1. **Merge + dedup** all four tables. One physical violation = one row even if it trips two rules; note both.
+1. **Merge + dedup** all four tables. One physical violation = one row even if it trips two rules; note both. **Dead (R10) dominates a lifecycle finding:** before proposing a call-time-defer fix for an R6/R7 row, grep the symbol's reader count — zero readers reclassifies it to R10 and *deletion supersedes the lifecycle remedy* (proven: `_VERSION` flagged R6 import-time side effect was fully dead — deletion was the stronger fix than deferring to call time).
 2. **Re-verify each row against source.** Drop any the orchestrator cannot confirm by reading the cited line. Per `feedback_ground_mechanism_claims_in_source`, no membership/visibility/"dead" claim ships unread.
+   - **Every DELETE/REMOVE proposal (R1/R3/R10) goes through a blind cold-read subagent**, not just orchestrator self-check. The orchestrator aggregated the findings and carries each one's framing — it confirms what it already believes. Spawn one `Read, Grep` subagent, hand it the merged removal candidates **with verdicts stripped** (claim + `file:line` only), instruct it to default-to-refute and find any reader/caller/test/serialization/re-export that disqualifies "dead." Only survivors enter the plan. (Empirically this flips a large fraction: one round refuted 4 of 9 — a write-only field a test reads, a "dead" function that was a live public re-export, two fields whose source is read but propagated copy is not.)
 3. **Prioritize — do not dump the whole backlog into one plan.** A whole-codebase audit on an eroded tree finds many violations; an unscoped 200-item plan never ships. Rank by:
-   - **Recurrence class first.** A violation *class* that recurs (R5 underscore leaks ×N, R4 back-edges ×N, stale imports ×N) is the highest-value target — fixing the class structurally (relocate the shared helper) prevents the whole family. Cross-check `git log` for the same fix-commit class repeating.
+   - **Recurrence class first.** A violation *class* that recurs (R5 underscore leaks ×N, R4 back-edges ×N, stale imports ×N) is the highest-value target — fixing the class structurally (relocate the shared helper) prevents the whole family. Cross-check `git log` for the same fix-commit class repeating, **and `rg` completed-plan verdicts for a repeated manual workaround** (`rg -n "is not a command|no such command|N/A —|skill.*template|had to substitute" docs/exec-plans/completed/`). A workaround repeated across ≥3 delivery verdicts is a rule/template defect forcing accretion — invisible to a `co_cli/` scan and to `git diff`, and a top-priority finding (it graduates an enforcement tier per `feedback_rule_enforcement_tiers`). Proven: a phantom `co status` in a skill template generated ~50 repeated disclaimers before anyone fixed the template.
    - **Then severity:** boundary/visibility inversions (R4/R5) and swallowed user-visible errors (R12) over cosmetic naming (R9).
    - **Cap the plan** at one coherent refactoring theme (e.g. "collapse the `index`→`agent` back-edges + the helpers that force them"). Defer the rest to a `## Deferred backlog` section in the plan, with counts.
 4. **Write `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-rules-conformance-cleanup.md`** using the standard exec-plan sections (`.agent_docs/spec-conventions.md`). Each task:

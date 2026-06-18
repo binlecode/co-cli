@@ -52,7 +52,6 @@ from co_cli.display.core import (
     set_theme,
 )
 from co_cli.observability.setup import setup_observability
-from co_cli.project_info import project_info
 from co_cli.session.browser import extract_title
 from co_cli.session.persistence import persist_session_history
 from co_cli.session.review_kick import write_review_kick
@@ -64,8 +63,6 @@ from co_cli.tools.vision.intake import (
     detect_lone_image_path,
     read_image,
 )
-
-_VERSION = project_info().version
 
 
 def _setup_observability() -> None:

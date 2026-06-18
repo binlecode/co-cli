@@ -8,8 +8,9 @@ into the agent's static instructions at session start. No personality state is b
 model weights — everything is file-based, inspectable, and swappable via config.
 
 Three personalities ship: `finch` (preparation-first mentor), `jeff` (warm collaborator),
-`tars` (direct operator — default). Each personality lives in its own subdirectory under
-`co_cli/personality/prompts/souls/{role}/`.
+`tars` (direct operator). The personality layer is **disabled by default** (`personality = None`);
+set `personality` to one of the role names to enable it. Each personality lives in its own
+subdirectory under `co_cli/personality/prompts/souls/{role}/`.
 
 Personality enters the agent via the static prompt — set once at construction and immutable for the session. The model has no tool path to query personality content; canon is doctrine, not memory.
 
@@ -193,7 +194,7 @@ pending. Scenes are each <1KB and indexed whole, so the future injector can retu
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `personality` | `CO_PERSONALITY` | `tars` | Active personality role; must be in `VALID_PERSONALITIES` (auto-discovered from `souls/`) |
+| `personality` | `CO_PERSONALITY` | `None` (disabled) | Active personality role; `None`/`none` disables the layer, else must be in `VALID_PERSONALITIES` (auto-discovered from `souls/`) |
 
 Personality is validated at config load time (`_validate_personality_name` field validator)
 and again at startup via `validate_personality_files()` which issues non-blocking warnings

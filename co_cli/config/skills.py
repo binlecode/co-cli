@@ -13,7 +13,6 @@ SKILLS_ENV_MAP: dict[str, str] = {
 }
 
 REVIEW_MAX_ITERATIONS: int = 8
-REVIEW_TIMEOUT_SECONDS: int = 120
 
 
 class SkillsSettings(BaseModel):

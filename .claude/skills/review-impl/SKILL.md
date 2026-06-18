@@ -146,6 +146,7 @@ For each blocking finding, in order:
 3. **Re-verify `done_when`** for the affected task after the fix.
 4. **Re-run tests scoped to the affected file:**
    ```
+   mkdir -p .pytest-logs
    uv run pytest <affected_test_file> -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-fix-verify.log
    ```
 5. Loop until all blocking findings are resolved or escalated.
@@ -154,11 +155,13 @@ For each blocking finding, in order:
 
 ## Phase 5 — Full Test Suite with Mandatory RCA
 
-Run the full test suite:
+Run the full test suite (`pyproject.toml` `addopts` already supplies `-x --durations=0`, so the run halts at the first failure):
 ```
 mkdir -p .pytest-logs
 uv run pytest -v 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-review-impl.log
 ```
+
+**Tail the log live** — do not block silently on the suite. The harness emits a per-test `outcome=… | duration=…s` line; watch `duration` to catch a stalled or slow real-LLM call early and fail fast (`testing.md` run-logs policy). A call that balloons only in the full suite but is normal in isolation is cold-load/contention — diagnose, never raise a timeout to absorb it.
 
 **Any failure = stop immediately. Do not proceed. Do RCA:**
 
@@ -208,14 +211,17 @@ Fix anything found. This catches what sub-agents and fix loops leave behind.
 Run the system and confirm user-visible behavior:
 
 ```bash
-uv run co status          # always — confirms system starts and health checks pass
-uv run co chat            # if chat loop or tool behavior changed — brief interaction
-uv run co logs            # if observability or tracing changed
+uv run co --help          # always — boot smoke: confirms the import graph + bootstrap load with no LLM cost
+uv run co tail            # if observability or tracing changed (snapshot one trace: uv run co trace <trace_id>)
 ```
+
+The CLI subcommands are `chat`, `tail`, `trace`, `dream`, `google` — there is no `co status`/`co logs`/`co health` command. Health checks live behind the `/status` slash command **inside** `co chat`, not a non-interactive subcommand.
+
+`co --help` is the always-run boot smoke because it exercises the full import + bootstrap graph at zero LLM cost. `co chat` is an interactive LLM REPL — do not treat a chat turn as a gating check. When behavior under test is LLM-mediated (tool selection, prompt assembly, agent loop), verify it via the task's eval or a direct-call repro and mark the chat interaction non-gating in the verdict.
 
 For each run:
 - Confirm it starts without error
-- Exercise the specific changed behavior from the task spec
+- Exercise the specific changed behavior from the task spec via the relevant subcommand or eval/repro
 - Confirm output matches the spec — not just "no crash"
 
 **Verify `success_signal`:** For each task with a non-N/A `success_signal`, confirm the stated user-observable outcome during behavioral verification. This is not a second `done_when` — it is a smoke check that the delivered feature produces the effect the user would notice. Record the result in the Behavioral Verification section of the verdict (e.g. "`success_signal` verified: user sees X when Y").
@@ -256,8 +262,8 @@ _(If no issues found: "No issues found.")_
 - Log: `.pytest-logs/<timestamp>-review-impl.log`
 
 ### Behavioral Verification
-- `uv run co status`: ✓ healthy
-- `uv run co chat`: ✓ <what was verified>
+- `uv run co --help`: ✓ boots (import + bootstrap graph loads)
+- <subcommand or eval/repro>: ✓ <what was verified> (LLM-mediated behavior verified via eval/repro, chat non-gating)
 _(or: "No user-facing changes — skipped.")_
 
 ### Overall: PASS / ESCALATE
