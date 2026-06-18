@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.402]
+
+Summarizer fidelity verify-and-retry — a deterministic content backstop on compaction summaries. After the first summary, high-signal identifiers (file/dir paths, `path:line` refs, URLs, hex hashes, error-class names + `Traceback`, quoted spans) are extracted from the already-redacted source and checked for byte-substring survival; if the missing fraction exceeds `FIDELITY_MISS_THRESHOLD`, the summarizer is re-prompted exactly once with the dropped values as feedback and the better pass is kept.
+
+- `_verify_and_retry` lives in `summarization.py`, shared by production (`summarize_messages`) and the fidelity eval; at most +1 LLM call per compaction, degrade-safe (a raising retry returns the first summary), and orthogonal to the anti-thrash / no-progress / circuit-breaker guards.
+- Output-side credential redaction added on the accepted summary (`redact_text`, last) — two-sided redaction parity with hermes.
+- OTEL span attributes `co.compaction.fidelity.*` (identifiers extracted/missing, retry fired, feedback truncated, accepted-which, retry error) for trace-driven threshold tuning.
+- Eval (`eval_summarizer_fidelity.py`) now captures the first-pass summary separately to report single-pass survival vs. retry fail→pass lift; spec synced (`compaction.md` §2.6/2.9/2.10).
+
 ## [0.8.400]
 
 Conformance cleanup — timeout/duration identifiers now carry their `_seconds` unit suffix (R9 naming drift), closing the unit-suffix drift class across the shell + MCP surfaces.

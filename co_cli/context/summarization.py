@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
+import re
+from collections.abc import Awaitable, Callable
 
 from pydantic_ai.messages import (
     BinaryContent,
@@ -32,6 +35,8 @@ from co_cli.context.tokens import CHARS_PER_TOKEN
 from co_cli.deps import CoDeps
 from co_cli.llm.call import llm_call
 from co_cli.observability.tracing import current_span
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Token estimation
@@ -348,6 +353,140 @@ def _build_summarizer_prompt(
     return "".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Fidelity verify-and-retry — content backstop on the summarizer output
+# ---------------------------------------------------------------------------
+
+# After the first summary, high-signal identifiers (paths, path:line refs, URLs,
+# hashes, error-class names, quoted spans) are extracted from the already-redacted
+# source and checked for byte-substring survival in the summary. A retry fires ONCE
+# when the missing fraction EXCEEDS this threshold. Tolerance (not openclaw's strict
+# every-identifier) so benign paraphrase does not cause retry-thrash. Trace-tunable
+# from the co.compaction.fidelity.* span attributes — adjust the constant, not the
+# mechanism.
+FIDELITY_MISS_THRESHOLD = 0.34
+# Upper bound on missing identifiers folded into the retry feedback, so a long
+# missing list cannot itself blow the summary output cap (the retry reuses the
+# identical cap). Named beside FIDELITY_MISS_THRESHOLD per the constant-style
+# convention (cf. SUMMARY_CAP_OVERSHOOT_RATIO).
+FIDELITY_FEEDBACK_MAX_IDENTIFIERS = 12
+
+# Conservative, high-signal identifier patterns. PATH_LIKE patterns carry no
+# capturing group (the full match is the identifier); QUOTED patterns capture the
+# inner span (group 1) so a phrase survives even if re-quoted with a different
+# quote char (mirrors the eval's verbatim-quote intent). Over-extraction costs a
+# spurious retry; under-extraction misses — tuned conservative, trace-observable.
+_PATH_LIKE_PATTERNS = [
+    re.compile(r"\b[\w./-]*\.py(?::\d+)?"),
+    re.compile(r"\b\w[\w.-]*(?:/[\w.-]+)+(?::\d+)?"),
+    re.compile(r"https?://\S+"),
+    re.compile(r"\b[0-9a-f]{7,40}\b"),
+    re.compile(r"\b\w+(?:Error|Exception)\b"),
+    re.compile(r"Traceback"),
+]
+_QUOTED_PATTERNS = [
+    re.compile(r"'([^']{1,80})'"),
+    re.compile(r'"([^"]{1,80})"'),
+]
+
+
+def _extract_identifiers(text: str) -> set[str]:
+    """Extract high-signal, hard-to-reconstruct identifiers from *text*.
+
+    Conservative by design: file/dir paths, ``path:line`` refs, URLs, hex hashes,
+    error-class names + literal ``Traceback``, and quoted command/correction spans.
+    The source is already credential-redacted (``serialize_messages`` applied
+    ``redact_text``), so a ``[REDACTED]`` secret is never an extraction candidate.
+    """
+    found: set[str] = set()
+    for pat in _PATH_LIKE_PATTERNS:
+        found.update(m for m in pat.findall(text) if m)
+    for pat in _QUOTED_PATTERNS:
+        found.update(m.strip() for m in pat.findall(text) if m.strip())
+    return found
+
+
+def _missing_identifiers(required: set[str], summary: str) -> set[str]:
+    """Identifiers from *required* that do NOT appear byte-verbatim in *summary*."""
+    return {ident for ident in required if ident not in summary}
+
+
+def _retry_warranted(required: set[str], summary: str) -> bool:
+    """True when the fraction of *required* identifiers missing from *summary*
+    exceeds the tolerance threshold. False on zero identifiers (the short-circuit
+    that keeps the retry from firing on identifier-free transcripts)."""
+    if not required:
+        return False
+    missing = _missing_identifiers(required, summary)
+    return len(missing) / len(required) > FIDELITY_MISS_THRESHOLD
+
+
+def _accept_better(first: str, retry: str, required: set[str]) -> str:
+    """Return whichever summary preserved MORE required identifiers; on a tie keep
+    *first* (avoid paying for a lateral move). Count-only — no criticality weighting."""
+    if len(_missing_identifiers(required, retry)) < len(_missing_identifiers(required, first)):
+        return retry
+    return first
+
+
+def _fidelity_feedback(missing: set[str]) -> str:
+    """Retry-prompt addendum naming the dropped identifiers to re-preserve, bounded
+    to the top ``FIDELITY_FEEDBACK_MAX_IDENTIFIERS`` so a long list cannot blow the
+    output cap."""
+    items = sorted(missing)[:FIDELITY_FEEDBACK_MAX_IDENTIFIERS]
+    bullets = "\n".join(f"- {item}" for item in items)
+    return (
+        "\n\nThe previous summary DROPPED these exact values. They cannot be "
+        "reconstructed downstream — reproduce every one verbatim in the appropriate "
+        "section:\n" + bullets
+    )
+
+
+async def _verify_and_retry(
+    serialized: str,
+    first_summary: str,
+    run_call: Callable[[str | None], Awaitable[str]],
+) -> str:
+    """Content backstop: if the first summary dropped too many high-signal
+    identifiers, re-prompt the summarizer exactly once and accept whichever result
+    preserved more. Returns RAW (unredacted) text — output redaction lives only in
+    the ``summarize_messages`` caller (adding it here would double-redact in
+    production and diverge the eval baseline).
+
+    ``run_call(feedback: str | None)`` performs one summarizer call with identical
+    settings/system-prompt/output-cap; ``feedback`` appends the missing-identifier
+    line to the task prompt. Degrade-safe: a raising retry returns the first summary.
+    Orthogonal to the anti-thrash / no-progress / circuit-breaker guards — a fidelity
+    miss is not a summarizer failure.
+    """
+    span = current_span()
+    required = _extract_identifiers(serialized)
+    span.set_attribute("co.compaction.fidelity.identifiers_extracted", len(required))
+    if not _retry_warranted(required, first_summary):
+        span.set_attribute("co.compaction.fidelity.retry_fired", False)
+        return first_summary
+
+    missing = _missing_identifiers(required, first_summary)
+    span.set_attribute("co.compaction.fidelity.identifiers_missing", len(missing))
+    span.set_attribute("co.compaction.fidelity.retry_fired", True)
+    span.set_attribute(
+        "co.compaction.fidelity.feedback_truncated",
+        len(missing) > FIDELITY_FEEDBACK_MAX_IDENTIFIERS,
+    )
+    try:
+        retry = await run_call(_fidelity_feedback(missing))
+    except Exception:
+        _log.warning("fidelity retry failed; keeping first summary", exc_info=True)
+        span.set_attribute("co.compaction.fidelity.retry_error", True)
+        return first_summary
+
+    accepted = _accept_better(first_summary, retry, required)
+    span.set_attribute(
+        "co.compaction.fidelity.accepted", "retry" if accepted is retry else "first"
+    )
+    return accepted
+
+
 async def summarize_messages(
     deps: CoDeps,
     messages: list[ModelMessage],
@@ -409,12 +548,24 @@ async def summarize_messages(
         )
     else:
         user_message = f"TURNS TO SUMMARIZE:\n{serialized}"
-    # Needed only for the /compact command path, which has no outer run timeout.
-    # On the proactive path the run timeout already caps this call.
-    async with asyncio.timeout(LLM_RUN_TIMEOUT_SECS):
-        return await llm_call(
-            deps,
-            user_message,
-            instructions=f"{_SUMMARIZER_SYSTEM_PROMPT}\n\n{task_prompt}",
-            model_settings=settings,
-        )
+
+    # One summarizer call, factored into a thunk so the fidelity backstop can re-run
+    # it with identical settings/system-prompt/output-cap (feedback appends the
+    # missing-identifier line to the task prompt). The asyncio.timeout is needed only
+    # for the /compact command path, which has no outer run timeout; on the proactive
+    # path the run timeout already caps the call.
+    async def run_call(feedback: str | None) -> str:
+        prompt = task_prompt if feedback is None else task_prompt + feedback
+        async with asyncio.timeout(LLM_RUN_TIMEOUT_SECS):
+            return await llm_call(
+                deps,
+                user_message,
+                instructions=f"{_SUMMARIZER_SYSTEM_PROMPT}\n\n{prompt}",
+                model_settings=settings,
+            )
+
+    first_summary = await run_call(None)
+    summary = await _verify_and_retry(serialized, first_summary, run_call)
+    # Output-side redaction last (defense-in-depth parity with hermes): the model
+    # may emit a credential-shaped string the input redaction never saw.
+    return redact_text(summary, deps.config.observability.redact_patterns)
