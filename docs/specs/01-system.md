@@ -67,16 +67,16 @@ This doc is the architectural map of `co-cli`: subsystems, core workflows, and t
 ### Package Dependency Direction (one-way rule)
 
 ```
-main → bootstrap → agent → tools / context / config / knowledge / memory
+main → bootstrap → agent → tools / context / memory / session / config  (· index / llm / observability infra)
 ```
 
 - `main` owns CLI entrypoints and REPL lifecycle; it calls into `bootstrap` and `agent`.
 - `bootstrap` assembles `CoDeps` at session start.
 - `agent` builds the foreground agent and its toolset from `CoDeps`.
-- `tools`, `context`, `config`, `knowledge`, `memory` are leaf packages — they do not import from each other or from `agent`, `bootstrap`, or `main`.
-- All cross-package communication goes through `CoDeps` (passed via `RunContext[CoDeps]` in tool calls), never through direct imports.
+- `tools`, `context`, `memory`, `session`, `config` — and the `index` / `llm` infra below them — are leaf packages: none imports *upward* from `agent`, `bootstrap`, or `main`.
+- Lateral communication between leaves defaults to `CoDeps` (passed via `RunContext[CoDeps]` in tool calls). The sanctioned direct-import exception is a tool module consuming a domain store's public surface (e.g. `tools/memory` → `memory`, `tools/session` → `session`); that wrapping is intentional public surface, not a boundary leak.
 
-Importing upward (e.g. a tool importing from `agent`) is a design error — fix the API.
+Importing upward (e.g. a tool importing from `agent`) is a design error — fix the API. Likewise, agent-loop and prompt-assembly orchestration belong at the `agent` layer, not inside a leaf: loop or domain logic accreted into a generic leaf such as `context/` is a module-home violation (`.agent_docs/review.md`) to be relocated to its owning layer.
 
 
 ## 2. Core Workflows
