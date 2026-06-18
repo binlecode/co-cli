@@ -36,7 +36,7 @@ from co_cli.config.tuning import (
     SUMMARY_FIT_SAFETY_MARGIN,
     SUMMARY_NOREASON_CEILING_FALLBACK,
 )
-from co_cli.context._timeouts import LLM_RUN_TIMEOUT_SECS
+from co_cli.context.timeouts import LLM_RUN_TIMEOUT_SECS
 from co_cli.deps import CoDeps
 from co_cli.llm.call import llm_call
 from co_cli.observability.tracing import current_span

@@ -42,7 +42,7 @@ from evals._timeouts import CALL_TIMEOUT_S
 from evals._trace import record_turn, response_text
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
-from co_cli.context.orchestrate import run_turn
+from co_cli.agent.orchestrate import run_turn
 
 _FILE_TOOL_NAMES = frozenset({"file_search", "file_read", "file_view", "file_find"})
 

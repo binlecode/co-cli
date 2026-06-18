@@ -1,6 +1,6 @@
 """Public compaction entry points: summarization, overflow recovery, pre-turn hygiene.
 
-Imported outside ``co_cli/context/`` (agent/, commands/, prompts/, orchestrate)
+Imported outside ``co_cli/context/`` (agent/, commands/, prompts/)
 so this module is package-public. Implementation details — turn grouping,
 boundary planning, marker builders, enrichment gathering, and history
 processors — live in package-private siblings and are re-exported here so

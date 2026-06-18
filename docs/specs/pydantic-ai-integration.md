@@ -55,11 +55,11 @@ co touches the SDK across **eight layers**:
 
 | # | Layer | SDK surface | co's seam | Home |
 |---|-------|-------------|-----------|------|
-| 1 | Agent + run lifecycle | `Agent`, `AgentRunResult`, `run_stream_events`, `run`, `.output`/`.usage()`/`.new_messages()`, `RunUsage`, `UsageLimits` | `build_orchestrator`, `build_task_agent`, `run_turn`, `run_standalone` | `agent/build.py`, `agent/run.py`, `context/orchestrate.py` |
+| 1 | Agent + run lifecycle | `Agent`, `AgentRunResult`, `run_stream_events`, `run`, `.output`/`.usage()`/`.new_messages()`, `RunUsage`, `UsageLimits` | `build_orchestrator`, `build_task_agent`, `run_turn`, `run_standalone` | `agent/build.py`, `agent/run.py`, `agent/orchestrate.py` |
 | 2 | Message/part types | `pydantic_ai.messages` (~22 part types, 6 stream events), `ModelMessagesTypeAdapter` | pattern-match / build / serialize / rewrite | `context/`, `observability/serialize.py`, `session/persistence.py` |
 | 3 | Toolset composition | `FunctionToolset`, `CombinedToolset`, `WrapperToolset`, `AbstractToolset`, `.filtered()`, `ToolDefinition`, `ToolsetTool` | `_CallSeamToolset`, `assemble_routing_toolset`, `_tool_visibility_filter` | `agent/toolset.py`, `agent/core.py` |
 | 4 | Tool registration + RunContext | `RunContext`, `prepare_tool_def`, `add_function` | `@agent_tool` registry → `ToolInfo` catalog; schema-budget measurement | `agent/toolset.py`, `deps.py`, `bootstrap/schema_budget.py` |
-| 5 | Deferred-tool / approval | `DeferredToolRequests`, `DeferredToolResults`, `ApprovalRequired`, `ToolApproved`, `ToolDenied` | approval loop drives pause/resume | `context/orchestrate.py`, `tools/approvals.py` |
+| 5 | Deferred-tool / approval | `DeferredToolRequests`, `DeferredToolResults`, `ApprovalRequired`, `ToolApproved`, `ToolDenied` | approval loop drives pause/resume | `agent/orchestrate.py`, `tools/approvals.py` |
 | 6 | Model wrapping + providers | `WrapperModel`, `StreamedResponse`, `ModelRequestParameters`, `ModelSettings`, `OpenAIChatModel`+`OllamaProvider`, `GoogleModel`+`GoogleProvider` | `SurrogateRecoveryModel`, `_RepairingStreamedResponse` | `llm/factory.py`, `llm/surrogate_recovery_model.py` |
 | 7 | MCP | `MCPServerSSE`/`Stdio`/`StreamableHTTP`, `.approval_required()` | `_SanitizingMCPServer`, `_SequentialMCPToolset`, `discover_mcp_tools` | `agent/mcp.py` |
 | 8 | Direct inference + exceptions | `pydantic_ai.direct.model_request`, `ModelHTTPError`, `ModelAPIError`, `UnexpectedModelBehavior`, `ModelRetry` | `llm_call`; orchestrator error taxonomy; tool retries | `llm/call.py`, `context/`, `tools/` |
@@ -159,7 +159,7 @@ call_tool(name, args, ctx, tool):
 
 The cap streak feeds the orchestrator's hard-stop (`TOOL_CAP_HARD_STOP_CONSECUTIVE`); the run boundary finalizes the last request's reset.
 
-### 2.5 Agent build & run lifecycle — `agent/build.py`, `context/orchestrate.py`, `agent/run.py`
+### 2.5 Agent build & run lifecycle — `agent/build.py`, `agent/orchestrate.py`, `agent/run.py`
 
 **Orchestrator** (singleton, built once, reused across turns):
 
@@ -205,7 +205,7 @@ request_stream(...) (async context manager):
 
 `_RepairingStreamedResponse` is a thin `StreamedResponse` proxy: it repairs the assembled `.get()` (everything else delegates via `__getattr__`). **This is the one remaining SDK-internal *assumption*:** the agent graph validates streamed tool args from `StreamedResponse.get()` (the private `_agent_graph` `_streaming_handler`), so repairing `.get()` lands the fix before validation. There is no public alternative; the assumption is pinned by a regression test (§6), so an SDK change that moves stream validation turns the test red instead of silently breaking the Ollama streaming path.
 
-### 2.7 Deferred-tool approval protocol — `context/orchestrate.py`
+### 2.7 Deferred-tool approval protocol — `agent/orchestrate.py`
 
 co drives the entire approval loop; the SDK contributes the pause (`DeferredToolRequests` output), the resume payload shape (`DeferredToolResults`), and the decision carriers.
 
@@ -323,7 +323,7 @@ Package-private (not callable cross-package, listed for the map): `_CallSeamTool
 | `co_cli/agent/build.py` | `build_orchestrator`, `build_task_agent` |
 | `co_cli/agent/run.py` | `run_standalone` task-agent runner with real `UsageLimits` |
 | `co_cli/bootstrap/schema_budget.py` | `measure_always_schema_budget` (synthetic `RunContext` + `prepare_tool_def`) |
-| `co_cli/context/orchestrate.py` | `run_turn`, stream-event loop, deferred-tool approval loop, error taxonomy |
+| `co_cli/agent/orchestrate.py` | `run_turn`, stream-event loop, deferred-tool approval loop, error taxonomy |
 | `co_cli/context/history_processors.py` | Pure part-rewriting processors (`_rewrite_tool_returns`) |
 | `co_cli/observability/serialize.py` | Part/message → span-attribute serialization |
 | `co_cli/session/persistence.py` | `ModelMessagesTypeAdapter` JSONL round-trip |

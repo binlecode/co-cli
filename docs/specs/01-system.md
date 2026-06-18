@@ -261,7 +261,7 @@ System-level contracts crossing every subsystem. Per-subsystem APIs are document
 | `create_deps(frontend, stack) -> CoDeps` | `co_cli/bootstrap/core.py` | Async one-shot startup assembly: validates config, probes the model, wires MCP, loads skills, builds the memory store, and seals `CoDeps` |
 | `build_orchestrator(spec, deps) -> Agent[CoDeps, Any]` | `co_cli/agent/build.py` | Constructs the foreground orchestrator agent from `ORCHESTRATOR_SPEC` — composes static-instruction builders, registers per-turn instructions, attaches history processors, and reads toolset from `deps.toolset` |
 | `build_task_agent(spec, deps, model) -> Agent[CoDeps, Any]` | `co_cli/agent/build.py` | Constructs a focused task agent from a `TaskAgentSpec`; resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME`; fails loud on unknown names |
-| `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async single-turn entrypoint: assembly → run stream → approval loop → output checks |
+| `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/agent/orchestrate.py` | Async single-turn entrypoint: assembly → run stream → approval loop → output checks |
 | `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds a delegated `CoDeps` for sub-agents; forwards `tool_catalog`, excludes `toolset`, increments `agent_depth` |
 | `fork_deps_for_reviewer(parent) -> CoDeps` | `co_cli/deps.py` | Fork for the dream daemon reviewer agent; delegates to `fork_deps` |
 | `dispatch(raw_input, ctx) -> SlashOutcome` | `co_cli/commands/core.py` | Async slash-command router; returns `LocalOnly`, `ReplaceTranscript`, or `DelegateToAgent` |
@@ -283,7 +283,7 @@ System-level contracts crossing every subsystem. Per-subsystem APIs are document
 | `co_cli/agent/_instructions.py` | Dynamic instruction callbacks and prompt assembly |
 | `co_cli/commands/core.py` | Slash-command dispatch and skill handoff into the REPL loop |
 | `co_cli/deps.py` | `CoDeps` runtime contract and workspace path resolution |
-| `co_cli/context/orchestrate.py` | One-turn execution entrypoint |
+| `co_cli/agent/orchestrate.py` | One-turn execution entrypoint |
 
 
 ## 6. Test Gates

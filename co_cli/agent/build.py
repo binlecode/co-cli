@@ -9,8 +9,8 @@ from pydantic_ai import Agent, DeferredToolRequests
 from co_cli.deps import CoDeps
 
 if TYPE_CHECKING:
+    from co_cli.agent.orchestrate import SessionAgent
     from co_cli.agent.spec import OrchestratorSpec, TaskAgentSpec
-    from co_cli.context.orchestrate import SessionAgent
 
 
 def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> SessionAgent:

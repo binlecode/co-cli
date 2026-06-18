@@ -68,8 +68,8 @@ _LENGTH_RETRY_BOOST = 2
 assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for retry to terminate"
 
 from co_cli.config.llm import cap_output_tokens
-from co_cli.context._timeouts import LLM_RUN_TIMEOUT_SECS
 from co_cli.context.compaction import is_context_overflow, recover_overflow_history
+from co_cli.context.timeouts import LLM_RUN_TIMEOUT_SECS
 from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt
 from co_cli.display.stream_renderer import StreamRenderer

@@ -18,6 +18,7 @@ from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.messages import BinaryContent, ModelMessage
 
 from co_cli.agent.build import build_orchestrator
+from co_cli.agent.orchestrate import TurnResult, run_turn
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import (
@@ -39,7 +40,6 @@ from co_cli.config.core import (
     VALID_REASONING_DISPLAY_MODES,
     settings,
 )
-from co_cli.context.orchestrate import TurnResult, run_turn
 from co_cli.context.summarization import estimate_message_tokens
 from co_cli.deps import CoDeps
 from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
@@ -186,16 +186,19 @@ def _fire_session_end_kicks(deps: CoDeps) -> None:
 
     Both KICKs fire unconditionally (no counter check) so that the daemon
     has a chance to review the session regardless of how many turns ran.
-    Guard: only fires when review is enabled and a model is configured.
+    Guard: each domain fires only when its own review flag is enabled and a
+    model is configured.
     """
-    if not deps.config.skills.review_enabled:
-        return
     if deps.model is None:
         return
     persisted = deps.runtime.persisted_message_count
     session_id = deps.session.session_path.stem
-    write_review_kick(domain="memory", session_id=session_id, persisted_message_count=persisted)
-    write_review_kick(domain="skill", session_id=session_id, persisted_message_count=persisted)
+    if deps.config.memory.review_enabled:
+        write_review_kick(
+            domain="memory", session_id=session_id, persisted_message_count=persisted
+        )
+    if deps.config.skills.review_enabled:
+        write_review_kick(domain="skill", session_id=session_id, persisted_message_count=persisted)
 
 
 async def _drain_and_cleanup(
@@ -267,16 +270,15 @@ def _post_turn_hook(
     """
     if deps is None:
         return
-    skill_settings = deps.config.skills
-    if not skill_settings.review_enabled:
-        return
     if deps.model is None:
         return
 
-    deps.session.turns_since_memory_review += 1
-    deps.session.model_requests_since_skill_review += model_request_count
-    _maybe_kick_memory_review(deps)
-    _maybe_kick_skill_review(deps)
+    if deps.config.memory.review_enabled:
+        deps.session.turns_since_memory_review += 1
+        _maybe_kick_memory_review(deps)
+    if deps.config.skills.review_enabled:
+        deps.session.model_requests_since_skill_review += model_request_count
+        _maybe_kick_skill_review(deps)
 
 
 def _apply_command_outcome(

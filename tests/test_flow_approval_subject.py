@@ -21,7 +21,7 @@ from pydantic_ai.messages import (
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.context.orchestrate import _collect_deferred_tool_approvals
+from co_cli.agent.orchestrate import _collect_deferred_tool_approvals
 from co_cli.deps import ApprovalKindEnum, CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.tools.approvals import (

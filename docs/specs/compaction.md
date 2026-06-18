@@ -820,7 +820,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `co_cli/context/tokens.py` | `estimate_text_tokens` (raw-string token estimate, used for the instruction half of the floor — base instructions, toolset guidance, and critique); imports `ESTIMATE_CHARS_PER_TOKEN` from `config/tuning.py`. |
 | `co_cli/bootstrap/schema_budget.py` | `measure_always_schema_budget` + `AlwaysSchemaBudget` — measures ALWAYS-visibility tool-schema size; feeds `deps.static_floor_tokens` at bootstrap and backs the schema-budget regression guard. |
 | `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — provider overflow detection for 400/413. |
-| `co_cli/context/orchestrate.py` | `run_turn` overflow dispatch and anti-thrash gate reset. |
+| `co_cli/agent/orchestrate.py` | `run_turn` overflow dispatch and anti-thrash gate reset. |
 | `co_cli/main.py` | `_finalize_turn()` — session persistence bridge; reads `compaction_applied_this_turn` and calls `persist_session_history(history_compacted=True)` to rewrite the transcript. |
 | `co_cli/tools/categories.py` | `FILE_TOOLS`. |
 | `co_cli/tools/tool_io.py` | `spill_if_oversized`: `spill_if_oversized`, `tool_output`, `check_tool_results_size`; imports `SPILL_THRESHOLD_CHARS`, `SPILL_PREVIEW_CHARS` from `config/tuning.py`. |

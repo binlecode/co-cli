@@ -61,7 +61,7 @@ from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S
 from evals._trace import record_turn, response_text
 
-from co_cli.context.orchestrate import run_turn
+from co_cli.agent.orchestrate import run_turn
 from co_cli.session.filename import session_filename
 
 _FIXTURE_UUID8 = "f1a2b3c4"

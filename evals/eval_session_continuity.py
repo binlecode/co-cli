@@ -45,6 +45,7 @@ from evals._timeouts import (
 from evals._trace import record_turn, response_text
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
+from co_cli.agent.orchestrate import run_turn
 from co_cli.commands.core import dispatch
 from co_cli.commands.resume import _rehydrate_todos
 from co_cli.commands.types import (
@@ -55,7 +56,6 @@ from co_cli.context._compaction_markers import (
     STATIC_MARKER_PREFIX,
     SUMMARY_MARKER_PREFIX,
 )
-from co_cli.context.orchestrate import run_turn
 from co_cli.session.persistence import append_messages, load_transcript
 
 

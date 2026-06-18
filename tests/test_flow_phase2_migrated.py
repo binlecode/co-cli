@@ -38,12 +38,12 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from pydantic_ai.toolsets import FunctionToolset
 from tests._settings import SETTINGS_NO_MCP
 
+from co_cli.agent.orchestrate import run_turn
 from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.commands.compact import _cmd_compact
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, LocalOnly, ReplaceTranscript
 from co_cli.context._compaction_markers import STATIC_MARKER_PREFIX, SUMMARY_MARKER_PREFIX
-from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.tools.shell_backend import ShellBackend

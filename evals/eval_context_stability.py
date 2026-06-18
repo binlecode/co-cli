@@ -94,9 +94,9 @@ from evals._timeouts import MULTI_TURN_COMPACT_BUDGET_S
 from evals._trace import record_turn
 from pydantic_ai.messages import ModelResponse, TextPart
 
+from co_cli.agent.orchestrate import run_turn
 from co_cli.config.tuning import SPILL_THRESHOLD_CHARS, SUMMARY_BUDGET_FLOOR
 from co_cli.context.compaction import extract_summary_body, summary_marker
-from co_cli.context.orchestrate import run_turn
 from co_cli.memory.frontmatter import render_frontmatter
 from co_cli.memory.item import MemoryKindEnum
 from co_cli.observability import tracing

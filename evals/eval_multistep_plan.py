@@ -59,7 +59,7 @@ from evals._timeouts import CALL_TIMEOUT_S, TURN_BUDGET_S
 from evals._trace import record_turn, response_text
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 
-from co_cli.context.orchestrate import run_turn
+from co_cli.agent.orchestrate import run_turn
 
 _FIXTURE_NAME = "multistep_research_baseline"
 

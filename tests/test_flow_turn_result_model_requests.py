@@ -18,8 +18,8 @@ from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.agent.build import build_orchestrator
 from co_cli.agent.core import build_native_toolset
+from co_cli.agent.orchestrate import run_turn
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
-from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend as SilentFrontend
 from co_cli.llm.factory import build_model

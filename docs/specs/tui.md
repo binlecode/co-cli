@@ -57,7 +57,7 @@ coupling. This seam is a deliberate design invariant — defend it, do not redes
 (c) Agent loop          frontend-agnostic; reaches the user ONLY via Frontend
 ```
 
-- **One surface to the user.** The orchestrator (`co_cli/context/orchestrate.py`) calls
+- **One surface to the user.** The orchestrator (`co_cli/agent/orchestrate.py`) calls
   *exclusively* through its `Frontend` for everything user-facing — prompts (`prompt_question`,
   `prompt_approval`), tool lifecycle (`on_tool_start/complete`), status, final output, teardown.
   The two indirect paths are frontend-bound too: `deps.runtime.tool_progress_callback` and

@@ -41,9 +41,9 @@ from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S, TOOL_TURN_BUDGET_S
 from evals._trace import TurnTrace, record_turn, response_text
 
+from co_cli.agent.orchestrate import run_turn
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, DelegateToAgent, SlashOutcome
-from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps
 from co_cli.skills.lifecycle import refresh_skills
 

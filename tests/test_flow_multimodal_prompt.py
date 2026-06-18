@@ -21,10 +21,10 @@ from tests._settings import TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.agent.build import build_orchestrator
+from co_cli.agent.orchestrate import _prompt_char_count, run_turn
 from co_cli.agent.spec import OrchestratorSpec
 from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.check import probe_ollama_model
-from co_cli.context.orchestrate import _prompt_char_count, run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend as SilentFrontend
 from co_cli.llm.factory import build_model

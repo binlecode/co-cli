@@ -404,9 +404,9 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/context/orchestrate.py` | Async — single foreground-turn entrypoint; owns runs, approval resumes, retries, and interrupt handling |
-| `TurnResult` | `co_cli/context/orchestrate.py` | Dataclass — `outcome` (`"continue"` / `"error"`), `interrupted`, `messages`, `output`, `usage`, `model_requests` |
-| `_TurnState` | `co_cli/context/orchestrate.py` | Module-private mutable turn state; not exported |
+| `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/agent/orchestrate.py` | Async — single foreground-turn entrypoint; owns runs, approval resumes, retries, and interrupt handling |
+| `TurnResult` | `co_cli/agent/orchestrate.py` | Dataclass — `outcome` (`"continue"` / `"error"`), `interrupted`, `messages`, `output`, `usage`, `model_requests` |
+| `_TurnState` | `co_cli/agent/orchestrate.py` | Module-private mutable turn state; not exported |
 
 ### Compaction and recovery
 
@@ -422,14 +422,14 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `_collect_deferred_tool_approvals(ctx, output, frontend)` | `co_cli/context/orchestrate.py` | Async — turns `DeferredToolRequests` into `DeferredToolResults` via prompt or rule lookup |
+| `_collect_deferred_tool_approvals(ctx, output, frontend)` | `co_cli/agent/orchestrate.py` | Async — turns `DeferredToolRequests` into `DeferredToolResults` via prompt or rule lookup |
 
 ## 5. Files
 
 | File | Purpose |
 | --- | --- |
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
-| `co_cli/context/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
+| `co_cli/agent/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
 | `co_cli/context/compaction.py` | public entry points (`proactive_window_processor` for L3; overflow-recovery entry point `recover_overflow_history` — single-tier strip-then-summarize); backed by private submodules `_compaction_boundaries.py` (planner) and `_compaction_markers.py` (marker builders and enrichment) |
 | `co_cli/context/history_processors.py` | registered history processors (`dedup_tool_results`, `evict_old_tool_results`, `spill_largest_tool_results`) and the `strip_all_tool_returns` recovery helper |
 | `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `_instructions.py` |

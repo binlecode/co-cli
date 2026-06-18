@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.412]
+
+Relocate the turn-loop out of the `context/` leaf up to the `agent/` layer, structurally eliminating the `context → tools` back-edge class (rules-conformance-cleanup round 1).
+
+- **Loop relocation:** `co_cli/context/orchestrate.py` → `co_cli/agent/orchestrate.py` (verbatim, 99% rename similarity — `run_turn`, `TurnResult`, `SessionAgent`, `_TurnState`). Its imports of `co_cli.tools.*` are now forward `agent → tools` edges, so the leaf-boundary violation no longer exists rather than being merely detected.
+- **Underscore rename:** `co_cli/context/_timeouts.py` → `co_cli/context/timeouts.py` — the move made `LLM_RUN_TIMEOUT_SECS` a cross-package import, so the private-module facade had to drop its underscore per the visibility contract.
+- Import paths updated across `main.py`, `agent/build.py`, 8 flow tests, and 12 evals; spec refs reconciled in `01-system.md`, `core-loop.md`, `compaction.md`, `tui.md`, `pydantic-ai-integration.md`, `observability.md`. Pure relocation, zero behavior change.
+
 ## [0.8.410]
 
 Centralize the context-pipeline size-control constants, and finish the summarizer input fit guard (degrade label + sibling-test fixes).

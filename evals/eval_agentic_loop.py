@@ -55,7 +55,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-from co_cli.context.orchestrate import run_turn
+from co_cli.agent.orchestrate import run_turn
 from co_cli.context.prompt_text import _is_shell_error_return
 
 _FIXTURE_NAME = "agentic_loop_baseline"

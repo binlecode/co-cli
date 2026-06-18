@@ -103,7 +103,7 @@ There is no pydantic-ai capability middleware. The agent/model/tool spans are pu
 
 | Span | Seam | Push / pop |
 |------|------|-----------|
-| `invoke_agent {name}` (`agent`) | the run call site — `_execute_run` (`context/orchestrate.py`) for the orchestrator, `run_standalone` (`agent/run.py`) for task agents | `push_span` with `co.agent.role`/`co.agent.model`/`co.agent.request_limit` before the run; `pop_span` with `co.agent.requests_used`/`co.agent.final_result` after (ERROR + re-raise on exception) |
+| `invoke_agent {name}` (`agent`) | the run call site — `_execute_run` (`agent/orchestrate.py`) for the orchestrator, `run_standalone` (`agent/run.py`) for task agents | `push_span` with `co.agent.role`/`co.agent.model`/`co.agent.request_limit` before the run; `pop_span` with `co.agent.requests_used`/`co.agent.final_result` after (ERROR + re-raise on exception) |
 | `chat {model}` (`model`) | `SurrogateRecoveryModel` (`llm/surrogate_recovery_model.py`), covering BOTH `request` (non-stream) and `request_stream` (streaming) | `push_span` with `co.model.name`/`co.model.input` on entry; `pop_span` with `co.model.output`/`co.model.tokens.input/output`/`co.model.name`/`co.model.finish_reason` once the response (or assembled stream) is read. On the streaming path the final response/usage is only available after the stream is consumed, so the span closes on context-manager exit reading `StreamedResponse.get()`/`.usage()` |
 | `tool {name}` (`tool`) | `_CallSeamToolset.call_tool` (`agent/toolset.py`) | `push_span` with `co.tool.name`/`co.tool.args`/`co.tool.args_chars`; on close sets `co.tool.result`/`co.tool.result_size`/`co.tool.source`/`co.tool.requires_approval`, then `pop_span` (ERROR + re-raise on tool error) |
 

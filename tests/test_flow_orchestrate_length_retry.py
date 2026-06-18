@@ -1,6 +1,6 @@
 """Tests for length-continuation auto-retry in run_turn().
 
-Production path: co_cli/context/orchestrate.py:run_turn() — finish_reason='length' branch.
+Production path: co_cli/agent/orchestrate.py:run_turn() — finish_reason='length' branch.
 """
 
 import asyncio
@@ -16,8 +16,8 @@ from tests._timeouts import (
 
 from co_cli.agent.build import build_orchestrator
 from co_cli.agent.core import build_native_toolset
+from co_cli.agent.orchestrate import _check_output_limits, _TurnState, run_turn
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
-from co_cli.context.orchestrate import _check_output_limits, _TurnState, run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend as SilentFrontend
 from co_cli.llm.factory import build_model

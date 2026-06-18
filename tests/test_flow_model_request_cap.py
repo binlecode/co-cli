@@ -2,7 +2,7 @@
 
 Production paths:
   co_cli/config/llm.py            — LlmSettings.max_model_requests_per_turn
-  co_cli/context/orchestrate.py   — _check_turn_caps, run_turn
+  co_cli/agent/orchestrate.py   — _check_turn_caps, run_turn
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from pydantic_ai.toolsets import FunctionToolset
 from tests._settings import SETTINGS_NO_MCP
 
+from co_cli.agent.orchestrate import run_turn
 from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.config.core import load_config
 from co_cli.config.llm import MAX_MODEL_REQUESTS_PER_TURN, LlmSettings
-from co_cli.context.orchestrate import run_turn
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.tools.shell_backend import ShellBackend
