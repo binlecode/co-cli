@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.404]
+
+Behavioral rules audit — peer-comparison + per-section effectiveness measurement of co's 7 behavioral rule files, with one evidence-scoped cleanup edit. The shippable contract was the two evidence artifacts; the rule edit is opportunistic.
+
+- COMPARE: `docs/reference/RESEARCH-behavioral-rules-peer-comparison.md` — topic × {co, opencode, hermes-agent, codex, openclaw} coverage matrix (every cell source-cited), gap list (G1 output-formatting confirmed strong, 4/4 peers), and consolidation candidates (C1–C7); head-start hypotheses reconciled (dominant cross-rule duplication confirmed; C3 framing corrected to internal-dup).
+- VALIDATE: `evals/eval_rule_compliance.py` extended from file-level to `##`-section-level ablation — section-observability inventory (6 PROBED distinguishable signals of 31 sections; rest OBSERVABLE-out-of-harness or OUT-OF-REACH) plus an N=20/arm ablation run with two assembly-fidelity guards (full arm byte-equal to `build_rules_block`, ablated arm == `full_block.replace(span,"")` cross-checked against an independent reassembly). Only `03 Verification` cleanly STEERS (Δ+0.55).
+- ACT: removed the `04_tool_protocol.md` `## Memory` cross-reference stub (zero behavioral instruction; no peer ships a stub) — static instruction floor −97 chars; substantive consolidations (persistence cluster, output-formatting gap, `07` curation) escalate to their own Gate-1 plans.
+
 ## [0.8.402]
 
 Summarizer fidelity verify-and-retry — a deterministic content backstop on compaction summaries. After the first summary, high-signal identifiers (file/dir paths, `path:line` refs, URLs, hex hashes, error-class names + `Traceback`, quoted spans) are extracted from the already-redacted source and checked for byte-substring survival; if the missing fraction exceeds `FIDELITY_MISS_THRESHOLD`, the summarizer is re-prompted exactly once with the dropped values as feedback and the better pass is kept.

@@ -64,7 +64,3 @@ callable on your next step, then call it directly. Prefer a dedicated tool loade
 this way over `shell` when it clearly fits the task. If the name is slightly off you
 get "did you mean" suggestions — retry `tool_view` with one of those. If nothing
 matches, the tool does not exist — do not retry.
-
-## Memory
-
-See `07_memory_protocol.md` for recall, explicit saves, curation, and anti-patterns.
