@@ -43,7 +43,7 @@ def _make_shell_ctx(tmp_path: Path) -> RunContext[CoDeps]:
 async def test_pty_true_makes_stdout_a_tty(tmp_path: Path) -> None:
     backend = ShellBackend()
     exit_code, output = await backend.run_command(
-        "python3 -c 'import sys;print(sys.stdout.isatty())'", timeout=10, pty=True
+        "python3 -c 'import sys;print(sys.stdout.isatty())'", timeout_seconds=10, pty=True
     )
     assert exit_code == 0
     assert "True" in output
@@ -53,7 +53,7 @@ async def test_pty_true_makes_stdout_a_tty(tmp_path: Path) -> None:
 async def test_pty_false_stdout_is_not_a_tty(tmp_path: Path) -> None:
     backend = ShellBackend()
     exit_code, output = await backend.run_command(
-        "python3 -c 'import sys;print(sys.stdout.isatty())'", timeout=10, pty=False
+        "python3 -c 'import sys;print(sys.stdout.isatty())'", timeout_seconds=10, pty=False
     )
     assert exit_code == 0
     assert "False" in output
@@ -63,7 +63,7 @@ async def test_pty_false_stdout_is_not_a_tty(tmp_path: Path) -> None:
 async def test_pty_false_echo_exact_output(tmp_path: Path) -> None:
     """Non-pty path is byte-for-byte unchanged: exit 0, output 'hi\\n'."""
     backend = ShellBackend()
-    exit_code, output = await backend.run_command("echo hi", timeout=10)
+    exit_code, output = await backend.run_command("echo hi", timeout_seconds=10)
     assert exit_code == 0
     assert output == "hi\n"
 
@@ -72,7 +72,7 @@ async def test_pty_false_echo_exact_output(tmp_path: Path) -> None:
 async def test_pty_true_returns_cleanly_on_this_platform(tmp_path: Path) -> None:
     """EIO-EOF regression guard: a normal pty run must return, not raise."""
     backend = ShellBackend()
-    exit_code, output = await backend.run_command("echo hello-pty", timeout=10, pty=True)
+    exit_code, output = await backend.run_command("echo hello-pty", timeout_seconds=10, pty=True)
     assert exit_code == 0
     assert "hello-pty" in output
 
@@ -84,7 +84,7 @@ async def test_pty_true_timeout_kills_and_surfaces_partial(tmp_path: Path) -> No
     start = time.monotonic()
     with pytest.raises(RuntimeError) as exc_info:
         async with asyncio.timeout(4):
-            await backend.run_command("echo before-sleep; sleep 5", timeout=1, pty=True)
+            await backend.run_command("echo before-sleep; sleep 5", timeout_seconds=1, pty=True)
     elapsed = time.monotonic() - start
     assert elapsed < 4, f"timeout path did not kill promptly (took {elapsed:.1f}s)"
     message = str(exc_info.value)
@@ -101,7 +101,7 @@ async def test_pty_true_timeout_maps_to_model_retry(tmp_path: Path) -> None:
     start = time.monotonic()
     with pytest.raises(ModelRetry):
         async with asyncio.timeout(4):
-            await shell_exec(ctx, "sleep 5", timeout=1, pty=True)
+            await shell_exec(ctx, "sleep 5", timeout_seconds=1, pty=True)
     elapsed = time.monotonic() - start
     assert elapsed < 4, f"tool timeout path did not kill promptly (took {elapsed:.1f}s)"
 
@@ -110,7 +110,9 @@ async def test_pty_true_timeout_maps_to_model_retry(tmp_path: Path) -> None:
 async def test_run_command_yields_live_process_after_window(tmp_path: Path) -> None:
     """A command outliving the yield window hands back a live (un-killed) process."""
     backend = ShellBackend()
-    result = await backend.run_command("echo started; sleep 5", timeout=30, yield_window=1)
+    result = await backend.run_command(
+        "echo started; sleep 5", timeout_seconds=30, yield_window_seconds=1
+    )
     assert isinstance(result, YieldedProcess)
     assert result.process.returncode is None
     assert b"started" in result.prefix_bytes
@@ -124,18 +126,18 @@ async def test_run_command_fast_command_returns_normally_with_yield_window(
 ) -> None:
     """A command that exits within the window returns (exit_code, output) unchanged."""
     backend = ShellBackend()
-    result = await backend.run_command("echo hi", timeout=30, yield_window=1)
+    result = await backend.run_command("echo hi", timeout_seconds=30, yield_window_seconds=1)
     assert result == (0, "hi\n")
 
 
 @pytest.mark.asyncio
 async def test_yield_window_zero_runs_to_hard_timeout_no_yield(tmp_path: Path) -> None:
-    """yield_window=0 disables auto-yield: a long command times out (no hand-off)."""
+    """yield_window_seconds=0 disables auto-yield: a long command times out (no hand-off)."""
     backend = ShellBackend()
     start = time.monotonic()
     with pytest.raises(RuntimeError) as exc_info:
         async with asyncio.timeout(4):
-            await backend.run_command("sleep 5", timeout=1, yield_window=0)
+            await backend.run_command("sleep 5", timeout_seconds=1, yield_window_seconds=0)
     elapsed = time.monotonic() - start
     assert elapsed < 4, f"hard-timeout path did not fire promptly (took {elapsed:.1f}s)"
     assert "timed out after 1s" in str(exc_info.value)
@@ -150,7 +152,9 @@ async def test_cancel_kills_process_group(tmp_path: Path) -> None:
     """
     backend = ShellBackend()
     marker = tmp_path / "marker"
-    task = asyncio.ensure_future(backend.run_command(f"sleep 2; touch {marker}", timeout=30))
+    task = asyncio.ensure_future(
+        backend.run_command(f"sleep 2; touch {marker}", timeout_seconds=30)
+    )
     await asyncio.sleep(0.5)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -165,7 +169,7 @@ async def test_cancel_kills_process_group_pty(tmp_path: Path) -> None:
     backend = ShellBackend()
     marker = tmp_path / "marker-pty"
     task = asyncio.ensure_future(
-        backend.run_command(f"sleep 2; touch {marker}", timeout=30, pty=True)
+        backend.run_command(f"sleep 2; touch {marker}", timeout_seconds=30, pty=True)
     )
     await asyncio.sleep(0.5)
     task.cancel()
@@ -190,7 +194,7 @@ async def test_cancel_escalates_to_sigkill_for_sigterm_ignoring_child(tmp_path: 
         "time.sleep(2)\n"
         f"open({str(marker)!r}, 'w').close()\n"
     )
-    task = asyncio.ensure_future(backend.run_command(f"python3 {script_file}", timeout=30))
+    task = asyncio.ensure_future(backend.run_command(f"python3 {script_file}", timeout_seconds=30))
     await asyncio.sleep(0.6)
     task.cancel()
     with pytest.raises(asyncio.CancelledError):

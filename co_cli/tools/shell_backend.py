@@ -64,11 +64,11 @@ class ShellBackend:
     async def run_command(
         self,
         cmd: str,
-        timeout: int = 120,
+        timeout_seconds: int = 120,
         cwd: str | None = None,
         extra_env: dict[str, str] | None = None,
         pty: bool = False,
-        yield_window: int = 0,
+        yield_window_seconds: int = 0,
     ) -> tuple[int, str] | YieldedProcess:
         """Execute a command as a subprocess with sanitized environment.
 
@@ -88,14 +88,14 @@ class ShellBackend:
         ``pty=True`` is exempt from auto-yield (its master-fd drain has no
         ``proc.stdout`` to hand off); it keeps the plain hard-timeout behaviour.
 
-        When ``yield_window`` > 0 and below ``timeout`` (non-pty only), a command
-        still alive after ``yield_window`` seconds is returned as a
-        ``YieldedProcess`` carrying the live process and the bytes already read,
-        rather than blocking the turn to the hard timeout. ``yield_window`` == 0
-        disables auto-yield.
+        When ``yield_window_seconds`` > 0 and below ``timeout_seconds`` (non-pty
+        only), a command still alive after ``yield_window_seconds`` seconds is
+        returned as a ``YieldedProcess`` carrying the live process and the bytes
+        already read, rather than blocking the turn to the hard timeout.
+        ``yield_window_seconds`` == 0 disables auto-yield.
         """
         if pty:
-            return await self._run_command_pty(cmd, timeout, cwd, extra_env)
+            return await self._run_command_pty(cmd, timeout_seconds, cwd, extra_env)
         env = build_subprocess_env(extra_env=extra_env)
         proc = await asyncio.create_subprocess_exec(
             "sh",
@@ -124,8 +124,8 @@ class ShellBackend:
         # The first race window is the yield window when auto-yield is armed,
         # else the full hard timeout. A yield-armed command that does not exit
         # within the window is handed off; otherwise the window IS the timeout.
-        do_yield = 0 < yield_window < timeout
-        window = yield_window if do_yield else timeout
+        do_yield = 0 < yield_window_seconds < timeout_seconds
+        window = yield_window_seconds if do_yield else timeout_seconds
         drain_task = asyncio.ensure_future(_drain_until_eof())
         try:
             await asyncio.wait_for(drain_task, timeout=window)
@@ -141,7 +141,7 @@ class ShellBackend:
                 return YieldedProcess(proc, bytes(collected))
             await kill_process_tree(proc)
             partial_str = bytes(collected).decode("utf-8", errors="replace").strip()
-            msg = f"Command timed out after {timeout}s: {cmd}"
+            msg = f"Command timed out after {timeout_seconds}s: {cmd}"
             if partial_str:
                 msg += f"\nPartial output:\n{partial_str}"
             raise RuntimeError(msg) from None
@@ -154,7 +154,7 @@ class ShellBackend:
     async def _run_command_pty(
         self,
         cmd: str,
-        timeout: int,
+        timeout_seconds: int,
         cwd: str | None,
         extra_env: dict[str, str] | None,
     ) -> tuple[int, str]:
@@ -206,11 +206,11 @@ class ShellBackend:
             loop.add_reader(master, _on_readable)
             try:
                 try:
-                    await asyncio.wait_for(eof.wait(), timeout=timeout)
+                    await asyncio.wait_for(eof.wait(), timeout=timeout_seconds)
                 except TimeoutError:
                     await kill_process_tree(proc)
                     partial_str = bytes(buffer).decode("utf-8", errors="replace").strip()
-                    msg = f"Command timed out after {timeout}s: {cmd}"
+                    msg = f"Command timed out after {timeout_seconds}s: {cmd}"
                     if partial_str:
                         msg += f"\nPartial output:\n{partial_str}"
                     raise RuntimeError(msg) from None

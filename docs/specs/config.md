@@ -184,6 +184,7 @@ user-configurable — they live in `_LLM_SETTINGS` keyed by provider/model/mode.
 | `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | Token size per memory chunk |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Token overlap between chunks |
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for write-time dedup and daemon merge |
+| `memory.review_enabled` | `CO_MEMORY_REVIEW_ENABLED` | `false` | Enable memory-domain reviewer KICKs (turn-boundary + session-end + compaction-snapshot) |
 
 ### Compaction (`compaction.*`)
 
@@ -213,9 +214,9 @@ Shape invariant: `tail_fraction < compaction_ratio` and `spill_ratio <= compacti
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `shell.max_timeout` | `CO_SHELL_MAX_TIMEOUT` | `300` | Max shell command timeout in seconds |
+| `shell.max_timeout_seconds` | `CO_SHELL_MAX_TIMEOUT_SECONDS` | `300` | Max shell command timeout in seconds |
 | `shell.safe_commands` | `CO_SHELL_SAFE_COMMANDS` | see below | Comma-separated prefix list for auto-approved commands |
-| `shell.yield_window_seconds` | `CO_SHELL_YIELD_WINDOW_SECONDS` | `20` | Seconds a foreground `shell_exec` command may run before it is auto-yielded to a background task; `0` disables auto-yield. Validated below `max_timeout` |
+| `shell.yield_window_seconds` | `CO_SHELL_YIELD_WINDOW_SECONDS` | `20` | Seconds a foreground `shell_exec` command may run before it is auto-yielded to a background task; `0` disables auto-yield. Validated below `max_timeout_seconds` |
 
 Default safe commands: `ls`, `tree`, `find`, `fd`, `cat`, `head`, `tail`, `grep`, `rg`, `ag`, `wc`, `sort`, `uniq`, `cut`, `tr`, `jq`, `echo`, `printf`, `pwd`, `whoami`, `hostname`, `uname`, `date`, `env`, `which`, `file`, `stat`, `id`, `du`, `df`, `git status`, `git diff`, `git log`, `git show`, `git branch`, `git tag`, `git blame`.
 
@@ -236,7 +237,7 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable dream daemon reviewer KICKs at turn-boundary cadence |
+| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable skill-domain reviewer KICKs at turn-boundary cadence |
 | `skills.review_memory_nudge_interval` | `CO_SKILLS_REVIEW_MEMORY_NUDGE_INTERVAL` | `10` | User-turn count between memory-domain KICK triggers |
 | `skills.review_skill_nudge_interval` | `CO_SKILLS_REVIEW_SKILL_NUDGE_INTERVAL` | `10` | LLM-iteration count between skill-domain KICK triggers |
 | `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill usage counters, timestamps, and recall_days sidecars |
@@ -272,7 +273,7 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 | `command` | `None` | Executable for stdio transport (e.g. `npx`) |
 | `url` | `None` | Remote URL for HTTP transport; mutually exclusive with `command` |
 | `args` | `[]` | CLI arguments (stdio only) |
-| `timeout` | `5` | Connect timeout in seconds (1–60) |
+| `timeout_seconds` | `5` | Connect timeout in seconds (1–60) |
 | `env` | `{}` | Extra env vars for subprocess (stdio only) |
 | `approval` | `"ask"` | Tool approval policy: `ask` or `auto` |
 | `prefix` | `None` | Optional tool name prefix for this server |

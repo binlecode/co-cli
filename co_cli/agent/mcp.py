@@ -70,7 +70,7 @@ class MCPToolsetEntry:
     ``server`` is a ``_SanitizingMCPServer`` wrapping the raw MCPServer (before
     ``approval_required()`` wrapping) so ``list_tools()`` returns sanitized schemas
     and can be called directly without walking the wrapper chain.
-    ``is_approval_required``, ``prefix``, and ``timeout`` are recorded at build time;
+    ``is_approval_required``, ``prefix``, and ``timeout_seconds`` are recorded at build time;
     discovery reads them without inspecting wrapper topology.
     """
 
@@ -78,7 +78,7 @@ class MCPToolsetEntry:
     server: Any  # MCPServer subclass — lazily imported; avoids top-level pydantic_ai.mcp import
     is_approval_required: bool
     prefix: str
-    timeout: float
+    timeout_seconds: float
 
 
 def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
@@ -92,11 +92,11 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
         if cfg.url:
             if cfg.url.rstrip("/").endswith("/sse"):
                 mcp_server = MCPServerSSE(
-                    cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout
+                    cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout_seconds
                 )
             else:
                 mcp_server = MCPServerStreamableHTTP(
-                    cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout
+                    cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout_seconds
                 )
         else:
             if cfg.command is None:
@@ -108,7 +108,7 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
             mcp_server = MCPServerStdio(
                 cfg.command,
                 args=cfg.args,
-                timeout=cfg.timeout,
+                timeout=cfg.timeout_seconds,
                 env=env or None,
                 tool_prefix=cfg.prefix or name,
             )
@@ -127,7 +127,7 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
                 server=sanitizing_server,
                 is_approval_required=is_approval_required,
                 prefix=cfg.prefix or name,
-                timeout=cfg.timeout,
+                timeout_seconds=cfg.timeout_seconds,
             )
         )
     return entries
@@ -138,7 +138,7 @@ async def _discover_one(
 ) -> tuple[list[tuple[str, ToolInfo]], str | None]:
     prefix = entry.prefix
     try:
-        async with asyncio.timeout(entry.timeout):
+        async with asyncio.timeout(entry.timeout_seconds):
             tools = await entry.server.list_tools()
         hits: list[tuple[str, ToolInfo]] = []
         for t in tools:

@@ -139,7 +139,7 @@ async def test_shell_exec_yields_long_command_to_background_task(tmp_path: Path)
     deps = _make_deps(tmp_path, yield_window_seconds=1)
     ctx = _ctx(deps, approved=True)
 
-    result = await shell_exec(ctx, cmd="echo warming-up; sleep 5", timeout=30)
+    result = await shell_exec(ctx, cmd="echo warming-up; sleep 5", timeout_seconds=30)
 
     assert not (result.metadata and result.metadata.get("error"))
     task_id = result.metadata["task_id"]

@@ -28,7 +28,7 @@ class MCPServerSettings(BaseModel):
     args: list[str] = Field(
         default_factory=list, description="Command-line arguments (stdio only)"
     )
-    timeout: int = Field(default=5, ge=1, le=60)
+    timeout_seconds: int = Field(default=5, ge=1, le=60)
     env: dict[str, str] = Field(
         default_factory=dict,
         description="Extra environment variables passed to subprocess (stdio only)",

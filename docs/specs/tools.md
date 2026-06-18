@@ -306,7 +306,7 @@ on shared mutation keys is a complementary guard — both layers apply.
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `shell.max_timeout` | `CO_SHELL_MAX_TIMEOUT` | `300` | Hard cap for shell timeout (sec) |
+| `shell.max_timeout_seconds` | `CO_SHELL_MAX_TIMEOUT_SECONDS` | `300` | Hard cap for shell timeout (sec) |
 | `shell.safe_commands` | `CO_SHELL_SAFE_COMMANDS` | built-in list | Safe-prefix auto-approval allowlist |
 | `web.fetch_allowed_domains` | `CO_WEB_FETCH_ALLOWED_DOMAINS` | `[]` | Domain allowlist (optional) |
 | `web.fetch_blocked_domains` | `CO_WEB_FETCH_BLOCKED_DOMAINS` | `[]` | Domain blocklist |

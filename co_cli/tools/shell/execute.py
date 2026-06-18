@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 async def shell_exec(
     ctx: RunContext[CoDeps],
     cmd: str,
-    timeout: int = 120,
+    timeout_seconds: int = 120,
     work_dir: str | None = None,
     pty: bool = False,
 ) -> ToolReturn:
@@ -47,7 +47,7 @@ async def shell_exec(
     launch via task_start and use the task_write loop. A command still running
     after a short window auto-promotes to a background task and returns a task
     handle (track with task_status, stop with task_cancel); otherwise it is
-    killed at timeout (capped by shell_max_timeout).
+    killed at timeout (capped by shell.max_timeout_seconds).
 
     On failure, the tool returns the exit code and combined output as a tool
     result — read it to diagnose the failure (wrong flags, missing binary,
@@ -59,8 +59,8 @@ async def shell_exec(
     Args:
         cmd: Shell command string (e.g. "git log --oneline -10",
              "python scripts/run.py", "uv run pytest").
-        timeout: Max seconds to wait (default 120). Increase for builds or
-                 long scripts (e.g. 300). Capped by shell_max_timeout.
+        timeout_seconds: Max seconds to wait (default 120). Increase for builds or
+                 long scripts (e.g. 300). Capped by shell.max_timeout_seconds.
         work_dir: Optional subdirectory (relative to workspace root) to run the
                  command in. Default None = the workspace root. Prevents
                  directory traversal.
@@ -94,18 +94,18 @@ async def shell_exec(
     else:
         resolved_cwd = str(workspace_dir)
 
-    effective = min(timeout, ctx.deps.config.shell.max_timeout)
+    effective = min(timeout_seconds, ctx.deps.config.shell.max_timeout_seconds)
     skill_env = ctx.deps.runtime.active_skill_env or None
     # Auto-yield is non-pty only — the pty path has no proc.stdout to hand off.
-    yield_window = 0 if pty else ctx.deps.config.shell.yield_window_seconds
+    yield_window_seconds = 0 if pty else ctx.deps.config.shell.yield_window_seconds
     try:
         result = await ctx.deps.shell.run_command(
             cmd,
-            timeout=effective,
+            timeout_seconds=effective,
             cwd=resolved_cwd,
             extra_env=skill_env,
             pty=pty,
-            yield_window=yield_window,
+            yield_window_seconds=yield_window_seconds,
         )
         if isinstance(result, YieldedProcess):
             # The command outlived the yield window. Adopt the live process into
@@ -123,7 +123,7 @@ async def shell_exec(
             )
             partial = result.prefix_bytes.decode("utf-8", errors="replace").strip()
             display = (
-                f"Command still running after {yield_window}s — promoted to "
+                f"Command still running after {yield_window_seconds}s — promoted to "
                 f"background task [{state.task_id}]. Use task_status({state.task_id}) "
                 f"to check on it or task_cancel({state.task_id}) to stop it."
             )

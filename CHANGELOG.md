@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.400]
+
+Conformance cleanup — timeout/duration identifiers now carry their `_seconds` unit suffix (R9 naming drift), closing the unit-suffix drift class across the shell + MCP surfaces.
+
+- Shell: `ShellSettings.max_timeout` → `max_timeout_seconds` (env `CO_SHELL_MAX_TIMEOUT_SECONDS`), constant `DEFAULT_SHELL_MAX_TIMEOUT_SECONDS`; `run_command`/`_run_command_pty` params `timeout`/`yield_window` → `timeout_seconds`/`yield_window_seconds`.
+- MCP: `MCPServerSettings.timeout` and `MCPToolsetEntry.timeout` → `timeout_seconds`; bootstrap MCP-connect reader updated in lockstep.
+- Model-facing: `shell_exec` tool param `timeout` → `timeout_seconds` (intended schema change).
+- Stdlib `asyncio.timeout(...)` / `asyncio.wait_for(..., timeout=...)` kwargs and the pydantic-ai SDK `timeout=` constructor kwarg are unchanged.
+- Zero-backward-compat: old `shell.max_timeout` / per-server `mcp.*.timeout` settings keys are renamed outright; specs synced (config, tools, pydantic-ai-integration).
+
 ## [0.8.398]
 
 Conformance cleanup — dead-code removal surfaced by an audit pass, plus the dev-workflow skill lessons that audit produced.

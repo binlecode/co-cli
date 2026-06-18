@@ -249,7 +249,7 @@ _build_mcp_toolsets(config):
         raw = MCPServerSSE | MCPServerStreamableHTTP | MCPServerStdio   # transport by config shape
         sanitizing = _SanitizingMCPServer(raw)                          # sanitize inputSchema on list_tools()
         inner = sanitizing.approval_required() if is_approval_required else sanitizing
-        record MCPToolsetEntry(toolset=inner, server=sanitizing, is_approval_required, prefix, timeout)
+        record MCPToolsetEntry(toolset=inner, server=sanitizing, is_approval_required, prefix, timeout_seconds)
 
 build_mcp_entries: wrap each entry.toolset in _SequentialMCPToolset(toolset, tool_catalog)   # patch sequential
 discover_mcp_tools: connect all servers concurrently; list_tools(); register names as DEFERRED ToolInfo
@@ -279,7 +279,7 @@ discover_mcp_tools: connect all servers concurrently; list_tools(); register nam
 | `llm.judge_model` | `config/llm.py` | Builds a distinct judge model handle |
 | reasoning/noreason `ModelSettings` | `config/llm.py` | `LlmModel.settings` / `.settings_noreason` |
 | `tool_retries` | `config/core.py` | `Agent(tool_retries=…)` and per-tool `ModelRetry` budget |
-| `mcp_servers` (url / command / args / env / prefix / approval / timeout) | `config/core.py` | `_build_mcp_toolsets` transport + `approval_required()` + discovery timeout |
+| `mcp_servers` (url / command / args / env / prefix / approval / timeout_seconds) | `config/core.py` | `_build_mcp_toolsets` transport + `approval_required()` + discovery timeout |
 | HTTP timeouts (connect/read/write/pool) | `llm/factory.py` constants | Ollama `httpx.AsyncClient` |
 | `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `TOOL_CAP_HARD_STOP_CONSECUTIVE` | `tools/tool_call_limit.py` | Call-seam cap + hard-stop |
 | `SPILL_THRESHOLD_CHARS` | `tools/tool_io.py` | MCP-result spill threshold default |

@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-DEFAULT_SHELL_MAX_TIMEOUT = 300
+DEFAULT_SHELL_MAX_TIMEOUT_SECONDS = 300
 
 # Foreground shell_exec auto-yield window: a command still running after this
 # many seconds is promoted to a background task and the turn is freed. Sits
@@ -12,7 +12,7 @@ DEFAULT_SHELL_MAX_TIMEOUT = 300
 DEFAULT_SHELL_YIELD_WINDOW_SECONDS = 20
 
 SHELL_ENV_MAP: dict[str, str] = {
-    "max_timeout": "CO_SHELL_MAX_TIMEOUT",
+    "max_timeout_seconds": "CO_SHELL_MAX_TIMEOUT_SECONDS",
     "safe_commands": "CO_SHELL_SAFE_COMMANDS",
     "yield_window_seconds": "CO_SHELL_YIELD_WINDOW_SECONDS",
 }
@@ -72,7 +72,7 @@ class ShellSettings(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    max_timeout: int = Field(default=DEFAULT_SHELL_MAX_TIMEOUT)
+    max_timeout_seconds: int = Field(default=DEFAULT_SHELL_MAX_TIMEOUT_SECONDS)
     safe_commands: list[str] = Field(default=DEFAULT_SHELL_SAFE_COMMANDS)
     yield_window_seconds: int = Field(default=DEFAULT_SHELL_YIELD_WINDOW_SECONDS)
 
@@ -87,9 +87,9 @@ class ShellSettings(BaseModel):
     def _check_yield_window(self) -> "ShellSettings":
         if self.yield_window_seconds < 0:
             raise ValueError("yield_window_seconds must be >= 0 (0 disables auto-yield)")
-        if self.yield_window_seconds >= self.max_timeout:
+        if self.yield_window_seconds >= self.max_timeout_seconds:
             raise ValueError(
                 f"yield_window_seconds ({self.yield_window_seconds}) must be below "
-                f"max_timeout ({self.max_timeout})"
+                f"max_timeout_seconds ({self.max_timeout_seconds})"
             )
         return self
