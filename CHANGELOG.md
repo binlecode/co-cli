@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.416]
+
+Close the two remaining dream-cognition eval gaps — real-model coverage of the skill-reviewer extraction path and the merge over-merge (fact-preservation) direction. Eval-layer only; no production source touched.
+
+- **Skill-reviewer cognition (W4.R, `eval_skills.py`):** drives `process_review(domain="skill")` end-to-end against a seeded user-correction transcript; gates that the per-run token lands in a user skill body (created or patched) and LLM-judges faithful encoding. Verified PASS (judge score 10).
+- **Merge over-merge (W1.F, `eval_daily_chat.py`):** seeds a lexically-similar pair (Jaccard ≈0.79, clusters by construction) carrying two distinct facts; runs `merge_memory` and judges that both facts survive a fuse-or-keep-distinct pass. Verified PASS (`merged=1`, both facts preserved).
+- W1.E (tool-spill) retired and W1.D merge gate updated for the new merge/spill semantics; finalizes the plan whose eval code shipped in prior commits.
+
 ## [0.8.414]
 
 Bundle ship of rules-conformance-cleanup rounds (plans #2/#3/#4): two leaf-boundary/clarity refactors plus one swallowed-error bugfix.
