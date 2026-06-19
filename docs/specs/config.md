@@ -106,6 +106,7 @@ Defined entries:
 |----------|-----------|-------|-------------------|
 | `ollama` | `qwen3.6` | reasoning, noreason | `extra_body: {think: false, reasoning_effort: "none"}` |
 | `gemini` | `gemini-3-flash-preview` | reasoning, noreason | `thinking_config: {thinking_level: "MINIMAL"}` |
+| `gemini` | `gemini-3.1-pro-preview` | reasoning, noreason | `thinking_config: {thinking_level: "LOW"}` (reasoning pins `HIGH`; pro rejects `MINIMAL`) |
 | `gemini` | `gemini-2.5-flash` | noreason only | `thinking_config: {thinking_budget: 0}` |
 | `gemini` | `gemini-2.5-flash-lite` | noreason only | `thinking_config: {thinking_budget: 0}` |
 

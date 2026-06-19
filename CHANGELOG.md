@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.426]
+
+Add `gemini-3.1-pro-preview` as a selectable main-agent backend (Ollama/qwen stays the default).
+
+- **`_LLM_SETTINGS` pro entry** (`co_cli/config/llm.py`): full reasoning + noreason backend — reasoning pins `thinking_level=HIGH` for depth, noreason `LOW` to keep helpers fast (pro rejects flash-only `MINIMAL`); output capped at the 65,536 ceiling.
+- **Context budget:** inherits the shipped FRONTIER 524k budget via the Plan A profile resolver — no new budget code; the Ollama `num_ctx` probe is skipped on the gemini path.
+- Live smoke confirmed a real reasoning turn with a tool call + a noreason `llm_call` against the API.
+- **Accepted known cost:** a turn can cross the >200K long-context pricing cliff unsignalled — cost guardrails deferred.
+- **Dated follow-up:** revisit `gemini-3.1-pro-preview` → GA id on/after 2026-07-01 (a preview id can be deprecated independent of GA pricing).
+
 ## [0.8.424]
 
 Model-profile seam — make the context budget model-aware via ONE resolver (Plan A of the 3-plan model-profile split). Mechanism only; prompt-content overlays are deferred to Plans B/C.

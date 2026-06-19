@@ -46,6 +46,25 @@ def test_user_override_wins_over_profile_default() -> None:
     assert LlmSettings(provider="ollama", max_context_tokens=32_768).max_context_tokens == 32_768
 
 
+def test_gemini_pro_is_usable_main_backend() -> None:
+    """gemini-3.1-pro-preview validates and yields valid settings for both modes."""
+    llm = LlmSettings(provider="gemini", model="gemini-3.1-pro-preview", api_key="x")
+    assert llm.validate_config() is None
+    reasoning = llm.reasoning_model_settings()
+    noreason = llm.noreason_model_settings()
+    assert reasoning["max_tokens"] == 65_536
+    assert reasoning["google_thinking_config"] == {"thinking_level": "HIGH"}
+    assert noreason["max_tokens"] <= 65_536
+    assert noreason["google_thinking_config"] == {"thinking_level": "LOW"}
+
+
+def test_gemini_pro_inherits_frontier_budget_and_skips_ollama_probe() -> None:
+    """The pinned pro model inherits the 524k FRONTIER budget; no Ollama probe runs."""
+    llm = LlmSettings(provider="gemini", model="gemini-3.1-pro-preview", api_key="x")
+    assert llm.max_context_tokens == FRONTIER_MAX_CONTEXT_TOKENS == 524_288
+    assert llm.ollama_num_ctx() is None
+
+
 @pytest.mark.asyncio
 async def test_default_assembled_prompt_byte_identical() -> None:
     """The wired profile-overlay builder contributes nothing on the default backend.

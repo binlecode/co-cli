@@ -154,6 +154,24 @@ _LLM_SETTINGS: dict[str, Any] = {
                 "thinking_config": {"thinking_level": "MINIMAL"},
             },
         },
+        # Pro-tier reasoner: full main-agent backend (reasoning + noreason).
+        # thinking_level pinned explicitly — HIGH for depth on the main agent, LOW
+        # to keep helper calls fast. NOTE: pro rejects MINIMAL (flash-only); LOW is the
+        # lowest level pro supports. Output capped at the model's 65,536 ceiling.
+        "gemini-3.1-pro-preview": {
+            "reasoning": {
+                "temperature": 1.0,
+                "top_p": 0.95,
+                "max_tokens": 65536,
+                "thinking_config": {"thinking_level": "HIGH"},
+            },
+            "noreason": {
+                "temperature": 0.7,
+                "top_p": 0.8,
+                "max_tokens": 16384,
+                "thinking_config": {"thinking_level": "LOW"},
+            },
+        },
         # Gemini 2.5 Flash/Flash-Lite: noreason-only — thinking_budget=0 disables thinking.
         # Cannot be used as the main reasoning model (no reasoning entry).
         "gemini-2.5-flash": {
