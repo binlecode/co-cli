@@ -176,7 +176,7 @@ async def test_memory_view_metadata_includes_kind_name_path(tmp_path: Path) -> N
             tmp_path / "memory",
             store,
             content="metadata check content here",
-            kind="user",
+            kind="note",
             title="metadata test",
         )
         deps = _make_deps(tmp_path, store)
@@ -186,7 +186,7 @@ async def test_memory_view_metadata_includes_kind_name_path(tmp_path: Path) -> N
             result = await memory_view(ctx, name=stem)
 
         meta = result.metadata or {}
-        assert meta.get("kind") == "user", f"metadata.kind must be 'user': {meta}"
+        assert meta.get("kind") == "note", f"metadata.kind must be 'note': {meta}"
         assert meta.get("name") == stem, f"metadata.name must be {stem!r}: {meta}"
         assert "path" in meta, f"metadata must include path: {meta}"
         assert meta["path"].endswith(".md"), f"path must end with .md: {meta}"

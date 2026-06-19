@@ -125,7 +125,7 @@ class IndexStore:
 
     Usage:
         store = IndexStore(config=settings)
-        store.upsert(source='memory', path='...', kind='user', ...)
+        store.upsert(source='memory', path='...', kind='note', ...)
         store.index_chunks('memory', '...', [Chunk(...), ...])
         results, degraded = store.search('pytest', sources=['memory'])
         store.close()

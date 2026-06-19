@@ -2,13 +2,13 @@
 
 > Peer tier: [sessions.md](sessions.md) (past conversation transcripts). Sibling surfaces: [skills.md](skills.md) (procedural capability). Doctrine (auto-injected into static prompt; never queried as memory): [personality.md](personality.md). Tool registration and approval: [tools.md](tools.md). Daemon reviewer + clock-driven housekeeping (merge, decay, archive): [dream.md](dream.md). Prompt assembly: [prompt-assembly.md](prompt-assembly.md). Startup sequencing: [bootstrap.md](bootstrap.md). Turn orchestration: [core-loop.md](core-loop.md).
 
-Foundation spec for the memory tier — long-term declarative memory items (user preferences, rules, articles, notes) that the agent accumulates and recalls.
+Foundation spec for the memory tier — long-term declarative memory items (rules, articles, notes) that the agent accumulates and recalls. (Who the user is and how they want to work live in the always-injected user profile, [§7](#7-user-profile-usermd), not as memory items.)
 
 Memory is one of five operational tiers in the agent loop: **doctrine** ([personality.md](personality.md), identity), **tools** ([tools.md](tools.md), capability), **skills** ([skills.md](skills.md), procedure), **memory** (this file — long-term declarative artifacts), and **session** ([sessions.md](sessions.md) — past conversation transcripts). Memory and session are peer tiers with distinct domain logic, mutation models, and lifecycle policies — memory is curated and hybrid-indexed; session transcripts are uncurated and searched lexically over the raw files (no shared index).
 
 ## 1. Functional Architecture
 
-Memory holds long-term declarative memory items: facts the agent has accumulated and that should outlive a single conversation. It is mutable (CRUD via `memory_create`/`memory_append`/`memory_replace`/`memory_delete`), kind-typed (user / rule / article / note), and subject to lifecycle (decay, daemon housekeeping merge).
+Memory holds long-term declarative memory items: facts the agent has accumulated and that should outlive a single conversation. It is mutable (CRUD via `memory_create`/`memory_append`/`memory_replace`/`memory_delete`), kind-typed (rule / article / note), and subject to lifecycle (decay, daemon housekeeping merge).
 
 Memory is never injected wholesale into the system prompt. Static personality content (soul seed, mindsets, bundled skill manifest) is injected once at agent construction. Memory items are loaded on-demand through the recall tool surface, keeping context bounded and recall purposeful.
 
@@ -38,7 +38,7 @@ Canon scenes (`souls/{role}/canon/*.md`) coexist in the same DB under `source='c
 ```
 co_cli/tools/memory/     Agent surface — memory_search, memory_view, memory_create/append/replace/delete
         ↓
-co_cli/memory/           Domain — MemoryStore (kinds, decay, two-pass search)
+co_cli/memory/           Domain — MemoryStore (kinds, decay, waterfall search)
         ↓
 co_cli/index/            Infrastructure facade — IndexStore (public) + retrieval, embedding, providers (private)
         ↓
@@ -63,7 +63,7 @@ Optional reranker (applied after merge, before limit): TEI cross-encoder (`cross
 
 **Runtime degradation signal.** A hybrid recall can silently answer in a weaker mode: the embedder is unreachable (semantic leg lost → FTS-only) or the reranker is unavailable (breaker open or TEI call fails → the `rerank_score_floor` never runs, so weak candidates leak through). `IndexStore.search` returns the results together with a `frozenset[RecallDegradation]` (`semantic_unavailable` / `rerank_unavailable`; empty = healthy). Both can co-occur on one query. This surfaces on two channels:
 - *Operator:* the `index.hybrid_degraded_to_fts` event and the `co.index.degraded` attribute on the `index.search` span (`co tail` / `co trace`).
-- *Model:* `memory_search` appends a terse `recall: …` status line (peer-aligned with openclaw's `effectiveMode`/`fallback` field — recall provenance, not prose directives) naming the active modes (`lexical-only (semantic search down …)` / `unranked (reranker down …)`), so the agent can treat a miss as inconclusive or weak hits as unfiltered. `MemoryStore.search_memory_items` propagates the set (union over its two passes); the grep fallback reports none.
+- *Model:* `memory_search` appends a terse `recall: …` status line (peer-aligned with openclaw's `effectiveMode`/`fallback` field — recall provenance, not prose directives) naming the active modes (`lexical-only (semantic search down …)` / `unranked (reranker down …)`), so the agent can treat a miss as inconclusive or weak hits as unfiltered. `MemoryStore.search_memory_items` propagates the set; the grep fallback reports none.
 
 Each candidate's text sent to the reranker is truncated to `rerank_text_char_budget` chars (default 512; the title is prepended and never clipped). The cross-encoder runs one forward pass per `(query, candidate)` pair, so its latency scales with `candidate_count × tokens_per_candidate` — an untruncated batch of ~50 large chunks costs ~14s, while a 512-char cap holds it to ~2s. Relevance scoring saturates well within 512 chars, so the cap is a no-op for the ~54% of chunks already shorter than it and preserves ranking fidelity on the rest (see `docs/REPORT-rerank-latency-calibration.md` for the calibration).
 
@@ -84,6 +84,8 @@ Each candidate's text sent to the reranker is truncated to `rerank_text_char_bud
 | `memory.chunk_tokens` | `CO_MEMORY_CHUNK_TOKENS` | `600` | paragraph-aware chunking budget for memory items |
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | chunk overlap |
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | token-Jaccard threshold for write-time dedup and daemon merge clusters |
+| `memory.user_profile_enabled` | `CO_MEMORY_USER_PROFILE_ENABLED` | `true` | gate the always-injected user profile block ([§7](#7-user-profile-usermd)) |
+| `memory.user_profile_char_budget` | `CO_MEMORY_USER_PROFILE_CHAR_BUDGET` | `1500` | max chars for `USER.md`; over-budget writes are rejected so the reviewer consolidates |
 
 Memory items are never decayed by age or recall frequency (storage is unconstrained; recall is top-k + score-floor gated), so there are no `decay_after_days`/`recall_protection_days` knobs. The only automated curation is similarity-based merge.
 
@@ -104,10 +106,10 @@ Session search is file-based (ripgrep) and has no configurable settings; the `me
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `memory_search(ctx, query, kinds=None, limit=10)` | `co_cli/tools/memory/recall.py` | Async tool — two-pass ranked recall over memory items; empty query → recent-item browse |
+| `memory_search(ctx, query, kinds=None, limit=10)` | `co_cli/tools/memory/recall.py` | Async tool — ranked recall over memory items; empty query → recent-item browse |
 | `memory_view(ctx, name)` | `co_cli/tools/memory/view.py` | Async tool — returns full memory item body by `filename_stem`; frontmatter stripped |
 
-Result fields for `memory_search`: `{kind, title, snippet, score, path, filename_stem}`. Two-pass policy in `co_cli/memory/store.py`: user-kind priority pass (cap `_USER_PRIORITY_CAP=3`) + waterfall over remaining kinds (cap `_WATERFALL_CHUNK_CAP=5`).
+Result fields for `memory_search`: `{kind, title, snippet, score, path, filename_stem}`. Single waterfall in `co_cli/memory/store.py` over rule / article / note kinds (cap `_WATERFALL_CHUNK_CAP=5`).
 
 ### Write
 
@@ -122,12 +124,12 @@ Result fields for `memory_search`: `{kind, title, snippet, score, path, filename
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `MemoryStore(index, config)` | `co_cli/memory/store.py` | Domain store composing IndexStore — owns memory kinds, two-pass search, decay hooks |
+| `MemoryStore(index, config)` | `co_cli/memory/store.py` | Domain store composing IndexStore — owns memory kinds, waterfall search, decay hooks |
 | `MemoryStore.sync_dir(memory_dir)` | `co_cli/memory/store.py` | Hash-based directory indexer for memory items |
-| `MemoryStore.search_memory_items(query, kinds, limit)` | `co_cli/memory/store.py` | Two-pass FTS recall with user-kind priority + kind waterfall |
+| `MemoryStore.search_memory_items(query, kinds, limit)` | `co_cli/memory/store.py` | Single waterfall FTS recall over rule / article / note |
 | `MemoryStore.list_memory_items(kinds, limit)` | `co_cli/memory/store.py` | Inventory rows for browse mode |
-| `MemoryItem` | `co_cli/memory/item.py` | Reusable memory item data model — user / rule / article / note / canon items share this schema, differentiated by the `memory_kind` field |
-| `MemoryKindEnum` | `co_cli/memory/item.py` | USER / RULE / ARTICLE / NOTE (and CANON for the doctrine source) |
+| `MemoryItem` | `co_cli/memory/item.py` | Reusable memory item data model — rule / article / note / canon items share this schema, differentiated by the `memory_kind` field |
+| `MemoryKindEnum` | `co_cli/memory/item.py` | RULE / ARTICLE / NOTE (and CANON for the doctrine source) |
 | `save_memory_item`, `mutate_memory_item` | `co_cli/memory/service.py` | Pure write functions — no RunContext |
 
 ### Index API (cross-tier)
@@ -241,7 +243,7 @@ Inline curation is a doctrine-level discipline (see `co_cli/context/rules/07_mem
 
 ### Session-end reviewers
 
-`memory_review` and `skill_review` (see [dream.md](dream.md)) operate over the session transcript as substrate, extracting durable facts and procedural updates. The session itself is **not** promoted to a first-class memory object — session boundaries are user-defined and arbitrary (lunch, Ctrl+C, task-switch). Reviewer-extracted items are tagged `source_type='session_review'`. See [sessions.md](sessions.md) for the transcript tier and [core-loop.md](core-loop.md) for turn orchestration that triggers session-end kicks.
+`memory_review` and `skill_review` (see [dream.md](dream.md)) operate over the session transcript as substrate, extracting durable facts and procedural updates. The memory reviewer routes *who the user is / how they want to work* to the `USER.md` profile ([§7](#7-user-profile-usermd)) and *environment facts, references, standing rules* to memory items. The session itself is **not** promoted to a first-class memory object — session boundaries are user-defined and arbitrary (lunch, Ctrl+C, task-switch). Reviewer-extracted items are tagged `source_type='session_review'`. See [sessions.md](sessions.md) for the transcript tier and [core-loop.md](core-loop.md) for turn orchestration that triggers session-end kicks.
 
 ### Merge (closing the loop)
 
@@ -258,3 +260,17 @@ Five values populate `MemoryItem.source_type`:
 | `drive` | Google Drive sync | external read-only source |
 | `consolidated` | dream merge (`_housekeeping.merge_memory`) | output of duplicate-collapse pass |
 | `session_review` | memory reviewer (`_run_memory_review`) | reviewer-extracted durable facts |
+
+## 7. User profile (USER.md)
+
+*Who the user is and how they want to work* does not live as memory items — search-driven recall is unreliable for the highest-frequency, most personalization-critical surface (small local models under-fire `memory_search`). Instead a single model-curated markdown blob at `~/.co-cli/USER.md` is **deterministically injected** into every session's static prompt. There is no `kind='user'` memory item — that surface was removed entirely in favor of this one.
+
+| Aspect | Behavior |
+| --- | --- |
+| Storage | `~/.co-cli/USER.md` (`USER_PROFILE_PATH`); `co_cli/memory/user_profile.py` read/write, atomic, char-budget-capped |
+| Injection | `_user_profile_provider` static builder in `co_cli/agent/orchestrator.py` — read once at orchestrator build (snapshot-at-load, frozen per session); empty file or `user_profile_enabled=false` injects nothing |
+| Writers | Primary: the dream memory reviewer ([dream.md](dream.md)). Main agent: only on explicit user request (e.g. "remember I prefer X"), via the curation tools below |
+| Curation tools | `user_profile_view(ctx)` and `user_profile_write(ctx, content)` in `co_cli/tools/user_profile/` — both `DEFERRED` (off the default floor, revealed via `tool_view`); `user_profile_write` is approval-gated on the main-agent path and wholesale-rewrite only |
+| Population | Requires `memory.review_enabled=true`. With the reviewer off (default), the surface is wired and injecting-ready but stays empty (no-op) |
+
+The injected artifact is one holistic curated blob, not an enumerated per-fact-type auto-inject list. General memory recall (`rule`/`article`/`note`) stays search-driven; only the user-profile surface uses deterministic injection. See [prompt-assembly.md](prompt-assembly.md) for the static-instruction build order.

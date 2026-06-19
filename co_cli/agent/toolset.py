@@ -57,6 +57,8 @@ from co_cli.tools.tasks.control import (  # noqa: F401
 )
 from co_cli.tools.todo.rw import todo_read, todo_write  # noqa: F401
 from co_cli.tools.tool_call_limit import make_exceeded_payload
+from co_cli.tools.user_profile.view import user_profile_view  # noqa: F401
+from co_cli.tools.user_profile.write import user_profile_write  # noqa: F401
 from co_cli.tools.vision.view import image_view  # noqa: F401
 from co_cli.tools.web.fetch import web_fetch  # noqa: F401
 from co_cli.tools.web.search import web_search  # noqa: F401

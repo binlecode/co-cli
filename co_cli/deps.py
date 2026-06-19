@@ -15,6 +15,7 @@ from co_cli.config.core import (
     TOOL_RESULTS_DIR,
     USAGE_LOG,
     USER_DIR,
+    USER_PROFILE_PATH,
     Settings,
 )
 from co_cli.config.llm import MAX_CONTEXT_TOKENS
@@ -268,6 +269,7 @@ _DEFAULT_MEMORY_DIR = MEMORY_DIR
 _DEFAULT_SESSIONS_DIR = SESSIONS_DIR
 _DEFAULT_TOOL_RESULTS_DIR = TOOL_RESULTS_DIR
 _DEFAULT_USAGE_LOG = USAGE_LOG
+_DEFAULT_USER_PROFILE_PATH = USER_PROFILE_PATH
 
 
 @dataclass
@@ -329,6 +331,8 @@ class CoDeps:
     # explicit non-empty list (resolve_workspace_paths / fork) is authoritative (BC-3).
     file_search_roots: list[Path] = field(default_factory=list)
     memory_dir: Path = field(default_factory=lambda: _DEFAULT_MEMORY_DIR)
+    # Always-injected user profile (~/.co-cli/USER.md) — reviewer-curated, read once at build
+    user_profile_path: Path = field(default_factory=lambda: _DEFAULT_USER_PROFILE_PATH)
     skills_dir: Path = field(default_factory=lambda: _DEFAULT_SKILLS_DIR)
     user_skills_dir: Path = field(default_factory=lambda: _DEFAULT_USER_SKILLS_DIR)
     sessions_dir: Path = field(default_factory=lambda: _DEFAULT_SESSIONS_DIR)
@@ -390,6 +394,7 @@ def resolve_workspace_paths(config: Settings) -> dict[str, Any]:
         "tool_results_dir": TOOL_RESULTS_DIR,
         "usage_log_path": USAGE_LOG,
         "memory_dir": Path(config.memory_path) if config.memory_path else MEMORY_DIR,
+        "user_profile_path": USER_PROFILE_PATH,
     }
 
 
@@ -439,6 +444,7 @@ def fork_deps(base: CoDeps) -> CoDeps:
         workspace_dir=base.workspace_dir,
         file_search_roots=base.file_search_roots,
         memory_dir=base.memory_dir,
+        user_profile_path=base.user_profile_path,
         skills_dir=base.skills_dir,
         user_skills_dir=base.user_skills_dir,
         sessions_dir=base.sessions_dir,

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.418]
+
+Port hermes' always-injected `USER.md` profile and remove the `kind='user'` memory kind — closes Gap B. Who-the-user-is / how-they-want-to-work now lives in one deterministically-injected, reviewer-curated profile instead of search-driven memory items (small local models under-fire that recall).
+
+- **USER.md storage + budget (`memory/user_profile.py`):** read/write a single model-curated blob at `~/.co-cli/USER.md`, atomic writes, char-budget enforced (default 1500, config-sourced); over-budget rejects with usage reported so the model consolidates. Path resolved per-instance via `deps.user_profile_path`.
+- **Always-inject block:** new `_user_profile_provider` static builder injects a "USER PROFILE" block at orchestrator build time, gated on `memory.user_profile_enabled` and a non-empty file; snapshot-at-load, frozen per session.
+- **Curation tools (`user_profile_view` / `user_profile_write`):** DEFERRED on the main agent, primary writer is the dream reviewer; wholesale rewrite, approval-gated on the main-agent path.
+- **`kind='user'` removed:** `search_memory_items` collapses from two-pass priority to a single `rule|article|note` waterfall; recall/manage/index surfaces and prompt rules 05/07 updated; explicit "remember I prefer X" now routes to the profile, domain-scoped rules stay as memory items.
+
 ## [0.8.416]
 
 Close the two remaining dream-cognition eval gaps — real-model coverage of the skill-reviewer extraction path and the merge over-merge (fact-preservation) direction. Eval-layer only; no production source touched.

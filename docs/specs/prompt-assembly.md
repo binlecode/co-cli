@@ -40,11 +40,12 @@ flowchart TD
 
 ### 2.1 Static Instruction Assembly
 
-`build_orchestrator()` assembles `static_instructions` by calling each builder in `ORCHESTRATOR_SPEC.static_instruction_builders` in order — three thin closures, each taking `deps` and returning `str | None`. All evaluated once at agent construction:
+`build_orchestrator()` assembles `static_instructions` by calling each builder in `ORCHESTRATOR_SPEC.static_instruction_builders` in order — four thin closures, each taking `deps` and returning `str | None`. All evaluated once at agent construction:
 
 1. **`_base_instructions_provider(deps)`** — wraps `build_base_instructions(deps.config)`: soul seed, mindsets, numbered rules (`co_cli/context/rules/NN_rule_id.md`), recency advisory. Character memories and critique are NOT included here.
-2. **`_toolset_guidance_provider(deps)`** — wraps `build_toolset_guidance(deps.tool_catalog)`: tool-specific guidance blocks, each gated on the tool being present. Currently gated: `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
-3. **`_personality_critique_provider(deps)`** — wraps `load_soul_critique(deps.config.personality)` and prefixes with `## Review lens` heading; appended last when a personality is configured and a critique file exists. Placed after operational guidance so the review frame wraps the complete prompt.
+2. **`_user_profile_provider(deps)`** — reads `deps.user_profile_path` (`~/.co-cli/USER.md`) once and wraps it in a `## USER PROFILE (who the user is)` block; gated on `deps.config.memory.user_profile_enabled`. Returns `None` when the flag is off or the file is empty, so an absent profile injects nothing. Snapshot-at-load, frozen for the session. See [memory.md](memory.md) §7.
+3. **`_toolset_guidance_provider(deps)`** — wraps `build_toolset_guidance(deps.tool_catalog)`: tool-specific guidance blocks, each gated on the tool being present. Currently gated: `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
+4. **`_personality_critique_provider(deps)`** — wraps `load_soul_critique(deps.config.personality)` and prefixes with `## Review lens` heading; appended last when a personality is configured and a critique file exists. Placed after operational guidance so the review frame wraps the complete prompt.
 
 The parts are joined with `"\n\n"` and passed as the `instructions=` string to `Agent(...)`. The string is stable for the entire session — it never changes between turns. The skill manifest and deferred-tool awareness are NOT in this block — they live in per-turn instruction callbacks (§2.2) so that `skill_catalog` / `tool_catalog` mutations do not churn the cached prefix bytes.
 

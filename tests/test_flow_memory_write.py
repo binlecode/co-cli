@@ -87,7 +87,7 @@ def test_save_memory_item_enum_kind_serializes_as_plain_string(tmp_path):
     result = save_memory_item(
         memory_dir,
         content="staging deploy id is STG_DEPLOY_42",
-        memory_kind=MemoryKindEnum.USER,
+        memory_kind=MemoryKindEnum.NOTE,
         title="enum kind note",
     )
 
@@ -95,10 +95,10 @@ def test_save_memory_item_enum_kind_serializes_as_plain_string(tmp_path):
     assert "!!python/object" not in raw, (
         f"frontmatter must not contain a python-object tag for memory_kind:\n{raw}"
     )
-    assert "memory_kind: user" in raw, f"memory_kind must serialize as plain string:\n{raw}"
+    assert "memory_kind: note" in raw, f"memory_kind must serialize as plain string:\n{raw}"
 
     item = load_memory_item(result.path)
-    assert item.memory_kind == "user"
+    assert item.memory_kind == "note"
     assert isinstance(item.memory_kind, str)
 
 

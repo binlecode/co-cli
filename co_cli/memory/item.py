@@ -1,6 +1,6 @@
 """Unified memory item data model.
 
-MemoryItem is the single reusable memory-item model — user, rule, article,
+MemoryItem is the single reusable memory-item model — rule, article,
 and note items share this schema. Sessions (raw transcripts) live in the
 session/ module; memory items (everything reusable) live in ``memory_dir/``.
 See ``docs/specs/memory.md`` for the memory tier model and
@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 
 class MemoryKindEnum(StrEnum):
-    USER = "user"
     RULE = "rule"
     ARTICLE = "article"
     NOTE = "note"
@@ -30,7 +29,6 @@ class MemoryKindEnum(StrEnum):
 
 
 MemoryKind = Literal[
-    MemoryKindEnum.USER,
     MemoryKindEnum.RULE,
     MemoryKindEnum.ARTICLE,
     MemoryKindEnum.NOTE,
@@ -54,7 +52,7 @@ class IndexSourceEnum(StrEnum):
 
 @dataclass
 class MemoryItem:
-    """A single reusable memory item (preferences, rules, articles, notes, …)."""
+    """A single reusable memory item (rules, articles, notes, …)."""
 
     id: str
     path: Path

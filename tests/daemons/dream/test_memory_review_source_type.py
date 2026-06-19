@@ -35,7 +35,7 @@ async def test_memory_create_persists_source_type_session_review(tmp_path: Path)
         ctx,
         name_title="reviewer-extracted-fact",
         content="The user prefers terse responses.",
-        kind="user",
+        kind="note",
         source_type="session_review",
     )
 

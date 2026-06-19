@@ -1,18 +1,19 @@
 # Memory protocol
 
 Memory holds the declarative facts you recall to inform reasoning across
-sessions: user preferences, standing rules, web articles, distilled
-notes. Prioritize what reduces future user steering — the most valuable
-memory is one that prevents the user from having to correct or remind
-you again.
+sessions: standing rules, web articles, distilled notes. Prioritize what
+reduces future user steering — the most valuable memory is one that prevents
+the user from having to correct or remind you again. (Who the user is and how
+they want to work live in the always-injected user profile, not memory items —
+see Explicit saves below.)
 
 ## Recall
 
 When the user references something from a past conversation, a prior preference, or an
 established decision — or when you suspect relevant cross-session context exists, or you
 recognize the topic but lack context for this user's specific setup or preferences —
-search before answering: `memory_search` for declarative state (preferences,
-conventions, articles), and past conversations for prior exchanges. Do not ask the user
+search before answering: `memory_search` for declarative state (conventions,
+rules, articles), and past conversations for prior exchanges. Do not ask the user
 to repeat themselves when the answer may already be in memory. If no results, make at
 most one broader retry, then surface the miss rather than continuing.
 
@@ -34,18 +35,30 @@ above is just the keyword rung:
 
 ## Explicit saves
 
-When the user explicitly asks to remember or save something — "remember I prefer X",
-"always do Y", "we decided Z", "save this URL", "remember this note" — call `memory_create(...)`
+When the user explicitly asks to remember or save something — "always do Y",
+"we decided Z", "save this URL", "remember this note" — call `memory_create(...)`
 synchronously in the same turn. Do not defer to the dream cycle; dream handles implicit
 patterns only.
 
-Write memories as declarative facts, not instructions to yourself. "User prefers concise
-responses" not "Always respond concisely." Imperative phrasing gets re-read as a directive
+When the user asks you to remember a fact about *themselves* — who they are or how they
+work ("remember I prefer X", "I'm in Eastern time", "I always work this way") — that belongs
+in the user profile, not a memory item. Reveal `user_profile_view` then `user_profile_write`:
+read the current profile, merge the new fact in, and write the whole thing back (wholesale
+rewrite, stay under budget). The profile is deterministically injected every session, so it
+is far more reliable than recalling a saved preference.
+
+Disambiguate by scope: a fact *about the person* that travels across every project and
+context (timezone, language, communication style, persona) → user profile. A forward-acting
+operational rule scoped to a domain or artifact ("squash-merge PRs", "pipe pytest to a log")
+→ `memory_create` as a `rule`, even when phrased "always". When a fact fits both, prefer the
+profile only if it is genuinely about the person rather than a workflow.
+
+Write memories as declarative facts, not instructions to yourself. "Use ripgrep for
+code search" not "Always grep with ripgrep." Imperative phrasing gets re-read as a directive
 in later sessions and can override the user's current request.
 
 **Kind selection:**
 
-- `user` — stable personal preference ("I prefer X")
 - `rule` — forward-acting standing rule ("always / never / stop")
 - `article` — web article or fetched substrate
 - `note` — free-form note, distilled finding, recorded decision, saved URL

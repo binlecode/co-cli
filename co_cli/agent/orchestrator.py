@@ -33,6 +33,17 @@ def _base_instructions_provider(deps: CoDeps) -> str | None:
     return build_base_instructions(deps.config)
 
 
+def _user_profile_provider(deps: CoDeps) -> str | None:
+    if not deps.config.memory.user_profile_enabled:
+        return None
+    from co_cli.memory.user_profile import read_user_profile
+
+    profile = read_user_profile(deps.user_profile_path).strip()
+    if not profile:
+        return None
+    return f"## USER PROFILE (who the user is)\n\n{profile}"
+
+
 def _toolset_guidance_provider(deps: CoDeps) -> str | None:
     from co_cli.context.guidance import build_toolset_guidance
 
@@ -54,6 +65,7 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
     name="orchestrator",
     static_instruction_builders=(
         _base_instructions_provider,
+        _user_profile_provider,
         _toolset_guidance_provider,
         _personality_critique_provider,
     ),

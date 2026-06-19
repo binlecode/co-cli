@@ -40,6 +40,9 @@ MEMORY_ENV_MAP: dict[str, str] = {
     "chunk_tokens": "CO_MEMORY_CHUNK_TOKENS",
     "chunk_overlap_tokens": "CO_MEMORY_CHUNK_OVERLAP_TOKENS",
     "consolidation_similarity_threshold": "CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD",
+    "review_enabled": "CO_MEMORY_REVIEW_ENABLED",
+    "user_profile_enabled": "CO_MEMORY_USER_PROFILE_ENABLED",
+    "user_profile_char_budget": "CO_MEMORY_USER_PROFILE_CHAR_BUDGET",
 }
 
 
@@ -70,3 +73,6 @@ class MemorySettings(BaseModel):
     chunk_tokens: int = Field(default=DEFAULT_MEMORY_CHUNK_TOKENS, ge=0)
     chunk_overlap_tokens: int = Field(default=DEFAULT_MEMORY_CHUNK_OVERLAP_TOKENS, ge=0)
     consolidation_similarity_threshold: float = Field(default=0.75, ge=0.0, le=1.0)
+    review_enabled: bool = Field(default=False)
+    user_profile_enabled: bool = Field(default=True)
+    user_profile_char_budget: int = Field(default=1500, ge=1)

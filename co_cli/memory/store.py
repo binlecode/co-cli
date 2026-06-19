@@ -4,7 +4,7 @@ Owns memory-specific indexing logic:
   - Markdown frontmatter parsing
   - Paragraph chunking via co_cli.memory.chunker.chunk_text
   - Hash-skip per-file
-  - Two-pass search policy (user-priority + waterfall)
+  - Single waterfall search policy over rule / article / note
 
 Source value for the index store: ``'memory'``.
 """
@@ -30,11 +30,8 @@ logger = logging.getLogger(__name__)
 MEMORY_SOURCE = IndexSourceEnum.MEMORY.value
 """DB ``source`` column value for memory artifacts."""
 
-_USER_PRIORITY_CAP = 3
-"""User-kind chunk hits returned in the priority pass."""
-
 _WATERFALL_CHUNK_CAP = 5
-"""Maximum chunk hits in the waterfall (rule / article / note) pass."""
+"""Maximum chunk hits in the waterfall (rule / article / note) search."""
 
 
 def _sha256(content: str) -> str:
@@ -42,7 +39,7 @@ def _sha256(content: str) -> str:
 
 
 class MemoryStore:
-    """Domain store for memory artifacts (user / rule / article / note)."""
+    """Domain store for memory artifacts (rule / article / note)."""
 
     def __init__(self, *, index: IndexStore, config: Settings) -> None:
         self._index = index
@@ -172,32 +169,15 @@ class MemoryStore:
         kinds: list[str] | None,
         limit: int,
     ) -> tuple[list[SearchResult], frozenset[RecallDegradation]]:
-        """Two-pass search policy: user-kind priority + waterfall over other kinds.
+        """Single waterfall search over rule / article / note kinds.
 
-        - Pass 1 (priority): user-kind hits up to ``_USER_PRIORITY_CAP``.
-        - Pass 2 (waterfall): remaining kinds (rule / article / note unless caller specified).
-          Returns chunk-level hits capped at ``_WATERFALL_CHUNK_CAP``.
-
-        Final list = pass-1 results followed by pass-2 results, truncated to ``limit``.
-        The degradation set is the union over both passes (empty = healthy recall).
+        Returns chunk-level hits capped at ``_WATERFALL_CHUNK_CAP``, truncated to
+        ``limit``. The degradation set is empty when recall is healthy.
         """
         results: list[SearchResult] = []
         degraded: set[RecallDegradation] = set()
 
-        if kinds is None or "user" in kinds:
-            try:
-                user_hits, user_degraded = self._index.search(
-                    query,
-                    sources=[MEMORY_SOURCE],
-                    kinds=["user"],
-                    limit=_USER_PRIORITY_CAP,
-                )
-                results.extend(user_hits)
-                degraded |= user_degraded
-            except Exception as e:
-                logger.warning("User-kind priority search failed: %s", e)
-
-        waterfall_kinds = list(set(kinds or ["rule", "article", "note"]) - {"user"})
+        waterfall_kinds = list(kinds or ["rule", "article", "note"])
         if waterfall_kinds:
             try:
                 waterfall_hits, waterfall_degraded = self._index.search(

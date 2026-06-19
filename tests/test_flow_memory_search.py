@@ -12,7 +12,7 @@ from tests._timeouts import FILE_DB_TIMEOUT_SECS
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.index.store import IndexStore
 from co_cli.memory.service import reindex, save_memory_item
-from co_cli.memory.store import _USER_PRIORITY_CAP, MemoryStore
+from co_cli.memory.store import MemoryStore
 from co_cli.tools.memory.recall import memory_search
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -108,40 +108,6 @@ async def test_memory_search_returns_hit_with_correct_field_shape(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_memory_search_empty_query_browse_returns_user_kind(tmp_path: Path) -> None:
-    """Empty-query memory_search with kinds=['user'] returns user-kind artifacts."""
-    index, memory = _make_stores(tmp_path)
-    try:
-        _seed(
-            tmp_path / "memory",
-            index,
-            content="user preference about editors",
-            kind="user",
-            title="editor prefs",
-        )
-        _seed(
-            tmp_path / "memory",
-            index,
-            content="article about vim configuration",
-            kind="article",
-            title="vim article",
-        )
-        deps = _make_deps(tmp_path, index, memory)
-        ctx = _ctx(deps)
-
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await memory_search(ctx, query="", kinds=["user"])
-
-        results = result.metadata.get("results", [])
-        assert results, "expected at least one result"
-        assert all(r["kind"] == "user" for r in results), (
-            f"browse with kinds=['user'] must only return user-kind: {results}"
-        )
-    finally:
-        index.close()
-
-
-@pytest.mark.asyncio
 async def test_memory_search_no_match_returns_empty(tmp_path: Path) -> None:
     """memory_search with a no-match query returns count=0 and empty results, no error."""
     index, memory = _make_stores(tmp_path)
@@ -177,9 +143,9 @@ async def test_memory_search_kinds_filter_respected(tmp_path: Path) -> None:
         _seed(
             tmp_path / "memory",
             index,
-            content="filterkind marker user preference about something",
-            kind="user",
-            title="user pref",
+            content="filterkind marker note about something",
+            kind="note",
+            title="misc note",
         )
         deps = _make_deps(tmp_path, index, memory)
         ctx = _ctx(deps)
@@ -191,34 +157,6 @@ async def test_memory_search_kinds_filter_respected(tmp_path: Path) -> None:
         assert results, "expected at least one rule hit"
         assert all(r["kind"] == "rule" for r in results), (
             f"kinds=['rule'] filter must exclude non-rule results: {results}"
-        )
-    finally:
-        index.close()
-
-
-@pytest.mark.asyncio
-async def test_memory_search_user_priority_pass_cap_honoured(tmp_path: Path) -> None:
-    """memory_search must cap user-kind hits at _USER_PRIORITY_CAP per call."""
-    index, memory = _make_stores(tmp_path)
-    try:
-        cap_token = "usercap_marker_xq8z"
-        for i in range(_USER_PRIORITY_CAP + 2):
-            _seed(
-                tmp_path / "memory",
-                index,
-                content=f"{cap_token} user preference number {i}",
-                kind="user",
-                title=f"user pref {i}",
-            )
-        deps = _make_deps(tmp_path, index, memory)
-        ctx = _ctx(deps)
-
-        async with asyncio.timeout(FILE_DB_TIMEOUT_SECS):
-            result = await memory_search(ctx, query=cap_token, kinds=["user"])
-
-        user_hits = [r for r in result.metadata.get("results", []) if r["kind"] == "user"]
-        assert len(user_hits) <= _USER_PRIORITY_CAP, (
-            f"user hits must be capped at {_USER_PRIORITY_CAP}, got {len(user_hits)}"
         )
     finally:
         index.close()

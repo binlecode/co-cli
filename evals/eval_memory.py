@@ -28,15 +28,27 @@ from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, EvalRun, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._settings import apply_eval_window
-from evals._timeouts import CALL_TIMEOUT_S
+from evals._timeouts import CALL_TIMEOUT_S, DREAM_CYCLE_BUDGET_S
 from evals._trace import record_turn
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
 
-from co_cli.context.orchestrate import run_turn
+from co_cli.agent.orchestrate import run_turn
+from co_cli.daemons.dream._reviewer import process_review
 from co_cli.deps import CoDeps
+from co_cli.session.filename import session_filename
+from co_cli.session.persistence import append_messages
 
 _W3G_STEM = "eval_w3g_fact"
 _W3G_TITLE = "eval_W3G_fact"
 _W3G_TOKEN = "W3G_MARKER_XK42"
+
+_REVIEWER_FIXTURE_UUID8 = "d5e6f7a8"
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +101,71 @@ def _seed_memory_artifact(
     if deps.memory_store is not None:
         deps.memory_store.reindex_one(artifact_path, body, markdown_content, frontmatter)
     return artifact_path
+
+
+def _make_durable_token() -> str:
+    """Per-run-unique marker embedded in the one durable preference.
+
+    Unique per run so a memory item left by a prior run can never satisfy the
+    structural gate — only this run's reviewer output carries this token.
+    """
+    return f"PREF_{uuid4().hex[:12].upper()}"
+
+
+def _seed_reviewer_transcript(sessions_dir: Path) -> tuple[Path, str]:
+    """Write a real JSONL transcript: one durable preference among transient noise.
+
+    Borrows only the stale-purge + per-run-token discipline from eval_session_recall.
+    The line format is real ``ModelRequest``/``ModelResponse`` objects serialized via
+    ``append_messages`` — this transcript is read back by ``load_transcript`` (the
+    reviewer path), which silently skips lines that do not parse as the message
+    tagged union, so the raw ``part_kind`` shape that session_search tolerates would
+    yield an empty transcript here.
+
+    Returns the transcript path and the per-run durable token.
+    """
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    for stale in sessions_dir.glob(f"*-{_REVIEWER_FIXTURE_UUID8}.jsonl"):
+        stale.unlink()
+    token = _make_durable_token()
+    messages: list[ModelMessage] = [
+        ModelRequest(
+            parts=[
+                UserPromptPart(content="Quick logistics — are we still on for the 3pm sync today?")
+            ]
+        ),
+        ModelResponse(parts=[TextPart(content="Yes, 3pm still works on my end.")]),
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=(
+                        "One standing preference I want you to remember going forward: "
+                        f"always tag my deploy notes with the marker {token}. "
+                        "This applies to every deploy note from now on, not just today."
+                    )
+                )
+            ]
+        ),
+        ModelResponse(
+            parts=[
+                TextPart(content="Understood — I'll tag every deploy note that way from now on.")
+            ]
+        ),
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content="Cool, thanks. Unrelated — did you catch the game last night?"
+                )
+            ]
+        ),
+        ModelResponse(
+            parts=[TextPart(content="I don't follow sports, but I hope it was a good one.")]
+        ),
+    ]
+    created_at = datetime.now(UTC)
+    path = sessions_dir / session_filename(created_at, _REVIEWER_FIXTURE_UUID8)
+    append_messages(path, messages)
+    return path, token
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +335,104 @@ async def case_w3_g_forget_propagates_to_recall(
     )
 
 
+async def case_reviewer_extracts_durable_memory(
+    deps: CoDeps,
+    agent: Any,
+    frontend: EvalFrontend,
+    run: EvalRun,
+) -> CaseResult:
+    """Reviewer cognition — process_review extracts the durable preference, drops noise.
+
+    Drives the real dream memory reviewer end-to-end against a seeded transcript
+    carrying one durable preference among transient chatter. Structural gate: a new
+    memory item carrying the per-run token appeared. Judged: the item faithfully
+    captures the preference and does not memorialize the noise.
+
+    ``agent``/``frontend`` are unused (this case calls ``process_review`` directly,
+    not ``run_turn``) but kept for the ``case_fn(deps, agent, frontend, run)``
+    tuple-dispatch signature.
+    """
+    case_id = "W3.R"
+    t0 = time.monotonic()
+
+    before = set(deps.memory_dir.glob("*.md")) if deps.memory_dir.exists() else set()
+    try:
+        seed_path, token = _seed_reviewer_transcript(deps.sessions_dir)
+    except Exception as exc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"seed failed: {type(exc).__name__}: {exc}",
+        )
+
+    try:
+        async with asyncio.timeout(DREAM_CYCLE_BUDGET_S):
+            await process_review(deps, "memory", seed_path.stem, persisted_message_count=None)
+    except Exception as exc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"reviewer failed: {type(exc).__name__}: {exc}",
+        )
+
+    after = set(deps.memory_dir.glob("*.md")) if deps.memory_dir.exists() else set()
+    new_items = sorted(after - before)
+    token_items = [p for p in new_items if token in p.read_text(encoding="utf-8")]
+    if not token_items:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=(
+                f"structural gate: no new memory item carrying token {token!r}; "
+                f"new={[p.name for p in new_items]}"
+            ),
+        )
+
+    item_body = token_items[0].read_text(encoding="utf-8")
+    rubric = (
+        "A dream reviewer read a short conversation and wrote the memory item below. "
+        "The conversation contained exactly ONE durable user preference: the user asked to "
+        f"always tag their deploy notes with the marker {token}. The rest was transient "
+        "chatter — a 3pm sync logistics check and a one-off question about a sports game — "
+        "that should NOT be memorialized. "
+        "PASS if the item faithfully captures the durable deploy-note tagging preference. "
+        "FAIL if it instead memorializes the transient sync/sports chatter, invents a fact "
+        "not in the conversation, or distorts the preference. Judge faithfulness only; a "
+        "faithful item may legitimately scope or condense what it keeps."
+    )
+    try:
+        async with asyncio.timeout(CALL_TIMEOUT_S):
+            jverdict = await judge_with_llm(
+                rubric,
+                [{"role": "assistant", "content": item_body}],
+                deps=deps,
+                model=deps.judge_model,
+            )
+    except Exception as jexc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"item_created={token_items[0].name} | judge_error: {type(jexc).__name__}",
+        )
+
+    verdict = Verdict.PASS if jverdict.passed else Verdict.SOFT_FAIL
+    reason = (
+        f"item={token_items[0].name} judge.score={jverdict.score} {judge_model_annotation(deps)}"
+    )
+    if jverdict.rationale:
+        reason += f" {jverdict.rationale[:120]}"
+    return CaseResult(
+        name=case_id,
+        verdict=verdict,
+        duration_s=time.monotonic() - t0,
+        reason=reason,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Entrypoint
 # ---------------------------------------------------------------------------
@@ -275,7 +450,10 @@ async def main() -> int:
     cases: list[CaseResult] = []
     try:
         async with open_eval_run("memory") as run:
-            for case_fn in (case_w3_g_forget_propagates_to_recall,):
+            for case_fn in (
+                case_w3_g_forget_propagates_to_recall,
+                case_reviewer_extracts_durable_memory,
+            ):
                 try:
                     cr = await case_fn(deps, agent, frontend, run)
                 except Exception as exc:

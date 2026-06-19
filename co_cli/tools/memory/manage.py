@@ -56,7 +56,7 @@ async def memory_create(
             filename_stem is derived from it). Not a filename_stem — that exists
             only after the artifact is saved.
         content: The artifact body.
-        kind: One of user | rule | article | note.
+        kind: One of rule | article | note.
         source_type: Provenance tag (default 'manual').
         source_url: When set, enables URL-keyed dedup: a re-save with the same URL
             consolidates onto the existing article instead of duplicating. Default None.

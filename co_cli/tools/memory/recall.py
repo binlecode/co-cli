@@ -136,7 +136,7 @@ def _grep_memory_items_fallback(
     limit: int,
 ) -> list[dict]:
     """Grep-based memory item search used when MemoryStore is unavailable."""
-    grep_kinds = list(kinds or ["user", "rule", "article", "note"])
+    grep_kinds = list(kinds or ["rule", "article", "note"])
     if not grep_kinds:
         return []
     items = load_memory_items(ctx.deps.memory_dir, memory_kinds=grep_kinds)
@@ -199,12 +199,12 @@ async def memory_search(
 ) -> ToolReturn:
     """Search memory artifacts by keyword, or browse recent artifacts.
 
-    Use for recall of saved preferences, conventions, articles, notes — anything the
+    Use for recall of saved conventions, rules, articles, notes — anything the
     agent has learned or saved. Load a full body with memory_view(name).
 
     Args:
         query: FTS5 keyword query. Default "" lists the most recent `limit` artifacts (browse mode); non-empty runs BM25 search. Syntax: OR, NOT, "phrase", prefix*.
-        kinds: Filter to these artifact kinds — any of user, rule, article, note. Default None = all kinds.
+        kinds: Filter to these artifact kinds — any of rule, article, note. Default None = all kinds.
         limit: Max results (default 10).
     """
     span = current_span()

@@ -16,7 +16,8 @@ attributable to that one paragraph of prose, not the whole file.
 Two deliverables (plan ``behavioral-rules-audit`` TASK-2):
 
 (a) **Section-observability inventory** — every ``##`` section across all 7 rules
-    (31 total, after the ``04 ## Memory`` cross-reference stub was removed in ACT)
+    (28 total, after the ``04 ## Memory`` stub and the C3/C5/C6 merges in the
+    behavioral-rules-consolidation-cleanup plan)
     classified OBSERVABLE (maps to a tool-call signal — names the
     target tool) or OUT-OF-REACH (steers response content/tone — no tool-call
     signal). Sections sharing one target tool are one **distinguishable signal**
@@ -41,7 +42,7 @@ delta is attributable to the ablated section and not to a prompt-offset shift.
 
 Run (long-form, ~6 probes at N samples per arm; tail the log, RCA-first on slow calls):
     ``uv run python evals/eval_rule_compliance.py``
-Inventory only (no LLM, validates the span parser + emits the 31-section table):
+Inventory only (no LLM, validates the span parser + emits the 28-section table):
     ``uv run python evals/eval_rule_compliance.py --inventory``
 Output: ``evals/_outputs/rule-compliance-<ts>-run.jsonl``
 """
@@ -124,9 +125,10 @@ class Section:
 def _parse_file_sections(stem: str, content: str) -> list[Section]:
     """Parse one stripped rule-file's ``##`` sections into spans.
 
-    Splits on ``^## `` boundaries (does NOT assume a leading ``# `` H1 — file
-    ``01_identity.md`` opens directly on ``## Relationship``). The H1 and any
-    preamble before the first ``## `` stay attached to the file, never to a span.
+    Splits on ``^## `` boundaries and does NOT require a leading ``# `` H1 (the
+    parser is robust to a file that opens directly on a ``## `` section). The H1
+    and any preamble before the first ``## `` stay attached to the file, never to
+    a span.
     """
     matches = list(re.finditer(r"(?m)^## .+$", content))
     sections: list[Section] = []
@@ -196,10 +198,10 @@ def _rules_block_drop_section(target: Section) -> str:
 #   OUT-OF-REACH        — steers response content/tone; no tool-call signal.
 # Keyed (stem, title). Built from inspection per plan — NOT from eval budget.
 _INVENTORY: tuple[tuple[str, str, str, str, str], ...] = (
-    ("01_identity", "Relationship", "OUT-OF-REACH", "-", "tone/continuity; no tool signal"),
-    ("01_identity", "Anti-sycophancy", "OUT-OF-REACH", "-", "response content; no tool signal"),
+    ("01_interaction", "Relationship", "OUT-OF-REACH", "-", "tone/continuity; no tool signal"),
+    ("01_interaction", "Anti-sycophancy", "OUT-OF-REACH", "-", "response content; no tool signal"),
     (
-        "01_identity",
+        "01_interaction",
         "Thoroughness over speed",
         "OUT-OF-REACH",
         "-",
@@ -230,17 +232,10 @@ _INVENTORY: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "03_reasoning",
-        "Fact authority",
+        "Resolving contradictions",
         "OUT-OF-REACH",
         "-",
-        "content (trust tool vs user); no distinct tool signal",
-    ),
-    (
-        "03_reasoning",
-        "Source conflicts",
-        "OUT-OF-REACH",
-        "-",
-        "content/tone (surface the conflict); no tool signal",
+        "content/tone (trust tool vs user; surface tool-vs-tool conflict); no tool signal",
     ),
     (
         "03_reasoning",
@@ -346,20 +341,6 @@ _INVENTORY: tuple[tuple[str, str, str, str, str], ...] = (
         "OBSERVABLE-OUT-OF-HARNESS",
         "skill_create",
         "promote a completed 3+ step procedure; needs a finished multi-turn task",
-    ),
-    (
-        "06_skill_protocol",
-        "Offer-to-save",
-        "OUT-OF-REACH",
-        "-",
-        "offer text after iterative work; shares skill_create with Create, multi-turn",
-    ),
-    (
-        "06_skill_protocol",
-        "Background review",
-        "OUT-OF-REACH",
-        "-",
-        "meta/disposition (defer to bg review); no tool signal",
     ),
     (
         "07_memory_protocol",
@@ -541,33 +522,33 @@ async def _run_turn(agent: Any, deps: Any, frontend: Any, user_input: str) -> li
 
 
 async def _arm_fire_rate(
-    agent: Any, deps: Any, frontend: Any, probe: SectionProbe, arm: str
+    agent: Any, deps: Any, frontend: Any, probe: SectionProbe, arm: str, samples: int
 ) -> dict[str, Any]:
     """Run N independent samples for one arm; return the target-tool fire-rate."""
     fired = 0
     timeouts = 0
-    for i in range(SAMPLES_PER_ARM):
+    for i in range(samples):
         try:
             tool_calls = await _run_turn(agent, deps, frontend, probe.user_input)
             hit = _target_fired(tool_calls, probe.target_tools)
             fired += 1 if hit else 0
             tag = f"{probe.rule_stem}/{probe.section_title}/{arm}"
-            print(f"  [{tag}] sample {i + 1}/{SAMPLES_PER_ARM}: fired={hit}")
+            print(f"  [{tag}] sample {i + 1}/{samples}: fired={hit}")
         except TimeoutError:
             timeouts += 1
             tag = f"{probe.rule_stem}/{probe.section_title}/{arm}"
-            print(f"  [{tag}] sample {i + 1}/{SAMPLES_PER_ARM}: TIMEOUT")
+            print(f"  [{tag}] sample {i + 1}/{samples}: TIMEOUT")
     return {
         "arm": arm,
         "fired": fired,
-        "samples": SAMPLES_PER_ARM,
+        "samples": samples,
         "timeouts": timeouts,
-        "fire_rate": fired / SAMPLES_PER_ARM,
+        "fire_rate": fired / samples,
     }
 
 
 async def _measure_section(
-    deps: Any, frontend: Any, probe: SectionProbe, full_block: str
+    deps: Any, frontend: Any, probe: SectionProbe, full_block: str, samples: int
 ) -> dict[str, Any]:
     """Measure one section: full vs ablated fire-rate, then STEERS/DEAD-WEIGHT."""
     print(f"\n[{probe.rule_stem} :: {probe.section_title}] {probe.label}")
@@ -595,10 +576,10 @@ async def _measure_section(
         load_fixture(probe.fixture, deps)
 
     full_agent = _build_arm_agent(deps, ablated_block=None)
-    full = await _arm_fire_rate(full_agent, deps, frontend, probe, "full")
+    full = await _arm_fire_rate(full_agent, deps, frontend, probe, "full", samples)
 
     ablated_agent = _build_arm_agent(deps, ablated_block=ablated_block)
-    ablated = await _arm_fire_rate(ablated_agent, deps, frontend, probe, "ablated")
+    ablated = await _arm_fire_rate(ablated_agent, deps, frontend, probe, "ablated", samples)
 
     delta = full["fire_rate"] - ablated["fire_rate"]
     # A zero delta at a saturated ceiling/floor (both arms 1.0 or both 0.0) is
@@ -625,7 +606,7 @@ async def _measure_section(
 
 
 def _emit_inventory() -> list[dict[str, Any]]:
-    """Build, print, and return the 31-section observability inventory.
+    """Build, print, and return the 28-section observability inventory.
 
     Validates the span parser end to end (count, uniqueness, clean reassembly)
     for every section so ``--inventory`` is also the parser's self-test.
@@ -662,8 +643,8 @@ def _emit_inventory() -> list[dict[str, Any]]:
             }
         )
 
-    assert len(_INVENTORY) == len(sections) == 31, (
-        f"inventory ({len(_INVENTORY)}) / parser ({len(sections)}) disagree on 31 sections"
+    assert len(_INVENTORY) == len(sections) == 28, (
+        f"inventory ({len(_INVENTORY)}) / parser ({len(sections)}) disagree on 28 sections"
     )
     probed = [r for r in inventory if r["status"] == "PROBED"]
     out_of_harness = [r for r in inventory if r["status"] == "OBSERVABLE-OUT-OF-HARNESS"]
@@ -676,9 +657,16 @@ def _emit_inventory() -> list[dict[str, Any]]:
     return inventory
 
 
-async def main() -> None:
+async def main(samples: int = SAMPLES_PER_ARM, section: str | None = None) -> None:
     full_block = build_rules_block()
     inventory = _emit_inventory()
+
+    probes = tuple(p for p in _PROBES if p.section_title == section) if section else _PROBES
+    if section and not probes:
+        raise SystemExit(
+            f"--section {section!r} matches no probe; choose one of: "
+            f"{sorted(p.section_title for p in _PROBES)}"
+        )
 
     await ensure_ollama_warm()
     deps, _agent, frontend, stack = await make_eval_deps()
@@ -686,12 +674,12 @@ async def main() -> None:
         apply_eval_window(deps)
         print(
             f"\nSection-ablation — model {deps.model.model.model_name}, "
-            f"{SAMPLES_PER_ARM} samples/arm, steer_delta>={STEER_DELTA}, "
-            f"{len(_PROBES)} observable sections"
+            f"{samples} samples/arm, steer_delta>={STEER_DELTA}, "
+            f"{len(probes)} observable sections"
         )
         results = []
-        for probe in _PROBES:
-            results.append(await _measure_section(deps, frontend, probe, full_block))
+        for probe in probes:
+            results.append(await _measure_section(deps, frontend, probe, full_block, samples))
 
         deadweight = [
             f"{r['rule']}/{r['section']}" for r in results if r["verdict"] == "DEAD-WEIGHT"
@@ -716,7 +704,7 @@ async def main() -> None:
                     {
                         "record": "meta",
                         "model": deps.model.model.model_name,
-                        "samples_per_arm": SAMPLES_PER_ARM,
+                        "samples_per_arm": samples,
                         "steer_delta": STEER_DELTA,
                     }
                 )
@@ -758,8 +746,26 @@ async def main() -> None:
         await stack.aclose()
 
 
+def _arg_value(*flags: str) -> str | None:
+    """Read the value following any of ``flags`` in argv (bare parsing, no argparse)."""
+    for flag in flags:
+        if flag in sys.argv:
+            idx = sys.argv.index(flag)
+            if idx + 1 < len(sys.argv):
+                return sys.argv[idx + 1]
+            raise SystemExit(f"{flag} requires a value")
+    return None
+
+
 if __name__ == "__main__":
     if "--inventory" in sys.argv:
         _emit_inventory()
     else:
-        asyncio.run(main())
+        samples_arg = _arg_value("--samples", "-n")
+        section_arg = _arg_value("--section")
+        asyncio.run(
+            main(
+                samples=int(samples_arg) if samples_arg else SAMPLES_PER_ARM,
+                section=section_arg,
+            )
+        )

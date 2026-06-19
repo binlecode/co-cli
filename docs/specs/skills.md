@@ -242,15 +242,14 @@ Lint is collaborative — it catches well-meaning skills that won't perform well
 Three in-session reflexes govern skill quality during a task:
 
 - **Drift fix**: when a loaded skill has stale steps, patch immediately via `skill_patch` for surgical edits or `skill_edit` for structural overhauls.
-- **Create**: after completing a multi-step task (3+ coherent steps), if the procedure is class-level reusable, promote it to a skill. Bar: "would I run this again for the same kind of task" — not one-offs.
-- **Offer-to-save**: after iterative work where no skill was loaded, briefly offer skill creation before invoking `skill_create`.
+- **Create**: after completing a multi-step task (3+ coherent steps), if the procedure is class-level reusable, promote it to a skill. Bar: "would I run this again for the same kind of task" — not one-offs. Autonomous creation acts on this reflex; collaborative creation, after iterative work where no skill was loaded, briefly offers first before invoking `skill_create`.
 
 **Dream daemon reviewers.** After every `review_memory_nudge_interval` turns (memory domain) or `review_skill_nudge_interval` LLM iterations (skill domain), the REPL writes a KICK file to `$CO_HOME/daemons/dream/queue/` and nudges the dream daemon over a Unix socket. The daemon dequeues work, loads the session transcript up to the queued message count, and runs the appropriate domain reviewer agent via `build_task_agent` with `requires_approval=False`.
 
 ```
 memory_reviewer (KICK: domain=memory)
-  ├─ extract user preferences, rules, and references from transcript
-  ├─ create or update memory items for durable user facts
+  ├─ extract user-profile facts, rules, and references from transcript
+  ├─ route user persona/preferences → USER.md; rules/articles/notes → memory items
   └─ does not write skills
 
 skill_reviewer (KICK: domain=skill)
@@ -273,7 +272,7 @@ Curation preference order: update a skill loaded in the current session → upda
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable dream daemon reviewer KICKs |
+| `skills.review_enabled` | `CO_SKILLS_REVIEW_ENABLED` | `false` | Enable skill-domain reviewer KICKs (memory domain has its own `memory.review_enabled`) |
 | `skills.review_memory_nudge_interval` | `CO_SKILLS_REVIEW_MEMORY_NUDGE_INTERVAL` | `10` | User-turn count between memory-domain KICK triggers |
 | `skills.review_skill_nudge_interval` | `CO_SKILLS_REVIEW_SKILL_NUDGE_INTERVAL` | `10` | LLM-iteration count between skill-domain KICK triggers |
 | `skills.usage_tracking_enabled` | `CO_SKILLS_USAGE_TRACKING_ENABLED` | `true` | Persist per-skill counters/timestamps/recall_days sidecars |
@@ -385,7 +384,6 @@ Returns a skill's full body, addressed by the skill name (the skill's directory 
 | XML-special chars in descriptions are escaped in manifest | `tests/test_flow_skill_manifest.py` |
 | 06_skill_protocol.md appears in assembled static instructions | `tests/test_flow_skill_protocol.py` |
 | skill-creator present in `<available_skills>` manifest | `tests/test_flow_skill_protocol.py` |
-| Background review section present in 06_skill_protocol.md | `tests/test_flow_skill_protocol.py` |
 | create writes file and skill appears in deps.skill_catalog | `tests/test_flow_skills_manage.py` |
 | create rejects missing description and existing skill | `tests/test_flow_skills_manage.py` |
 | create rolls back on destructive shell pattern | `tests/test_flow_skills_manage.py` |

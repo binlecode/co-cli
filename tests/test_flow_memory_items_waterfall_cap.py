@@ -1,4 +1,4 @@
-"""Tests for MemoryStore.search_memory_items() two-pass cap (user priority + waterfall)."""
+"""Tests for MemoryStore.search_memory_items() waterfall chunk cap."""
 
 from pathlib import Path
 

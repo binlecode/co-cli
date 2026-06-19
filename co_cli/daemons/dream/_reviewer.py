@@ -76,6 +76,8 @@ MEMORY_REVIEW_SPEC = TaskAgentSpec(
         "memory_create",
         "memory_append",
         "memory_replace",
+        "user_profile_view",
+        "user_profile_write",
     ),
     output_type=SessionReviewOutput,
     default_budget=REVIEW_MAX_ITERATIONS,
