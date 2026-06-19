@@ -70,6 +70,7 @@ def _session_rows(ctx: CommandContext) -> list[tuple[str, str]]:
 
     return [
         ("id", _safe(lambda: deps.session.session_path.stem[-8:] or _PLACEHOLDER)),
+        ("version", _safe(lambda: f"v{project_info().version}")),
         ("dir", _safe(_dir)),
         ("personality", _safe(lambda: deps.config.personality or "disabled")),
         ("mode", _safe(lambda: _mode(ctx))),
