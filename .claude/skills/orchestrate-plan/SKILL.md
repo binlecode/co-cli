@@ -22,7 +22,11 @@ argument-hint: "<slug>"
 1. Read relevant source, tests, and `docs/reference/RESEARCH-<scope>.md` if it exists. Glob `docs/exec-plans/active/*-<slug>.md` — if found, read it and skip already-implemented work.
 2. **Current-state check:** scan source and specs for accuracy against the planned scope. If too inconsistent to plan safely: `✗ Current state inconsistent — run /sync-doc first.`
 3. **For doc tasks** (restructure or doc+code): run a Code Accuracy Verification pass — read each source file referenced by the target docs and confirm every factual claim. List inaccuracies in Context before proposing changes.
-4. For each open question you intend to list, try to answer it from the codebase first.
+4. **Resolve open questions before listing them.** For each open question, in order:
+   a. **Try the codebase first.** If a source-of-truth file answers it, read it and record the answer with `path/file.py:LINE` — do not ask.
+   b. **If only the user can answer it** (product intent, preference, risk appetite — not derivable from code), interview one question at a time. No batching. Each question states the decision space in one sentence, a recommended default with a one-line rationale, and one or two alternatives. Move to the next immediately after each answer.
+   c. **If the user defers**, record it under `## Open Questions` with any re-raise trigger they gave.
+   Only genuinely-deferred items survive into `## Open Questions`; codebase- and user-resolved decisions are settled inline and feed `## High-Level Design`. Do not invent questions beyond what the planned scope requires.
 5. **For AI behavioral features** (new agents, personality changes, tool-chain modifications affecting model output): run representative inputs through the current system and annotate observed failure modes. List findings in `## Failure Modes` before writing `## High-Level Design`. Do not write criteria against imagined failure space.
 
 **Write `docs/exec-plans/active/YYYY-MM-DD-HHMMSS-<slug>.md`** with sections:
