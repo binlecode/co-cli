@@ -153,8 +153,9 @@ async def web_fetch(
     Accepts any URL — from the user's message, from web_search results, or
     from tool output. Never guess or fabricate URLs yourself.
 
-    If fetch returns 403 or is blocked by Cloudflare, retry with shell
-    (curl -sL <url>) — only for fetch failures, not as the default path.
+    If fetch fails (403/Cloudflare) or returns no usable content (JS-rendered
+    boilerplate, plain-text endpoints), retry with shell (curl -sL <url>) —
+    fallback only, not the default path.
 
     Args:
         url: Full URL to fetch (must start with http:// or https://).

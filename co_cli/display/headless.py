@@ -76,6 +76,9 @@ class HeadlessFrontend:
     def on_tool_complete(self, tool_id: str, result: Any) -> None:
         pass
 
+    def begin_waiting(self) -> None:
+        self.on_status("Waiting…")
+
     def on_status(self, message: str) -> None:
         self.statuses.append(message)
         self.status_timeline.append(((time.monotonic() - self._t0) * 1000, message))

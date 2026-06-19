@@ -61,6 +61,7 @@ _active_theme: Theme = Theme(_THEMES["light"])
 # -- Indicators ------------------------------------------------------------
 
 _TOOL_TICK_INTERVAL = 1.0  # wall-clock repaint cadence for the live tool-exec counter
+_WAITING_TICK_INTERVAL = 1.0  # wall-clock repaint cadence for the pre-response waiting counter
 
 PROMPT_CHAR = "❯"
 BULLET = "▸"
@@ -190,6 +191,10 @@ class Frontend(Protocol):
         """Tool lifecycle: tool completed with optional final result payload."""
         ...
 
+    def begin_waiting(self) -> None:
+        """Start the pre-response 'Waiting… Ns' ticker for a new turn."""
+        ...
+
     def on_status(self, message: str) -> None:
         """Status messages (e.g. 'Co is thinking...')."""
         ...
@@ -264,6 +269,11 @@ class TerminalFrontend:
         # Single App-level wall-clock ticker repainting the in-flight tool panel while
         # any tool runs (tool execution emits no stream deltas). One task for all tools.
         self._tool_ticker_task: asyncio.Task | None = None
+        # Pre-response waiting indicator: time.monotonic() stamp at begin_waiting (turn
+        # start), and a wall-clock ticker repainting the live `Waiting… Ns` counter until
+        # the first stream surface supersedes it. Independent of the reasoning clock.
+        self._waiting_started_at: float | None = None
+        self._waiting_ticker_task: asyncio.Task | None = None
         # Last pushed status snapshot; drives render_footer_toolbar
         self._footer_snapshot: StatusSnapshot | None = None
         # In-app single-key prompt state (approval / confirm). The owned
@@ -315,6 +325,10 @@ class TerminalFrontend:
 
     def _set_inflight(self, renderable: RenderableType, kind: str) -> None:
         """Render a live surface into the in-flight buffer and request a repaint."""
+        # Any non-waiting surface (reasoning, text, tool, status) is the first byte
+        # back from the model — hand off from the waiting indicator cleanly.
+        if kind != "waiting":
+            self._stop_waiting_ticker()
         self._inflight = render_to_ansi(renderable, width=self._width())
         self._inflight_kind = kind
         self._invalidate()
@@ -365,8 +379,53 @@ class TerminalFrontend:
 
     def clear_status(self) -> None:
         """Commit any pending status then clear the in-flight region."""
+        self._stop_waiting_ticker()
         self._commit_status()
         self._clear_inflight()
+
+    def begin_waiting(self) -> None:
+        """Start the pre-response `Waiting… Ns` ticker (turn start, before any stream byte)."""
+        self._waiting_started_at = time.monotonic()
+        self._render_waiting()
+        self._start_waiting_ticker()
+
+    def _render_waiting(self) -> None:
+        """Emit the live `Waiting… Ns` indicator from current wall-clock elapsed."""
+        if self._waiting_started_at is None:
+            return
+        elapsed = time.monotonic() - self._waiting_started_at
+        self._set_inflight(Text(f"Waiting… {_format_elapsed(elapsed)}", style="dim"), "waiting")
+
+    def _start_waiting_ticker(self) -> None:
+        """Spawn the wall-clock repaint task, if a running loop is available.
+
+        Without a running loop (sync/headless callers) the counter falls back to a
+        single static render — no ticker, no error (mirrors the tool ticker).
+        """
+        if self._waiting_ticker_task is not None and not self._waiting_ticker_task.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._waiting_ticker_task = loop.create_task(self._tick_waiting())
+
+    async def _tick_waiting(self) -> None:
+        """Repaint the waiting indicator on the wall-clock cadence until superseded."""
+        try:
+            while self._waiting_started_at is not None:
+                await asyncio.sleep(_WAITING_TICK_INTERVAL)
+                if self._waiting_started_at is None:
+                    return
+                self._render_waiting()
+        except asyncio.CancelledError:
+            return
+
+    def _stop_waiting_ticker(self) -> None:
+        self._waiting_started_at = None
+        if self._waiting_ticker_task is not None:
+            self._waiting_ticker_task.cancel()
+            self._waiting_ticker_task = None
 
     def on_text_delta(self, accumulated: str) -> None:
         self._commit_status()
@@ -689,6 +748,7 @@ class TerminalFrontend:
 
     def cleanup(self) -> None:
         """Clear the in-flight region and tool state on exception/cancellation."""
+        self._stop_waiting_ticker()
         self._stop_tool_ticker()
         self._active_tools.clear()
         self._tool_labels.clear()

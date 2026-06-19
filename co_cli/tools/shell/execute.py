@@ -31,7 +31,7 @@ async def shell_exec(
     Do not use shell for file reads, content search, or tasks with dedicated tools:
     - file_read instead of cat/head/tail
     - file_search instead of grep/rg/find/ls
-    - web_fetch instead of curl for web pages
+    - web_fetch for web pages; curl if it yields nothing
     - google_drive_search / google_drive_read instead of manual API calls
     - file_write / file_patch instead of shell redirection for workspace file creation or editing
     - skill_edit / skill_patch instead of shell for creating or editing skill files

@@ -212,10 +212,17 @@ to `CoRuntimeState` — use `CoSessionState` for user-preference and cross-turn 
 | `full` | Default. The `Thinking… Ns` header is shown with the raw thinking body streamed below it; the body + `Thought for Ns` footer are committed to scrollback |
 
 co commits to scrollback line-by-line (not a retained-widget TUI), so reasoning cannot be
-expanded after the fact — to read the raw reasoning, switch to `full`. The elapsed counter is
-event-driven: it advances as thinking deltas arrive and freezes during model silence, while the
-committed `Thought for Ns` is measured at thinking-end (wall-clock accurate). There is no
-periodic ticker.
+expanded after the fact — to read the raw reasoning, switch to `full`. The live `Thinking… Ns`
+counter advances on a wall-clock ticker (a thinking-scoped background task repainting once per
+second) so it ticks even when the model emits reasoning in bursts or goes silent between deltas.
+The committed `Thought for Ns` is measured at thinking-end (wall-clock accurate, reasoning-only).
+
+Before the first stream byte arrives there is a distinct pre-response phase: `run_turn` calls
+`frontend.begin_waiting()`, which shows a live `Waiting… Ns` indicator on its own wall-clock
+ticker. The first stream surface (reasoning, text, or tool) supersedes it. The two counters are
+independent — waiting time is never folded into thinking time, so the `Waiting… Ns` counter
+resets to `Thinking… 0s` at the reasoning handoff (the label flip signals the new phase). If the
+model streams answer text with no reasoning, the waiting phase flows straight to text.
 
 Usage:
 - `/reasoning` — print current mode, no state change

@@ -127,7 +127,8 @@ Daemons are top-level task agents with three defining properties: (1) **no depth
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
 | `tool_retries` | `CO_TOOL_RETRIES` | `3` | `retries=` for orchestrator and task agents |
-| `skills.review_enabled` | — | `false` | Gates the dream-daemon reviewer KICK dispatch |
+| `memory.review_enabled` | — | `false` | Gates memory-domain reviewer KICK dispatch |
+| `skills.review_enabled` | — | `false` | Gates skill-domain reviewer KICK dispatch |
 | `REVIEW_MAX_ITERATIONS` | — | `8` | `MEMORY_REVIEW_SPEC` / `SKILL_REVIEW_SPEC` `default_budget` |
 | `dream.review_timeout_seconds` | — | `120` | `asyncio.timeout` wrapping each reviewer call inside the daemon worker loop |
 

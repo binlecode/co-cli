@@ -1,7 +1,7 @@
 # RESEARCH: Multi-Agent Workroom & File Exchange Pattern
 _Original proposal: 2026-03-10_
 _Reconciled against implementation: 2026-06-13 (v0.8.352)_
-_Status: **Superseded by what actually shipped.** The three proposed directories (`.co-cli/workspaces/`, `.co-cli/exchange/`, `.co-cli/schedules/`) were NOT built. The underlying needs were each met by a different mechanism. This doc is retained as a design-rationale record of why._
+_Status: **Superseded by what actually shipped.** The three proposed directories (`.co-cli/workspaces/`, `.co-cli/exchange/`, `.co-cli/schedules/`) were NOT built. The underlying needs were each met by a different mechanism. This doc is retained as a design-rationale record of why, extended in §8 with forward design input from the Stanford DeLM paper (2026-06-16)._
 
 ## Executive Summary
 
@@ -142,3 +142,51 @@ The proposal reached for a *new directory* per concern. The shipped system reach
 - background → **session-scoped task tools + the dream queue**, instead of a cron table and `$EDITOR`-managed payload files.
 
 Each avoids a persistent on-disk surface that would need its own TTL, cleanup, and traversal hardening — the very risks §6 of the original flagged. The proposal's analytical core (in-memory text queue; enforce boundaries on both file and shell I/O) was right; its packaging (three new directories) was not adopted.
+
+---
+
+## 8. Forward: DeLM structural patterns (2026-06-16)
+
+Source: Stanford DeLM paper (Mao & Mirhoseini, 2026-06-16). SWE-bench Verified: +10.5% over strongest baseline, ~50% cost reduction per task. LongBench-v2 Multi-Doc QA: highest accuracy across GPT-5.4, Claude Sonnet, Gemini Flash, DeepSeek-V4-Pro.
+
+This section records the structural patterns from DeLM that are relevant to co's parallel agent future. It does not describe anything currently built.
+
+### 8.1 The structural argument
+
+DeLM's central claim is architectural, not a tuning result: a central orchestrator that merges and rebroadcasts is a serialization point, not a coordinator. Its failure modes are structural:
+
+- all intermediate state is compressed through one context window, losing or distorting findings
+- evidence clusters are pre-assigned before relevance is known, causing sub-agents to return for clarification
+- failures stay private — every agent rediscovers the same dead ends independently
+
+The fix is to eliminate the orchestrator role, not optimize it. Each of its three jobs (assign, merge, rebroadcast) is replaced by a simpler decentralized mechanism.
+
+### 8.2 The three primitives
+
+| Primitive | What it replaces | Key property |
+|---|---|---|
+| **Task queue** (self-assigned) | Dispatcher / assignment step | Agents pull work; throughput scales with fleet size, not coordinator speed |
+| **Gist board** (shared state) | Merge + rebroadcast step | Verified findings accumulate; no single agent holds the full picture |
+| **Last-agent sufficiency check** | Completion detection | Whoever finishes last inspects the board and decides whether more work is needed |
+
+### 8.3 Cross-agent communication patterns worth carrying forward
+
+**Failure constraints as first-class shared state.** When an agent hits a dead end, it writes that as a binding constraint — not a log entry, not a summary, but a "do not go here" fact that later agents inherit and build around. This is the highest-leverage pattern in the paper: it converts private waste into collective pruning.
+
+**Verified-only writes.** An agent does not broadcast until it has confirmed its finding is sound. Unverified partials stay local. This keeps the shared board clean — other agents are not misled by work-in-progress guesses that later turn out wrong.
+
+**Coarse-to-fine access by default.** The board holds short summaries (gists). An agent reads the full evidence only when its specific task requires it. Without this, coordination itself becomes a long-context problem — every agent reads every other agent's full trace before it can start. The default must be compact; detail is opt-in.
+
+### 8.4 Near-term actionable for co (no architecture change needed)
+
+The dream daemon already curates memory from session review. Adding **failure/constraint as a distinct memory kind** — not just "what worked" but "what was ruled out and why, with evidence pointer" — would make recall more useful immediately. The unfold-on-demand pattern (short item by default, full evidence on `memory_view`) is already how co's memory recall works. No agent-layer change required; this is a dream curation behavior change only.
+
+### 8.5 Design guardrails (what not to build)
+
+**Do not add an orchestrator tool.** If co moves toward parallel runtime agents, the correct move is to add a shared state surface and a self-assigned task queue — not a dispatcher role exposed as a tool. An orchestrator tool recreates the bottleneck in a new form.
+
+**The last-agent-closes-the-loop step is a hidden coordinator.** DeLM's "no central controller" framing understates this: the final agent still decides sufficiency for the whole run. It is not free — it holds the full gist board in context and reasons over all accumulated state. Budget for it explicitly rather than treating it as overhead-free.
+
+**The 50% cost figure is task-class-specific.** SWE-bench and multi-doc QA are naturally parallelizable with low inter-task dependency. Tasks with tight sequential dependencies or shared mutable state will not see the same gains. Apply the model where parallel exploration is the actual bottleneck, not universally.
+
+**"No central controller" is a framing, not a fact.** The gist board *is* a coordination mechanism — asynchronous and decentralized, but coordination nonetheless. The complexity moved from a role to a data structure. Design the data structure with the same care you would give a coordinator's decision logic.

@@ -321,6 +321,39 @@ async def test_tool_ticker_repaints_then_stops_on_complete(monkeypatch):
     assert frontend._tool_ticker_task is None
 
 
+@pytest.mark.asyncio
+async def test_waiting_ticker_repaints_then_hands_off_to_thinking(monkeypatch):
+    """The pre-response waiting indicator ticks while no stream byte has arrived,
+    then is superseded by the reasoning header at the first thinking delta."""
+    from co_cli.display import core
+
+    monkeypatch.setattr(core, "_WAITING_TICK_INTERVAL", 0.02)
+
+    repaints: list[str] = []
+
+    class _RecordingApp:
+        def invalidate(self) -> None:
+            repaints.append(self_frontend.get_inflight())
+
+    frontend = TerminalFrontend()
+    self_frontend = frontend
+    frontend._app = _RecordingApp()
+
+    frontend.begin_waiting()
+    await asyncio.sleep(0.1)
+    waiting_repaints = len(repaints)
+
+    assert "Waiting…" in frontend.get_inflight()
+    assert waiting_repaints >= 3
+
+    frontend.on_thinking_delta("Thinking… 0s\n\nreasoning body")
+    await asyncio.sleep(0.1)
+
+    assert "Waiting…" not in frontend.get_inflight()
+    assert "Thinking…" in frontend.get_inflight()
+    assert frontend._waiting_ticker_task is None
+
+
 def test_status_persists_to_scrollback_when_superseded_by_text():
     frontend = TerminalFrontend()
     frontend._app = _StubApp()

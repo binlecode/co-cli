@@ -1,15 +1,15 @@
-# RESEARCH — Self-Improvement / Learning Loop: Architecture, Parity, and Gaps
+# RESEARCH — Self-Learning: co vs hermes (Architecture, Parity, Gaps)
 
-**Date:** 2026-06-18 (refreshed against co + hermes source read this date; supersedes the 2026-06-14 draft)
+**Date:** 2026-06-19 (refreshed against co + hermes source read this date; renamed from `RESEARCH-self-improvement-learning-loop.md`)
 **Status:** Reference / design research — not normative
 **Scope:** Single source of truth for co-cli's self-improvement subsystem — the as-built dream daemon, how it compares to `hermes-agent`'s "self-improving" pitch, the verified gaps, and the live open proposals.
 
-**Supersedes and replaces** (deleted on creation of this file):
+**Supersedes and replaces** (all deleted before this file took its current name):
 - `RESEARCH-self-improvement-architecture.md` (2026-05-18) — per-layer vs unified daemon decision. Overtaken by events; outcome folded into §3.
-- `RESEARCH-self-learning-co-vs-hermes.md` (2026-05-18) — co↔hermes parity audit. Co-side inventory rotted; corrected in §4–§5.
+- `RESEARCH-self-learning-co-vs-hermes.md` (2026-05-18, original) — co↔hermes parity audit. Co-side inventory rotted; corrected in §4–§5. This file reclaims that name.
 - `RESEARCH-self-generated-work-prompt-skill.md` (2026-04-16) — prompt-synthesis proposal. Live items only carried into §6.
 
-> Why a rewrite: the three predecessors all described an **in-process, three-runner** architecture (`co_cli/skills/session_review.py`, `co_cli/skills/curator.py`, `co_cli/memory/dream.py`) that has since been refactored out of existence. Every module path, config field, and several headline conclusions in those docs were stale. This file is grounded in source read on 2026-06-14; the runtime spec of record is `docs/specs/dream.md`.
+> History: the three predecessors all described an **in-process, three-runner** architecture (`co_cli/skills/session_review.py`, `co_cli/skills/curator.py`, `co_cli/memory/dream.py`) since refactored out of existence. This file is grounded in source read on **2026-06-19** (co + hermes); the runtime spec of record is `docs/specs/dream.md`.
 
 ---
 
@@ -66,18 +66,20 @@ REPL-side counters (`co_cli/main.py` `_post_turn_hook`):
 
 | Spec | Tool surface | Prompt |
 |---|---|---|
-| `MEMORY_REVIEW_SPEC` | `memory_search`, `memory_create`, `memory_append`, `memory_replace` | `prompts/memory_review.md` |
+| `MEMORY_REVIEW_SPEC` | `memory_search`, `memory_create`, `memory_append`, `memory_replace`, `user_profile_view`, `user_profile_write` | `prompts/memory_review.md` |
 | `SKILL_REVIEW_SPEC` | `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `memory_search` (+ skill manifest) | `prompts/skill_review.md` |
 
 Both apply the personality **curation lens** when the active soul defines one. Each reviewer sees **one session's transcript** — there is no cross-session view at review time (see Gap D, §5.4).
+
+> **New since the rewrite:** the memory reviewer now carries the two `user_profile_*` tools, so USER.md write-back happens through a dedicated profile surface (`co_cli/tools/user_profile/{view,write}.py`), not through generic memory writes. `process_review(deps, domain, session_id, persisted_message_count, transcript_override=None)` loads the live transcript (capped by `persisted_message_count`) or, on compaction, an uncapped snapshot from `transcript_override`. Both reviewers emit a `SessionReviewOutput`. The session reviewer can also write `kind='canon'` items (internal-only kind, excluded from the model-callable memory tools — see §5.5).
 
 ### 2.4 Housekeeping (`_housekeeping.py`)
 
 `run_housekeeping(deps, cfg, state)` runs the LLM/code phases below, scheduled (not per-session). "Reviewer is the sole transcript reader" — housekeeping never reads transcripts; it operates on already-saved memory items and skills.
 
-1. **merge_memory** — union-find cluster same-kind, non-immune, non-article items by token-Jaccard ≥ `consolidation_similarity_threshold`; LLM-consolidate (`prompts/memory_merge.md`); archive originals. Caps: `_MAX_CLUSTER_SIZE=5`, `_MAX_MERGES_PER_CYCLE=10`, `_MERGED_BODY_MIN_CHARS=20`.
-2. **merge_skills** — cluster similar user skills, LLM-consolidate into a class-level umbrella (`prompts/skill_merge.md`), archive originals, then `refresh_skills(deps)`. **This absorbs the former skill curator's consolidation.**
-3. **decay_skills** — archive aged user skills with no recent recall.
+1. **merge_memory** — union-find cluster same-kind, non-immune, non-article items by token-Jaccard ≥ `memory.consolidation_similarity_threshold`; LLM-consolidate (`prompts/memory_merge.md`); archive originals. Caps: `_MAX_CLUSTER_SIZE=5`, `_MAX_MERGES_PER_CYCLE=10`, `_MERGED_BODY_MIN_CHARS=20`.
+2. **merge_skills** — cluster similar **non-pinned user** skills (bundled skills never considered) by `skills.consolidation_similarity_threshold`, LLM-consolidate into a class-level umbrella (`prompts/skill_merge.md`), archive originals (to `.archive/`), then `refresh_skills(deps)`. **This absorbs the former skill curator's consolidation.**
+3. **decay_skills** — archive aged user skills with no recent recall (cap `_MAX_DECAY_PER_CYCLE=20`).
 4. **prune_done_and_snapshots** — delete `queue/done/` items and orphaned compaction snapshots past `done_retention_days`.
 5. **prune_sessions** — delete session transcripts past `dream.session_retention_days` (0 = retain forever, the default).
 
@@ -112,6 +114,9 @@ State: `HousekeepingState` (in `state.py`, not `_state.py`) at `$CO_HOME/daemons
 | `recall_protection_days` | `30` |
 | `decay_after_days` | `90` |
 | `consolidation_similarity_threshold` | `0.75` |
+| `REVIEW_MAX_ITERATIONS` (module constant) | `8` |
+
+Note `consolidation_similarity_threshold` is now defined on **both** `MemorySettings` (memory-merge) and `SkillsSettings` (skill-merge), each defaulting `0.75`. USER.md sizing lives on `MemorySettings`: `user_profile_enabled` (default `True`), `user_profile_char_budget` (default `1500`).
 
 Gone since the 05-18 docs: `skills.curator_enabled`, `skills.curator_interval_hours`, `memory.consolidation_enabled/_trigger/_lookback_sessions`, and the `memory_manage` tool (split into `memory_create/append/replace/delete`). The whole loop ships **off by default** (`dream.enabled=False`, `review_enabled=False`).
 
@@ -140,34 +145,34 @@ hermes-agent markets itself as "the self-improving AI agent" on five claims. Cor
 | #1 "Creates skills from experience" | skill-nudge reviewer (`run_agent.py`) → `skill_manage` | `SKILL_REVIEW_SPEC` → `skill_create/edit/patch` | **PARITY** (mechanism); hermes richer prompt |
 | #2 "Improves them during use" | same reviewer, patch-loaded-first | same posture in `skill_review.md` | **PARITY** (mechanism) |
 | #3 "Nudges itself to persist knowledge" | memory-nudge reviewer (H1) + skill-nudge reviewer (H2), **separate** | `MEMORY_REVIEW_SPEC` + `SKILL_REVIEW_SPEC`, **separate** | **PARITY in shape** — see note below |
-| #4 "Searches its own past conversations" | FTS5 + windowing, **no LLM summarization** (changed — see below) | FTS5 BM25 chunks, no summarization | **PARITY** (was GAP A; §5.1) |
+| #4 "Searches its own past conversations" | FTS5 + windowing, **no LLM summarization** (changed — see below) | lexical/regex over raw JSONL transcripts, no summarization | **PARITY** (was GAP A; §5.1) |
 | #5 "Builds a deepening model of who you are" | always-injected `USER.md` + Honcho dialectic backend | always-injected `~/.co-cli/USER.md` (dream-reviewer write-back); Gap B closed | **PARITY on USER.md (GAP B closed, §5.2)**; GAP C (Honcho backend) remains (§5.3) |
 
 Verdicts the refactors **flipped**:
 
-- **Claim #4 — Gap A is closed (hermes-side change).** hermes's `tools/session_search_tool.py` no longer runs a per-session auxiliary-LLM digest. It is now pure FTS5 + message-window retrieval with an explicit "no LLM calls anywhere" design comment (three modes: discovery / scroll / browse). co's BM25-only `session_search` is now at **parity** — both return raw windows, neither summarizes. The summarization delta the 06-14 draft logged as Gap A no longer exists on either side. (The optional summarization *proposal* in §6.1 stands on its own ROI merits, but it is no longer "catch up to hermes.")
+- **Claim #4 — Gap A is closed (hermes-side change).** hermes's `tools/session_search_tool.py` no longer runs a per-session auxiliary-LLM digest. It is now pure FTS5 + message-window retrieval with an explicit "zero LLM cost" design stance, across **four** modes: discovery (FTS5 + bookends + ±window), scroll (fixed window around a message id), browse (recent sessions), and read (full session head+tail). co's `session_search` is lexical/regex over raw JSONL transcripts (no index) — both return raw windows, neither summarizes, so they are at **parity** on the no-summarization axis. (Note the retrieval *substrate* differs: hermes FTS5-indexes transcripts; co does not index sessions at all. The optional summarization *proposal* in §6.1 stands on its own ROI merits, but it is no longer "catch up to hermes.")
 - **Claim #3 shape.** Co now **splits** memory+skill review into two domain reviewers; hermes also keeps them separable (`review_memory` / `review_skills` flags in `agent/background_review.py`, with a `_COMBINED_REVIEW_PROMPT` when both fire). Both at parity in shape.
-- **Skill curator (co-side divergence, unchanged).** Co's curator state machine is **deleted**; skill upkeep is merge+decay in housekeeping. hermes **still ships** the curator: `agent/curator.py`, a 7d-interval / 30d-stale / 90d-archive state machine persisted to `.curator_state`. So co has diverged and there is no longer a co state machine to compare. (Skill `recall_protection_days=30`, `decay_after_days=90` survive on co as housekeeping thresholds, not curator transitions.)
+- **Skill curator (co-side divergence, unchanged).** Co's curator state machine is **deleted**; skill upkeep is merge+decay in housekeeping. hermes **still ships** the curator: `agent/curator.py` + `hermes_cli/curator.py`, a 7d-interval / 30d-stale / 90d-archive state machine persisted to `.curator_state`, with deterministic transitions via `apply_automatic_transitions()`. Its **LLM consolidation (umbrella-building) pass is OFF by default** (`curator.consolidate=False`, opt-in). So co runs LLM skill-merge by default in housekeeping; hermes runs deterministic decay by default and only consolidates when explicitly enabled. (Skill `recall_protection_days=30`, `decay_after_days=90` survive on co as housekeeping thresholds, not curator transitions.)
 
 > co-unique surfaces (not "self-improving" per se, included for an honest map): **personality doctrine** (soul/mindsets/critique injected statically, author-curated, never learned — `docs/specs/personality.md`); **the housekeeping merge pass** as deeper offline memory hygiene than hermes's per-turn nudge; **atomic-write discipline** on every memory/skill/state write (hermes at parity via `atomic_replace`).
 
 ---
 
-## 5. Verified gaps (confirmed against source, 2026-06-14)
+## 5. Verified gaps (confirmed against source, 2026-06-19)
 
 ### 5.1 Gap A — LLM-summarized cross-session recall — **CLOSED (no longer a gap)**
 
-- **hermes (changed):** `tools/session_search_tool.py` no longer summarizes. It is now pure FTS5 + message-window retrieval across three modes (discovery / scroll / browse) with an explicit "no LLM calls anywhere" design stance. The per-session auxiliary-LLM digest the 06-14 draft described is gone.
-- **co:** `co_cli/tools/session/recall.py` is strictly BM25. It returns `(session_id, when, source, chunk_text, start_line, end_line, score)` for pairing with `session_view`. The `memory.summarizer.{runs,failures,timed_out}` span attributes remain hardcoded to `0`/`False` — placeholders for a feature neither agent now implements.
+- **hermes (changed):** `tools/session_search_tool.py` no longer summarizes. It is now pure FTS5 + message-window retrieval across four modes (discovery / scroll / browse / read) with an explicit "zero LLM cost" design stance. The per-session auxiliary-LLM digest the 06-14 draft described is gone.
+- **co:** `co_cli/tools/session/recall.py` is **lexical/regex** (literal substring or regex over the raw JSONL transcripts via `SessionStore.search()`, deduped to `_SESSIONS_CHANNEL_CAP=3` sessions per query) — *not* BM25 (BM25 is the `memory_search` substrate, not session search). It returns `(session_id, when, source, chunk_text, start_line, end_line, score)` for pairing with `session_view`. No summarization.
 - **Net:** both agents return raw windows; no parity gap remains. Retained here only as a record of a flipped verdict. Any future summarization on co (see §6.1) would be a co-unique enhancement, not catch-up.
-- **Status:** closed by hermes-side change, confirmed 2026-06-18.
+- **Status:** closed by hermes-side change, confirmed 2026-06-19.
 
 ### 5.2 Gap B — always-injected user profile — **CLOSED (parity implemented)**
 
-- **hermes:** dedicated `USER.md`, injected into the system prompt every turn when `user_profile_enabled`; the memory reviewer writes back to it.
-- **co (changed):** USER.md parity is now implemented. User preferences live in an always-injected `~/.co-cli/USER.md` profile written back by the dream reviewer — a canonical "who the user is" surface, no longer reliant on the model choosing to `memory_search`. The flat `kind='user'` memory kind was **removed**; model-facing memory kinds are now `rule | article | note`.
+- **hermes:** dedicated `USER.md`, injected into the system prompt every turn when `user_profile_enabled`; the memory reviewer writes back to it (volatile tier, rebuilt on compression).
+- **co (changed):** USER.md parity is now implemented. User preferences live in an always-injected `~/.co-cli/USER.md` profile (sized by `memory.user_profile_char_budget`, default 1500), written back by the dream **memory** reviewer through dedicated `user_profile_view` / `user_profile_write` tools (`co_cli/tools/user_profile/`) — a wholesale rewrite, not a targeted edit, and no longer reliant on the model choosing to `memory_search`. The flat `kind='user'` memory kind was **removed**; model-facing memory kinds are now `rule | article | note`.
 - **Net:** the higher tool-call burden and missing write-back surface the gap described no longer apply.
-- **Status:** closed by co-side change, confirmed 2026-06-18.
+- **Status:** closed by co-side change, confirmed 2026-06-19.
 
 ### 5.3 Gap C — dialectic / backend user-modeling
 
@@ -183,6 +188,10 @@ The one substantive item that survived the architecture rewrite.
 - **What's missing:** no component proactively recognizes "this 4-step procedure has recurred across N sessions, make it an umbrella skill." The skill reviewer sees **one** transcript per KICK; skill **merge** in housekeeping clusters only *already-saved* skills (it never reads transcripts).
 - **Net behavior:** unchanged from the old design's fallback — per-session reviewer creates near-duplicate skills, housekeeping merge later collapses them. The recurrence signal exists only as after-the-fact dedup, never as up-front recognition.
 - **Status:** confirmed present (relocated from curator-consolidation to housekeeping skill-merge, same substance).
+
+### 5.5 Note — the internal `canon` kind (co-side, not a gap)
+
+`MemoryKindEnum` carries a fourth value, `canon`, beyond the three model-facing kinds (`rule | article | note`). It is **internal-only**: excluded from the model-callable memory tools (`MemoryKind = Literal[rule, article, note]`), it is the kind the dream reviewer uses for personality/canon material. Recorded here so the "memory kinds are rule|article|note" claim in §4/§5.2 is understood as the *model-facing* surface, not the full enum.
 
 ---
 
@@ -225,19 +234,21 @@ Still unbuilt. `co_cli/skills/loader.py` loads only **two** tiers — co-bundled
 - `co_cli/config/dream.py`, `co_cli/config/skills.py`, `co_cli/config/core.py` (DREAM_* path constants incl. `DREAM_SNAPSHOTS_DIR`)
 - `co_cli/main.py` — `_post_turn_hook`, `_maybe_kick_memory_review`, `_maybe_kick_skill_review`, `_fire_session_end_kicks`, `maybe_autospawn_dream`
 - `co_cli/bootstrap/core.py` — autospawn flock
-- `co_cli/tools/session/recall.py` — BM25 `session_search`; `co_cli/tools/memory/` — `view.py` (`memory_view`) + `manage.py` (`memory_create/append/replace/delete`) + `memory_search`
-- `co_cli/skills/loader.py` — two-tier skill loading
+- `co_cli/tools/session/recall.py` — **lexical/regex** `session_search` (not BM25); `co_cli/tools/memory/` — `view.py` (`memory_view`) + `manage.py` (`memory_create/append/replace/delete`) + `recall.py` (`memory_search`, BM25)
+- `co_cli/tools/user_profile/` — `view.py` (`user_profile_view`) + `write.py` (`user_profile_write`); `co_cli/memory/user_profile.py` (read); `co_cli/memory/item.py` — `MemoryKindEnum` incl. internal-only `canon`
+- `co_cli/config/memory.py` — `user_profile_enabled`, `user_profile_char_budget`, `consolidation_similarity_threshold`
+- `co_cli/skills/loader.py` — two-tier skill loading (bundled + user-global; no project-local tier)
 
 ### co-cli specs
 - `docs/specs/dream.md` — runtime spec of record for the daemon
 - `docs/specs/skills.md` — skills tier (curator section pending update to reflect housekeeping absorption)
 - `docs/specs/memory.md`, `docs/specs/personality.md`, `docs/specs/prompt-assembly.md`
 
-### hermes cross-reference (re-read 2026-06-18)
-- `hermes-agent/agent/background_review.py` + `run_agent.py` (`_spawn_background_review`) — memory/skill nudge reviewers, separable via `review_memory`/`review_skills` flags (+ `_COMBINED_REVIEW_PROMPT`)
-- `hermes-agent/tools/skill_manager_tool.py` — `skill_manage` (6 ops: create/edit/patch/delete/write_file/remove_file), atomic writes
-- `hermes-agent/agent/curator.py` — skill curator state machine, STILL PRESENT (7d interval / 30d stale / 90d archive, `.curator_state`)
-- `hermes-agent/tools/session_search_tool.py` — FTS5 + window retrieval, **no LLM summarization** (changed; was the basis of the old Gap A)
-- `hermes-agent/agent/system_prompt.py` + `hermes_cli/config.py` — `USER.md` injection, `_user_profile_enabled` (default True)
-- `hermes-agent/plugins/memory/honcho/__init__.py` — dialectic backend (5 tools)
+### hermes cross-reference (re-read 2026-06-19)
+- `hermes-agent/agent/background_review.py` + `run_agent.py` (`_spawn_background_review`) — memory/skill nudge reviewers, separable via `review_memory`/`review_skills` flags (+ `_COMBINED_REVIEW_PROMPT`); review fork runs with `skip_memory=True` (external memory plugins bypassed, writes land on disk)
+- `hermes-agent/tools/skill_manager_tool.py` — `skill_manage` (6 ops: create/edit/patch/delete/write_file/remove_file), atomic writes (`_atomic_write_text` + `atomic_replace`)
+- `hermes-agent/agent/curator.py` + `hermes_cli/curator.py` — skill curator state machine, STILL PRESENT (7d interval / 30d stale / 90d archive, `.curator_state`, `apply_automatic_transitions()`); LLM consolidation **OFF by default** (`curator.consolidate=False`)
+- `hermes-agent/tools/session_search_tool.py` — FTS5 + window retrieval, **no LLM summarization** ("zero LLM cost"); 4 modes (discovery/scroll/browse/read)
+- `hermes-agent/agent/system_prompt.py` + `hermes_cli/config.py` — `USER.md` injection (volatile tier), `_user_profile_enabled` (default True)
+- `hermes-agent/plugins/memory/honcho/` — dialectic backend (`__init__.py`, `client.py`, `session.py`, `cli.py`); review fork skips it via `skip_memory=True`
 - `hermes-agent/utils.py` — `atomic_replace` / `atomic_json_write`

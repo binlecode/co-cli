@@ -128,7 +128,7 @@ Three sequential lanes, ACT/GATE conditional on the first two:
 ## Tasks
 
 ✓ DONE **TASK-1 — Peer rules semantic comparison (COMPARE; always)**
-- files: `docs/reference/RESEARCH-behavioral-rules-peer-comparison.md` (new)
+- files: `docs/reference/RESEARCH-behavioral-rules-peer-survey.md` (new)
 - done_when: the research doc exists and contains (a) a topic × {co, opencode, hermes-agent, codex,
   openclaw} coverage matrix built by reading each peer's system-prompt source, (b) an enumerated **gap
   list** (topics ≥2 peers instruct that co omits), and (c) an enumerated **consolidation-candidate list**
@@ -285,7 +285,7 @@ the head-start gates — no new blockers, scope unchanged.
 | TASK-3 | ≤3-section evidence-scoped edit, re-validated, negative floor delta, grep clean, guards + full suite green | ✓ pass (1 section) |
 
 **Artifacts**
-- COMPARE: `docs/reference/RESEARCH-behavioral-rules-peer-comparison.md` — 8-topic × 5-source matrix; gaps **G1** output-formatting (4/4 peers, **strong**), G2 tool-call-budget (3 peers, moderate), G3 identity (design divergence), G4 todo-discipline; consolidation **C1** `04 Memory` stub, **C2** persistence cluster (5 spans across 01/04/05), C3–C7. Dominant-duplication hypothesis CONFIRMED; C3 framing corrected (internal-dup, no peer instructs it); nothing contradicted.
+- COMPARE: `docs/reference/RESEARCH-behavioral-rules-peer-survey.md` — 8-topic × 5-source matrix; gaps **G1** output-formatting (4/4 peers, **strong**), G2 tool-call-budget (3 peers, moderate), G3 identity (design divergence), G4 todo-discipline; consolidation **C1** `04 Memory` stub, **C2** persistence cluster (5 spans across 01/04/05), C3–C7. Dominant-duplication hypothesis CONFIRMED; C3 framing corrected (internal-dup, no peer instructs it); nothing contradicted.
 - VALIDATE: `evals/_outputs/rule-compliance-20260618-003339-run.jsonl` — section-ablation, N=20/arm, 0 timeouts.
 
 **VALIDATE per-section map (6 OBSERVABLE distinguishable signals of 32)**
@@ -318,14 +318,14 @@ Inventory split: 6 PROBED · 4 OBSERVABLE-OUT-OF-HARNESS (todo_read / skill_crea
 ### Evidence
 | Task | done_when | Spec Fidelity | Key Evidence |
 |------|-----------|---------------|-------------|
-| TASK-1 | peer matrix + gap list + consolidation list + reconciliation, all cited | ✓ pass | `RESEARCH-behavioral-rules-peer-comparison.md` — 12 spot-checked citations CONFIRMED at exact lines (codex `gpt_5_2_prompt.md:160-242`, hermes `prompt_builder.py:292,317`, codex `:29,111`); C3 correction verified by grepping all 4 peers for fact-authority/source-conflict — none found; (a)(b)(c)(d) all present |
+| TASK-1 | peer matrix + gap list + consolidation list + reconciliation, all cited | ✓ pass | `RESEARCH-behavioral-rules-peer-survey.md` — 12 spot-checked citations CONFIRMED at exact lines (codex `gpt_5_2_prompt.md:160-242`, hermes `prompt_builder.py:292,317`, codex `:29,111`); C3 correction verified by grepping all 4 peers for fact-authority/source-conflict — none found; (a)(b)(c)(d) all present |
 | TASK-2 | (a) section-observability inventory + (b) ablation run with 2 fidelity guards | ✓ pass | `eval_rule_compliance.py` — `--inventory` exits clean at 31 sections; parser handles headerless `01_identity.md` (`_parse_file_sections`); `_rules_block_drop_section` is independent reassembly cross-checked against `full_block.replace(span,"")`; all 6 probes implicit; centralized eval settings (`_deps`/`_settings`/`_timeouts`), no inline ModelSettings |
 | TASK-3 | ≤3-section edit, negative floor delta, grep clean, guards + full suite green | ✓ pass | `04_tool_protocol.md` — `## Memory` stub removed, ends clean at `## Deferred tools`; floor 18112→18015 (**−97**); grep: no production stale reference to the removed anchor; floor guards (budget + F5) pass; surgical diff (only 5-line stub removed) |
 
 ### Issues Found & Fixed
 | Finding | File:Line | Severity | Resolution |
 |---------|-----------|----------|------------|
-| Soft-anchor citation: `system-prompt.md:256` is blank (Skills content at `:53`) | `RESEARCH-behavioral-rules-peer-comparison.md:26,100` | minor | Left as-is — non-load-bearing cell; substantive Skills claim correctly anchored at `:53`; research artifact, not production |
+| Soft-anchor citation: `system-prompt.md:256` is blank (Skills content at `:53`) | `RESEARCH-behavioral-rules-peer-survey.md:26,100` | minor | Left as-is — non-load-bearing cell; substantive Skills claim correctly anchored at `:53`; research artifact, not production |
 | Latest `_outputs` artifact has 32 inventory records | `evals/_outputs/rule-compliance-20260618-003339-run.jsonl` | minor | Expected chronology — VALIDATE measured 32 sections, ACT removed the stub afterward; JSONL accurately records measurement-time state; re-running the 40-min pass would not change any of the 6 probed verdicts (removed section was OUT-OF-REACH/never-probed) |
 | Budget ceiling not re-pinned after −97 trim | `tests/test_instruction_budget.py:52` | minor | Defensible per reviewer — trim widens tars headroom to ~403 (still < 25,000); guard still holds the right invariant; not required by done_when |
 

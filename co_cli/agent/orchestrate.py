@@ -765,7 +765,7 @@ async def run_turn(
     deps.runtime.reset_for_turn()
     deps.usage_accumulator.reset()
     deps.runtime.status_callback = frontend.on_status
-    frontend.on_status("Co is thinking...")
+    frontend.begin_waiting()
     turn_state = _TurnState(
         current_input=user_input,
         current_history=message_history,
@@ -845,11 +845,25 @@ async def run_turn(
             except (ModelAPIError, httpx.ReadError, TimeoutError) as e:
                 frontend.on_status(_transient_error_message(e))
                 turn_state.outcome = "error"
+                span.add_event(
+                    "transient_error",
+                    {
+                        "error.type": type(e).__name__,
+                        "error.msg": str(e)[:500],
+                    },
+                )
                 return _build_error_turn_result(turn_state)
 
             except UnexpectedModelBehavior as e:
                 frontend.on_status(f"Model returned malformed output: {e}")
                 turn_state.outcome = "error"
+                span.add_event(
+                    "malformed_output",
+                    {
+                        "error.type": type(e).__name__,
+                        "error.msg": str(e)[:500],
+                    },
+                )
                 return _build_error_turn_result(turn_state)
 
             except (KeyboardInterrupt, asyncio.CancelledError):
