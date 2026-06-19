@@ -51,6 +51,8 @@ The parts are joined with `"\n\n"` and passed as the `instructions=` string to `
 
 Each personality role is fully self-contained under `souls/{role}/`. Adding a role requires only a new directory — no Python changes. Adding a tool-specific guidance block requires adding a constant to `co_cli/context/guidance.py` and a gate in `build_toolset_guidance`.
 
+The numbered rule files (`co_cli/context/rules/NN_rule_id.md`) are authored as **low-inference reflexes** per `.agent_docs/rule-authoring-standard.md` — observable-cue triggers and single imperative actions rather than high-inference judgment calls, since the configured model under-executes metacognitive asks. That standard is the yardstick for every rule edit.
+
 ### 2.2 Dynamic Instruction Layers
 
 Registered in `build_orchestrator()` (`co_cli/agent/build.py`) from `ORCHESTRATOR_SPEC.per_turn_instructions`, evaluated fresh per request:

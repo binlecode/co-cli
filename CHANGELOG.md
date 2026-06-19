@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.420]
+
+Redesign behavioral rules as low-inference reflexes (increment 1) — counter the weak configured model's under-execution of high-inference judgment-call prose. Audit + authoring standard + two evidenced reflexes, token-neutral.
+
+- **Authoring standard (`.agent_docs/rule-authoring-standard.md`):** codify the 6-criterion low-inference-reflex rubric (observable cue, single imperative action, named concrete tool, anti-pattern shown, exceptions enumerated, co-fit-not-coding-fit) as the durable anti-erosion yardstick for every future rule edit.
+- **Whole-set audit:** all 28 rule sections classified reflex-vs-judgment-call (19 reflex / 9 judgment-call); no judgment-call section carries live failure evidence, so none rewritten beyond the two below — backlog recorded for evidence-gated follow-ups.
+- **R2 stop-condition reflex (`04 ## Execute, don't promise`):** "Once you deliver that final result, stop. Do not restate an answer you already gave..." — brakes the observed answer→save→re-answer loop. Offset by deduping the triple-stated "continue until met".
+- **R3 method-switch reflex (`04 ## Error recovery`):** after two failures at the same goal by the same method, switch method (e.g. shell curl) — catches distinct-site same-method thrash the identical-call rule missed. Offset by tightening the two recovery paragraphs.
+- **Sync-doc:** dropped stale "this user's specific setup or preferences" from `07 ## Recall` (now the always-injected USER.md profile's job); added reflex-standard cross-reference to `prompt-assembly.md` §2.1. Net floor delta < 0; floor guards + 28-count inventory hold.
+
 ## [0.8.418]
 
 Port hermes' always-injected `USER.md` profile and remove the `kind='user'` memory kind — closes Gap B. Who-the-user-is / how-they-want-to-work now lives in one deterministically-injected, reviewer-curated profile instead of search-driven memory items (small local models under-fire that recall).

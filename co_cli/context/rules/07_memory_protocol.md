@@ -10,8 +10,7 @@ see Explicit saves below.)
 ## Recall
 
 When the user references something from a past conversation, a prior preference, or an
-established decision — or when you suspect relevant cross-session context exists, or you
-recognize the topic but lack context for this user's specific setup or preferences —
+established decision — or when you suspect relevant cross-session context exists —
 search before answering: `memory_search` for declarative state (conventions,
 rules, articles), and past conversations for prior exchanges. Do not ask the user
 to repeat themselves when the answer may already be in memory. If no results, make at
