@@ -50,6 +50,17 @@ def _toolset_guidance_provider(deps: CoDeps) -> str | None:
     return build_toolset_guidance(deps.tool_catalog)
 
 
+def _model_profile_overlay_provider(deps: CoDeps) -> str | None:
+    """Per-profile prompt overlay hook — returns None until Plan B/C fill it.
+
+    Plans B (frontier) and C (weak-local) branch on
+    ``resolve_model_profile(deps.config.llm)`` here, evidence-gated, so per-model
+    prompt content lands at this single seam without a new model-id branch elsewhere
+    in assembly.
+    """
+    return None
+
+
 def _personality_critique_provider(deps: CoDeps) -> str | None:
     if not deps.config.personality:
         return None
@@ -67,6 +78,7 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
         _base_instructions_provider,
         _user_profile_provider,
         _toolset_guidance_provider,
+        _model_profile_overlay_provider,
         _personality_critique_provider,
     ),
     per_turn_instructions=(

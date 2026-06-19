@@ -217,7 +217,7 @@ These settings most directly affect bootstrap behavior.
 | `llm.provider` | `CO_LLM_PROVIDER` | `ollama` | Selects provider-specific bootstrap checks and model wiring |
 | `llm.host` | `CO_LLM_HOST` | `http://localhost:11433` | Host used by Ollama checks and runtime model calls (multi-instance router; `11434` bypasses to primary Ollama) |
 | `llm.model` | `CO_LLM_MODEL` | provider default | Primary foreground model built during startup |
-| `llm.max_context_tokens` | — | `65536` | Ceiling on probed Ollama context window; `deps.model_max_context_tokens = min(probe, max_context_tokens)` |
+| `llm.max_context_tokens` | — | profile-derived | Context budget; default resolves from the model profile (`weak_local`/Ollama → `65536`; `frontier`/Gemini → `524288`), explicit value overrides. Ollama caps it by the probe: `deps.model_max_context_tokens = min(probe, max_context_tokens)` |
 | `memory.search_backend` | `CO_MEMORY_SEARCH_BACKEND` | `hybrid` | Preferred retrieval backend before degradation |
 | `memory.embedding_provider` | `CO_MEMORY_EMBEDDING_PROVIDER` | `tei` | Determines whether hybrid search can stay enabled |
 | `memory_path` | `CO_MEMORY_PATH` | `~/.co-cli/memory` | User-global memory item directory synced during bootstrap |

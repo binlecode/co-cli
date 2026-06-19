@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.424]
+
+Model-profile seam — make the context budget model-aware via ONE resolver (Plan A of the 3-plan model-profile split). Mechanism only; prompt-content overlays are deferred to Plans B/C.
+
+- **`ModelProfile` resolver** (`co_cli/config/llm.py`): binary `weak_local | frontier` resolved from `config.llm` by provider. Centralized — no inline `if provider==` budget branches.
+- **Profile-derived budget default:** a `_default_context_from_profile` validator supplies the `max_context_tokens` field default from the profile *only when not user-set* (`model_fields_set` gate). WEAK_LOCAL = hard 65,536 clamp; FRONTIER = 524,288 (half the provider's 1M max window; `compaction_ratio=0.50` clamps off it, hermes-parity). User override still wins; the Ollama num_ctx contract is unchanged. Folds the gemini-pro-backend budget task.
+- **Prompt-overlay seam:** `_model_profile_overlay_provider` wired into `static_instruction_builders` returning `None` today — the single branch point Plans B/C fill, evidence-gated. Default Ollama/qwen path is byte-identical.
+- Pricing-cliff cost-clamp deliberately deferred to post-1/2/3 calibration (peer anchor: opencode 200K cost tier).
+
 ## [0.8.422]
 
 Behavioral-rules consolidation + cleanup — act on the shipped audit's deferred findings. One ablation-gated tightening, peer-confirmed content/tone dedups, and two structural cleanups; section set 31→28, all 7 rule files now share a top-level H1.

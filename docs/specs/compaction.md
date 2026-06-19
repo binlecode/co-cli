@@ -719,7 +719,7 @@ Peer parity: hermes embeds an inline `Use file tools to read the full file.` in 
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `llm.max_context_tokens` | — | `65536` | Ceiling on the Ollama-probed context window; `deps.model_max_context_tokens = min(probe, max_context_tokens)`. Used as the compaction budget. |
+| `llm.max_context_tokens` | — | profile-derived | Compaction budget; default resolves from the model profile (`weak_local`/Ollama → `65536`; `frontier`/Gemini → `524288`). An explicit value overrides. Ollama caps it by the probe: `deps.model_max_context_tokens = min(probe, max_context_tokens)`. |
 
 **Compaction tuning** (`CompactionSettings` in `co_cli/config/compaction.py`):
 

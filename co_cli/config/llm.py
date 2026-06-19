@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from enum import StrEnum
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -28,7 +29,44 @@ DEFAULT_LLM_MODELS: dict[str, str] = {
 
 MAX_CONTEXT_TOKENS = 65_536
 
+# Frontier (cloud reasoner) context budget — half the provider's 1M max window.
+# co's compaction_ratio (0.50, hermes-parity single-shot 50%) clamps off this budget;
+# the pricing-cliff cost-clamp is deferred to a post-calibration setting (see the
+# model-profile-01-seam plan, OQ-3).
+FRONTIER_MAX_CONTEXT_TOKENS = 524_288
+
 MAX_MODEL_REQUESTS_PER_TURN: int = 40
+
+
+class ModelProfile(StrEnum):
+    """Binary model class driving context budget (and, later, prompt overlays).
+
+    WEAK_LOCAL: the local MoE the behavioral rules are calibrated to counter.
+    FRONTIER: a cloud reasoner with a large native window and different prompt needs.
+    """
+
+    WEAK_LOCAL = "weak_local"
+    FRONTIER = "frontier"
+
+
+def resolve_model_profile(llm: LlmSettings) -> ModelProfile:
+    """Resolve the model profile from the configured provider.
+
+    Ollama is the weak local backend; every other provider (gemini today) is a
+    frontier cloud reasoner. Binary by provider — the only distinction with evidence.
+    """
+    return ModelProfile.WEAK_LOCAL if llm.uses_ollama() else ModelProfile.FRONTIER
+
+
+def profile_max_context_tokens(profile: ModelProfile) -> int:
+    """Return the default context budget for a profile.
+
+    WEAK_LOCAL is a hard 64k clamp — the baseline the weak-model profiling is
+    calibrated against, never relaxed. FRONTIER is half the provider's 1M max window.
+    """
+    if profile is ModelProfile.FRONTIER:
+        return FRONTIER_MAX_CONTEXT_TOKENS
+    return MAX_CONTEXT_TOKENS
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +279,12 @@ class LlmSettings(BaseModel):
     def _default_model_per_provider(self) -> LlmSettings:
         if not self.model:
             self.model = DEFAULT_LLM_MODELS[self.provider]
+        return self
+
+    @model_validator(mode="after")
+    def _default_context_from_profile(self) -> LlmSettings:
+        if "max_context_tokens" not in self.model_fields_set:
+            self.max_context_tokens = profile_max_context_tokens(resolve_model_profile(self))
         return self
 
     def uses_ollama(self) -> bool:
