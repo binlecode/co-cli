@@ -23,7 +23,7 @@ def _collect_rule_files() -> list[tuple[int, str, Path]]:
     """Load and validate numbered rule filenames.
 
     Contract:
-    - Filename format: ``NN_rule_id.md`` (e.g. ``01_identity.md``)
+    - Filename format: ``NN_rule_id.md`` (e.g. ``01_interaction.md``)
     - Numeric prefixes must be unique and contiguous from 01
     """
     rule_paths = sorted(_RULES_DIR.glob("*.md"))

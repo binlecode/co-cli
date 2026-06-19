@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.422]
+
+Behavioral-rules consolidation + cleanup — act on the shipped audit's deferred findings. One ablation-gated tightening, peer-confirmed content/tone dedups, and two structural cleanups; section set 31→28, all 7 rule files now share a top-level H1.
+
+- **C4 (ablation-gated):** tightened `03 ## Verification`'s verbose enumeration toward hermes' bullet density; re-ablation at N=40 STEERS clear of noise (Δ+0.60, ≥ threshold+1SE), net floor delta negative.
+- **C3/C5/C6 (review-gated, token-floor hygiene):** merged `03 Fact authority`+`Source conflicts` into one contradiction-resolution section; merged `06 Create`+`Offer-to-save` into one skill-creation section; folded `06 Background review`. No behavioral claim.
+- **D2 (review-gated):** renamed `01_identity.md` → `01_interaction.md` with a top-level `# Interaction` heading — filename, heading, and content now agree (identity is owned by the off-by-default personality tier). Synced `assembly.py` docstring + `personality.md`.
+- **C2 persistence cluster + C7/G1/G2/G4/G3** handed off with gate specs / deferral rationale; none bulk-applied unmeasured. (D1 cross-file dedup shipped earlier.)
+
 ## [0.8.420]
 
 Redesign behavioral rules as low-inference reflexes (increment 1) — counter the weak configured model's under-execution of high-inference judgment-call prose. Audit + authoring standard + two evidenced reflexes, token-neutral.

@@ -135,7 +135,7 @@ on the model's operating space. Review lens is last so it frames all operational
 as subject to self-review.
 
 **Rule files** (`context/rules/`) are personality-independent universal policies. Files must
-be numbered contiguously starting at `01` and unique. Current rules: `01_identity.md`,
+be numbered contiguously starting at `01` and unique. Current rules: `01_interaction.md`,
 `02_safety.md`, `03_reasoning.md`, `04_tool_protocol.md`, `05_workflow.md`, `06_skill_protocol.md`,
 `07_memory_protocol.md`.
 
@@ -246,7 +246,7 @@ for missing mindset files.
 | `co_cli/bootstrap/core.py:_sync_canon_dir` | Single-chunk-per-file canon indexing helper (one `Chunk` per file, `index=0`) called by `_sync_canon_store` |
 | `co_cli/personality/prompts/validator.py` | `_discover_valid_personalities()`, `validate_personality_files()`, `VALID_PERSONALITIES` |
 | `co_cli/personality/prompts/souls/` | Soul file trees: `finch/`, `jeff/`, `tars/` |
-| `co_cli/context/rules/` | Universal behavioral rule files `01_identity.md` – `07_memory_protocol.md` |
+| `co_cli/context/rules/` | Universal behavioral rule files `01_interaction.md` – `07_memory_protocol.md` |
 | `co_cli/personality/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
 | `co_cli/agent/build.py` | `build_orchestrator()` — iterates `ORCHESTRATOR_SPEC.static_instruction_builders` and registers per-turn instruction callbacks |

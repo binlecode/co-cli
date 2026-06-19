@@ -35,7 +35,8 @@ If a skill you loaded has stale steps, wrong commands, missing
 pitfalls, or no longer matches the codebase, fix it immediately — a
 surgical patch for a localized fix, a full rewrite for a structural
 overhaul. Don't wait to be asked. Unmaintained skills become
-liabilities.
+liabilities. Fix the obvious, in-the-moment cases; a background review
+agent catches the rest, so don't double up on it in-flight.
 
 Mutate skills only through `skill_create` / `skill_edit` /
 `skill_patch` / `skill_delete`. Never write or edit a `SKILL.md`
@@ -46,30 +47,16 @@ security scan, atomic write, catalog reload, and usage tracking, and
 ## Create
 
 After completing a multi-step task (3+ coherent steps), consider
-whether the procedure is reusable. If yes — same steps you'd run for
-similar tasks — promote it to a skill, naming it by task type, not the
-specific instance. The body must conform to
-`skills.md` §6: description, H1, `**Invocation:**` line, at least one
-`## Phase N — <name>` section.
-
-Search first: scan the `<available_skills>` manifest to confirm no
-skill for this task type already exists.
-
-Don't create for one-offs. The bar is "would I run this again for the
+whether the procedure is reusable — same steps you'd run for similar
+tasks. Search the `<available_skills>` manifest first to confirm no
+skill for this task type already exists. If it is genuinely reusable,
+promote it to a skill, naming it by task type, not the specific
+instance; the body must conform to `skills.md` §6: description, H1,
+`**Invocation:**` line, at least one `## Phase N — <name>` section.
+Don't create for one-offs — the bar is "would I run this again for the
 same kind of task."
 
-## Offer-to-save
-
-After difficult or iterative work where you executed a coherent
-procedure, briefly offer the user a skill creation suggestion:
-"This looked like a reusable procedure. Want me to save it as a
-/<task-type> skill?" Skip for simple one-offs. Confirm with the user
-before invoking `skill_create` on their behalf — the
-Create reflex above covers autonomous creation; this rule covers
-collaborative creation.
-
-## Background review
-
-A background review agent catches what you miss in-flight. Don't
-double up: focus the `## Drift` and `## Create` reflexes on the
-obvious, in-the-moment cases; trust the background review for the rest.
+That reflex is autonomous. For collaborative creation after difficult
+or iterative work, briefly offer instead: "This looked like a reusable
+procedure — want me to save it as a /<task-type> skill?" and confirm
+before calling `skill_create` on the user's behalf.
