@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.430]
+
+Model-profile 1a — rule↔tool-surface partition correction on the always-injected BASE rule layer (profile-agnostic; the cleaned base 1b will freeze).
+
+- **`04 ## Paths` deleted** (`co_cli/context/rules/04_tool_protocol.md`): the rule mandated absolute paths in contradiction to the workspace-relative-primary file tools (`file_read`/`file_write`/`file_patch`). Path semantics are owned by the tool descriptions; the rule was redundant and wrong.
+- **`04 ## Deferred tools` deleted**: triply redundant with `tool_view`'s ALWAYS-visible description and the per-turn deferred-tool prompt; the lone shell-vs-dedicated echo lived inside it and went with it.
+- **Persistence/completion cluster consolidated** into `05 ## Execution` (`01 ## Thoroughness over speed` + `04 ## Execute, don't promise` + the `04 ## Strategy` follow-through bullet), lossless; `05 ## Completeness` validation checklist preserved verbatim.
+- **New base `## Output format` floor** in `01_interaction.md` (headers/bullets/backticks/`file:line`/no fabricated citations) — the orphaned 4-of-4-peer parity gap, all profiles.
+- **Harness** (`evals/eval_rule_compliance.py`): base section count `28 → 25`; `_INVENTORY` + `--inventory` self-test updated; net base size −504 chars, under `INSTRUCTION_BLOCK_CEILING`.
+
 ## [0.8.428]
 
 Cross-session user-profile synthesis — a dream-daemon housekeeping sub-pass that re-derives USER.md across recent sessions (Gap C). Ships off by default.
