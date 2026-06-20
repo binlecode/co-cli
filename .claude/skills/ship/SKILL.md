@@ -26,6 +26,8 @@ Fix any remaining violations before continuing.
 
 ## Step 2 — Full test suite
 
+**Skip if `/review-impl` just ran the full suite green and there has been no source-code change since** (post-Gate-2 ship flow — the review-impl run already is this safety net; re-running buys nothing). State that you're skipping and why. Otherwise (ad-hoc ship, or any source change after review-impl), run it:
+
 ```bash
 mkdir -p .pytest-logs
 uv run pytest -x 2>&1 | tee .pytest-logs/$(date +%Y%m%d-%H%M%S)-ship.log
