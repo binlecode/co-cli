@@ -86,6 +86,8 @@ Each candidate's text sent to the reranker is truncated to `rerank_text_char_bud
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | token-Jaccard threshold for write-time dedup and daemon merge clusters |
 | `memory.user_profile_enabled` | `CO_MEMORY_USER_PROFILE_ENABLED` | `true` | gate the always-injected user profile block ([§7](#7-user-profile-usermd)) |
 | `memory.user_profile_char_budget` | `CO_MEMORY_USER_PROFILE_CHAR_BUDGET` | `1500` | max chars for `USER.md`; over-budget writes are rejected so the reviewer consolidates |
+| `memory.profile_synthesis_enabled` | `CO_MEMORY_PROFILE_SYNTHESIS_ENABLED` | `false` | enable the cross-session profile synthesis sub-pass ([dream.md §2.6](dream.md)) |
+| `memory.profile_synthesis_lookback_sessions` | `CO_MEMORY_PROFILE_SYNTHESIS_LOOKBACK_SESSIONS` | `10` | session window width for synthesis (`ge=2`); trigger threshold and marker step are the derived `lookback // 2` |
 
 Memory items are never decayed by age or recall frequency (storage is unconstrained; recall is top-k + score-floor gated), so there are no `decay_after_days`/`recall_protection_days` knobs. The only automated curation is similarity-based merge.
 
@@ -269,8 +271,8 @@ Five values populate `MemoryItem.source_type`:
 | --- | --- |
 | Storage | `~/.co-cli/USER.md` (`USER_PROFILE_PATH`); `co_cli/memory/user_profile.py` read/write, atomic, char-budget-capped |
 | Injection | `_user_profile_provider` static builder in `co_cli/agent/orchestrator.py` — read once at orchestrator build (snapshot-at-load, frozen per session); empty file or `user_profile_enabled=false` injects nothing |
-| Writers | Primary: the dream memory reviewer ([dream.md](dream.md)). Main agent: only on explicit user request (e.g. "remember I prefer X"), via the curation tools below |
-| Curation tools | `user_profile_view(ctx)` and `user_profile_write(ctx, content)` in `co_cli/tools/user_profile/` — both `DEFERRED` (off the default floor, revealed via `tool_view`); `user_profile_write` is approval-gated on the main-agent path and wholesale-rewrite only |
-| Population | Requires `memory.review_enabled=true`. With the reviewer off (default), the surface is wired and injecting-ready but stays empty (no-op) |
+| Writers | Three, sharing one code-enforced write contract (wholesale rewrite, view-first, char-budget consolidation via `write_user_profile`): (1) the per-session dream memory reviewer ([dream.md §1.5](dream.md)); (2) the cross-session profile synthesis sub-pass ([dream.md §2.6](dream.md), gated off by default) that reconciles across many sessions; (3) the main agent, only on explicit user request (e.g. "remember I prefer X"), via the curation tools below |
+| Curation tools | `user_profile_view(ctx)` and `user_profile_write(ctx, content)` in `co_cli/tools/user_profile/` — both `DEFERRED` (off the default floor, revealed via `tool_view`); `user_profile_write` is approval-gated on the main-agent path and wholesale-rewrite only. Distinct facts are separated by a `§` on its own line — a readability convention, not enforced structure (no parser, no migration) |
+| Population | The per-session reviewer requires `memory.review_enabled=true`; the cross-session synthesis requires `memory.profile_synthesis_enabled=true` (both off by default). With both off, the surface is wired and injecting-ready but stays empty (no-op) |
 
 The injected artifact is one holistic curated blob, not an enumerated per-fact-type auto-inject list. General memory recall (`rule`/`article`/`note`) stays search-driven; only the user-profile surface uses deterministic injection. See [prompt-assembly.md](prompt-assembly.md) for the static-instruction build order.

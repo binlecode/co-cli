@@ -32,6 +32,10 @@ async def user_profile_write(ctx: RunContext[CoDeps], content: str) -> ToolRetur
     the new fact into the existing profile, then write the full text back. Keep it
     under the character budget — consolidate rather than append indefinitely.
 
+    Separate distinct facts with a § (section sign) on its own line; entries may be
+    multiline. This is a readability convention, not enforced structure — it lets you
+    and later rewrites see and revise one fact at a time without disturbing the rest.
+
     Use for who the user is and how they want to work (preferences, working style,
     persona). Standing rules, fetched articles, and free-form notes go to
     memory_create instead.

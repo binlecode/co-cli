@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from co_cli.config.dream import DreamSettings
 from co_cli.config.memory import MemorySettings
 from co_cli.daemons.dream._housekeeping import (
@@ -415,6 +417,166 @@ def test_prune_sessions_leaves_non_canonical_files(tmp_path: Path) -> None:
 
     assert count == 0
     assert foreign.exists()
+
+
+# ---------------------------------------------------------------------------
+# synthesize_user_profile — cross-session profile synthesis (real local model)
+# ---------------------------------------------------------------------------
+
+
+def _session_msgs(user_text: str, assistant_text: str):
+    """A minimal two-message session transcript."""
+    from pydantic_ai.messages import (
+        ModelRequest,
+        ModelResponse,
+        TextPart,
+        UserPromptPart,
+    )
+
+    return [
+        ModelRequest(parts=[UserPromptPart(content=user_text)]),
+        ModelResponse(parts=[TextPart(content=assistant_text)]),
+    ]
+
+
+def _seed_session(sessions_dir: Path, *, created: datetime, user_text: str, reply: str) -> str:
+    """Write a canonical-named real-JSONL session; return its 8-char id prefix."""
+    from co_cli.session.filename import session_filename
+    from co_cli.session.persistence import append_messages
+
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    sid = uuid4().hex
+    path = sessions_dir / session_filename(created, sid)
+    append_messages(path, _session_msgs(user_text, reply))
+    return sid[:8]
+
+
+def _synthesis_deps(tmp_path: Path, *, enabled: bool, lookback: int):
+    from tests._settings import SETTINGS_NO_MCP
+
+    from co_cli.deps import CoDeps, CoSessionState
+    from co_cli.llm.factory import build_model
+    from co_cli.tools.shell_backend import ShellBackend
+
+    memory = SETTINGS_NO_MCP.memory.model_copy(
+        update={
+            "profile_synthesis_enabled": enabled,
+            "profile_synthesis_lookback_sessions": lookback,
+        }
+    )
+    config = SETTINGS_NO_MCP.model_copy(update={"memory": memory})
+    return CoDeps(
+        shell=ShellBackend(),
+        model=build_model(config.llm),
+        config=config,
+        session=CoSessionState(),
+        sessions_dir=tmp_path / "sessions",
+        user_profile_path=tmp_path / "USER.md",
+        memory_dir=tmp_path / "memory",
+        index_store=None,
+        memory_store=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_synthesize_user_profile_reflects_cross_session_fact(tmp_path: Path) -> None:
+    """With the flag on and >= lookback//2 sessions, USER.md is re-derived in budget.
+
+    Durable signal (the user is a Rust developer) recurs across the window and
+    must survive; a stale one-off must not pin the profile. Functional assertion:
+    the profile is rewritten, stays within budget, and keeps the durable fact.
+    """
+    import asyncio
+
+    from tests._ollama import ensure_ollama_warm
+
+    from co_cli.daemons.dream._housekeeping import (
+        _PROFILE_SYNTHESIS_MAX_SECONDS,
+        synthesize_user_profile,
+    )
+    from co_cli.daemons.dream.state import HousekeepingState
+    from co_cli.memory.user_profile import read_user_profile
+
+    deps = _synthesis_deps(tmp_path, enabled=True, lookback=4)
+    base = datetime.now(UTC) - timedelta(hours=6)
+    for i in range(3):
+        _seed_session(
+            deps.sessions_dir,
+            created=base + timedelta(minutes=i * 10),
+            user_text="Help me refactor my Rust project; I write Rust daily.",
+            reply="Sure — here is the Rust refactor.",
+        )
+    deps.user_profile_path.write_text(
+        "The user is a Rust developer.\n§\nThe user is on vacation this week.\n",
+        encoding="utf-8",
+    )
+
+    await ensure_ollama_warm(deps.model.model.model_name)
+    state = HousekeepingState()
+    async with asyncio.timeout(_PROFILE_SYNTHESIS_MAX_SECONDS):
+        ran = await synthesize_user_profile(deps, state)
+
+    assert ran is True
+    profile = read_user_profile(deps.user_profile_path)
+    assert profile.strip(), "profile must not be emptied"
+    assert "rust" in profile.lower(), "durable cross-session fact must survive"
+    assert len(profile) <= deps.config.memory.user_profile_char_budget
+    assert state.last_synthesized_session is not None
+    assert state.stats.profile_synthesized == 1
+
+
+@pytest.mark.asyncio
+async def test_synthesize_user_profile_disabled_is_noop(tmp_path: Path) -> None:
+    """Flag off: USER.md is left byte-identical and the marker never advances."""
+    from co_cli.daemons.dream._housekeeping import synthesize_user_profile
+    from co_cli.daemons.dream.state import HousekeepingState
+
+    deps = _synthesis_deps(tmp_path, enabled=False, lookback=4)
+    base = datetime.now(UTC) - timedelta(hours=6)
+    for i in range(3):
+        _seed_session(
+            deps.sessions_dir,
+            created=base + timedelta(minutes=i * 10),
+            user_text="Rust work.",
+            reply="ok",
+        )
+    seed = "The user is a Rust developer.\n"
+    deps.user_profile_path.write_text(seed, encoding="utf-8")
+
+    state = HousekeepingState()
+    ran = await synthesize_user_profile(deps, state)
+
+    assert ran is False
+    assert deps.user_profile_path.read_text(encoding="utf-8") == seed
+    assert state.last_synthesized_session is None
+
+
+@pytest.mark.asyncio
+async def test_synthesize_user_profile_below_threshold_is_noop(tmp_path: Path) -> None:
+    """Fewer than lookback//2 sessions since the marker: no-op, USER.md untouched."""
+    from co_cli.daemons.dream._housekeeping import synthesize_user_profile
+    from co_cli.daemons.dream.state import HousekeepingState, SessionMarker
+
+    deps = _synthesis_deps(tmp_path, enabled=True, lookback=4)
+    base = datetime.now(UTC) - timedelta(hours=6)
+    older = _seed_session(deps.sessions_dir, created=base, user_text="Rust work.", reply="ok")
+    _seed_session(
+        deps.sessions_dir,
+        created=base + timedelta(minutes=10),
+        user_text="More Rust.",
+        reply="ok",
+    )
+    seed = "The user is a Rust developer.\n"
+    deps.user_profile_path.write_text(seed, encoding="utf-8")
+
+    # Marker at the older session → only 1 un-settled session (< lookback//2 == 2).
+    state = HousekeepingState(
+        last_synthesized_session=SessionMarker(session_id=older, created_at=base.isoformat())
+    )
+    ran = await synthesize_user_profile(deps, state)
+
+    assert ran is False
+    assert deps.user_profile_path.read_text(encoding="utf-8") == seed
 
 
 def test_run_housekeeping_prunes_expired_sessions(tmp_path: Path, monkeypatch) -> None:

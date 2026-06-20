@@ -108,7 +108,6 @@ Defined entries:
 | `gemini` | `gemini-3-flash-preview` | reasoning, noreason | `thinking_config: {thinking_level: "MINIMAL"}` |
 | `gemini` | `gemini-3.1-pro-preview` | reasoning, noreason | `thinking_config: {thinking_level: "LOW"}` (reasoning pins `HIGH`; pro rejects `MINIMAL`) |
 | `gemini` | `gemini-2.5-flash` | noreason only | `thinking_config: {thinking_budget: 0}` |
-| `gemini` | `gemini-2.5-flash-lite` | noreason only | `thinking_config: {thinking_budget: 0}` |
 
 `LlmSettings.validate_config()` (no IO) enforces: Gemini API key present when provider is gemini,
 model key in `_LLM_SETTINGS`, and model key has a `reasoning` entry (noreason-only models cannot
@@ -195,6 +194,8 @@ user-configurable — they live in `_LLM_SETTINGS` keyed by provider/model/mode.
 | `memory.chunk_overlap_tokens` | `CO_MEMORY_CHUNK_OVERLAP_TOKENS` | `80` | Token overlap between chunks |
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for write-time dedup and daemon merge |
 | `memory.review_enabled` | `CO_MEMORY_REVIEW_ENABLED` | `false` | Enable memory-domain reviewer KICKs (turn-boundary + session-end + compaction-snapshot) |
+| `memory.profile_synthesis_enabled` | `CO_MEMORY_PROFILE_SYNTHESIS_ENABLED` | `false` | Enable the cross-session `USER.md` profile synthesis housekeeping sub-pass (see dream.md §2.6) |
+| `memory.profile_synthesis_lookback_sessions` | `CO_MEMORY_PROFILE_SYNTHESIS_LOOKBACK_SESSIONS` | `10` | Session window width for profile synthesis (`ge=2`); trigger threshold and marker step are the derived `lookback // 2` |
 
 ### Compaction (`compaction.*`)
 

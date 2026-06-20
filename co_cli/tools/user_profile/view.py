@@ -22,6 +22,9 @@ async def user_profile_view(ctx: RunContext[CoDeps]) -> ToolReturn:
     The profile holds who the user is and how they want to work — it is
     deterministically injected into every session. Call this before
     user_profile_write to read current content; don't overwrite blind.
+
+    Distinct facts are separated by a § (section sign) on its own line; entries may
+    be multiline. Read them as individual facts when deciding what to merge or revise.
     """
     text = read_user_profile(ctx.deps.user_profile_path)
     budget = ctx.deps.config.memory.user_profile_char_budget

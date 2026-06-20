@@ -43,6 +43,8 @@ MEMORY_ENV_MAP: dict[str, str] = {
     "review_enabled": "CO_MEMORY_REVIEW_ENABLED",
     "user_profile_enabled": "CO_MEMORY_USER_PROFILE_ENABLED",
     "user_profile_char_budget": "CO_MEMORY_USER_PROFILE_CHAR_BUDGET",
+    "profile_synthesis_enabled": "CO_MEMORY_PROFILE_SYNTHESIS_ENABLED",
+    "profile_synthesis_lookback_sessions": "CO_MEMORY_PROFILE_SYNTHESIS_LOOKBACK_SESSIONS",
 }
 
 
@@ -76,3 +78,5 @@ class MemorySettings(BaseModel):
     review_enabled: bool = Field(default=False)
     user_profile_enabled: bool = Field(default=True)
     user_profile_char_budget: int = Field(default=1500, ge=1)
+    profile_synthesis_enabled: bool = Field(default=False)
+    profile_synthesis_lookback_sessions: int = Field(default=10, ge=2)

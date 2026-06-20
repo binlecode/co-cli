@@ -1,8 +1,10 @@
 """Clock-driven memory and skill housekeeping for the dream daemon.
 
-Memory and skill merge + decay phases. Reviewer (Plan 1) is the sole transcript
-reader; housekeeping here operates on the durable memory item store, the user
-skill library, and per-skill recall sidecars.
+Memory and skill merge + decay phases, plus the cross-session user-profile
+synthesis sub-pass. The per-session reviewer (Plan 1) and this profile
+synthesis are the transcript readers; the merge/decay phases here operate on
+the durable memory item store, the user skill library, and per-skill recall
+sidecars.
 """
 
 from __future__ import annotations
@@ -17,10 +19,13 @@ from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from co_cli.agent.spec import TaskAgentSpec
 from co_cli.config.dream import DreamSettings
 from co_cli.config.memory import MEMORY_ITEM_COUNT_WARN
+from co_cli.config.skills import REVIEW_MAX_ITERATIONS
 from co_cli.daemons.dream.state import (
     HousekeepingState,
+    SessionMarker,
     save_housekeeping_state,
 )
 from co_cli.llm.call import llm_call
@@ -56,11 +61,27 @@ def _skill_merge_prompt() -> str:
     return (_PROMPTS_DIR / "skill_merge.md").read_text(encoding="utf-8").strip()
 
 
+@cache
+def _profile_synthesis_prompt() -> str:
+    return (_PROMPTS_DIR / "profile_synthesis.md").read_text(encoding="utf-8").strip()
+
+
+def _profile_synthesis_instructions(deps: CoDeps) -> str:
+    """Spec instructions provider — the static synthesis prompt (no curation lens).
+
+    The four Honcho-derived reasoning techniques live wholly in the prompt; this
+    pass deliberately does NOT graft the reviewer's curation lens (different
+    layer, no shared include — see the plan's boundary note).
+    """
+    return _profile_synthesis_prompt()
+
+
 _MAX_CLUSTER_SIZE = 5
 _MAX_MERGES_PER_CYCLE = 10
 _MERGED_BODY_MIN_CHARS = 20
 _MAX_DECAY_PER_CYCLE = 20
 _SKILL_ARCHIVE_SUBDIR = ".archive"
+_PROFILE_SYNTHESIS_MAX_SECONDS = 180
 
 
 def _cluster_by_similarity[T](
@@ -531,6 +552,121 @@ def prune_sessions(
     return len(pruned_mtimes)
 
 
+def _profile_synthesis_spec() -> TaskAgentSpec:
+    """Forked-agent spec for the cross-session profile synthesizer.
+
+    Built lazily to keep module import free of the _reviewer import chain.
+    Reuses SessionReviewOutput; memory_search is a read-only cross-check.
+    """
+    from co_cli.daemons.dream._reviewer import SessionReviewOutput
+
+    return TaskAgentSpec(
+        name="profile_synthesizer",
+        instructions=_profile_synthesis_instructions,
+        tool_names=("user_profile_view", "user_profile_write", "memory_search"),
+        output_type=SessionReviewOutput,
+        default_budget=REVIEW_MAX_ITERATIONS,
+        error_message="",
+        include_skill_manifest=False,
+    )
+
+
+_PROFILE_SYNTHESIS_PROMPT_TEMPLATE = """\
+Re-derive the user profile from the {count} recent session transcripts below \
+and the current profile. Each session is delimited; reconcile across all of them.
+
+{sessions}\
+"""
+
+
+def _unsettled_sessions(deps: CoDeps, marker: SessionMarker | None) -> list:
+    """Sessions newer than the marker, most-recent-first (all sessions if no marker).
+
+    list_sessions is most-recent-first; everything before the marker's
+    session_id is un-settled. The marker absent → the whole list is un-settled.
+    """
+    from co_cli.session.browser import list_sessions
+
+    unsettled = []
+    for summary in list_sessions(deps.sessions_dir):
+        if marker is not None and summary.session_id == marker.session_id:
+            break
+        unsettled.append(summary)
+    return unsettled
+
+
+@trace("co.housekeeping.profile_synthesis")
+async def synthesize_user_profile(deps: CoDeps, state: HousekeepingState) -> bool:
+    """Re-derive USER.md across a marker-anchored window of recent sessions.
+
+    Gated off by default. Fires only when ``>= lookback // 2`` sessions have
+    accumulated since the persisted marker; then synthesizes over the oldest
+    ``lookback`` un-settled sessions (oldest-first, marker-anchored) and, on a
+    successful write only, advances the marker forward by ``lookback // 2`` and
+    bumps the counter. Returns True when a synthesis ran (marker advanced).
+
+    Best-effort: model/serialization failure is logged and the marker is left
+    untouched so the same sessions are re-counted next tick.
+    """
+    from co_cli.agent.run import run_standalone
+    from co_cli.context.summarization import serialize_messages
+    from co_cli.deps import fork_deps_for_reviewer
+    from co_cli.session.persistence import load_transcript
+
+    mem = deps.config.memory
+    if not mem.profile_synthesis_enabled or not mem.user_profile_enabled:
+        return False
+
+    lookback = mem.profile_synthesis_lookback_sessions
+    step = lookback // 2
+    unsettled = _unsettled_sessions(deps, state.last_synthesized_session)
+    if len(unsettled) < step:
+        logger.info(
+            "housekeeping.profile_synthesis: %d/%d sessions since marker — not enough yet",
+            len(unsettled),
+            step,
+        )
+        return False
+
+    oldest_first = list(reversed(unsettled))
+    window = oldest_first[:lookback]
+
+    patterns = deps.config.observability.redact_patterns
+    blocks: list[str] = []
+    for summary in window:
+        messages = load_transcript(summary.path)
+        if not messages:
+            continue
+        serialized = serialize_messages(messages, patterns, include_tool_results=False)
+        blocks.append(
+            f"=== Session {summary.session_id} ({summary.created_at.date()}) ===\n{serialized}"
+        )
+    if not blocks:
+        logger.info("housekeeping.profile_synthesis: no readable transcripts in window — skip")
+        return False
+
+    prompt = _PROFILE_SYNTHESIS_PROMPT_TEMPLATE.format(
+        count=len(blocks), sessions="\n\n".join(blocks)
+    )
+    child_deps = fork_deps_for_reviewer(deps)
+    await run_standalone(_profile_synthesis_spec(), child_deps, prompt)
+
+    new_marker = window[step - 1]
+    state.last_synthesized_session = SessionMarker(
+        session_id=new_marker.session_id,
+        created_at=new_marker.created_at.isoformat(),
+    )
+    state.stats.profile_synthesized += 1
+    remaining = len(unsettled) - step
+    logger.info(
+        "housekeeping.profile_synthesis: synthesized over %d sessions; marker advanced, "
+        "%d session(s) still un-settled (backlog drains next tick)",
+        len(blocks),
+        remaining,
+    )
+    return True
+
+
 @trace("co.housekeeping.pass")
 async def run_housekeeping(
     deps: CoDeps, cfg: DreamSettings, state: HousekeepingState
@@ -563,6 +699,16 @@ async def run_housekeeping(
         logger.warning(
             "housekeeping.merge: wall-clock cap (%ss) exceeded; partial counters persisted",
             cfg.max_pass_seconds,
+        )
+
+    try:
+        async with asyncio.timeout(_PROFILE_SYNTHESIS_MAX_SECONDS):
+            await synthesize_user_profile(deps, state)
+    except Exception:
+        logger.warning(
+            "housekeeping.profile_synthesis: cancelled/failed (best-effort); "
+            "USER.md untouched, marker not advanced",
+            exc_info=True,
         )
 
     decay_skills(deps, state)

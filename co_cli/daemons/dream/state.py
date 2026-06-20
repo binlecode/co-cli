@@ -42,6 +42,19 @@ class HousekeepingStats(BaseModel):
     memory_merged: int = 0
     skill_merged: int = 0
     skill_decayed: int = 0
+    profile_synthesized: int = 0
+
+
+class SessionMarker(BaseModel):
+    """A settled-session checkpoint — a session boundary, not a mutable counter.
+
+    Identifies the newest session the profile synthesis pass has fully settled.
+    "Sessions since last run" is recomputed each tick from list_sessions (disk
+    ground truth) relative to this marker, so it survives daemon restarts.
+    """
+
+    session_id: str
+    created_at: str
 
 
 class HousekeepingState(BaseModel):
@@ -53,6 +66,7 @@ class HousekeepingState(BaseModel):
 
     last_housekeeping_at: str | None = None
     stats: HousekeepingStats = Field(default_factory=HousekeepingStats)
+    last_synthesized_session: SessionMarker | None = None
 
 
 def housekeeping_state_path(daemon_dir: Path) -> Path:

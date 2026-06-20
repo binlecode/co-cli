@@ -3,7 +3,7 @@
 This spec owns the dream subsystem — co's self-learning path. It covers two coupled layers:
 
 1. **In-session reviewer (daemon layer)** — a per-`CO_HOME` daemon that processes KICK payloads queued by the REPL. It runs domain-specific review agents (memory + skill) against recent session transcripts.
-2. **Clock-driven housekeeping** — merge → decay against the full memory corpus, fired on a 24h scheduled tick inside the same daemon loop, or on demand via `co dream tidy` (or `/dream tidy`). Lives in `co_cli/daemons/dream/_housekeeping.py`. There is no transcript mining outside the reviewer — housekeeping operates only on the durable memory item store + recall metrics.
+2. **Clock-driven housekeeping** — merge → decay against the full memory corpus, fired on a 24h scheduled tick inside the same daemon loop, or on demand via `co dream tidy` (or `/dream tidy`). Lives in `co_cli/daemons/dream/_housekeeping.py`. Housekeeping operates on the durable memory item store + recall metrics, plus one transcript-reading sub-pass: the cross-session **profile synthesis** (`synthesize_user_profile`, gated off by default) re-derives `USER.md` across a window of recent session transcripts. So the per-session reviewer and profile synthesis are the two transcript readers; the merge/decay phases never read transcripts.
 
 The broader persistent cognition model lives in [memory.md](memory.md). Startup and shutdown sequencing live in [bootstrap.md](bootstrap.md) and [01-system.md](01-system.md). Prompt injection and recall scoring live in [prompt-assembly.md](prompt-assembly.md). Model routing for daemon and batch review calls lives in [config.md](config.md).
 
@@ -293,7 +293,7 @@ Current default: `dream.enabled = false`. Opt-in via `CO_DREAM_ENABLED=true` or 
 
 ## 2. Clock-Driven Housekeeping
 
-Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay → retention-prune against the full memory corpus AND the user skill library. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream tidy`). It reads the memory item store, the per-skill recall sidecars, and skill markdown bodies — never transcripts (that is the reviewer's job). The retention-prune phase has two independent sweeps: `prune_done_and_snapshots` deletes `queue/done/` files and orphaned `snapshots/` files older than `dream.done_retention_days` (default 7), and `prune_sessions` deletes session transcripts in `sessions_dir` older than `dream.session_retention_days` (default `0` = disabled, opt-in). Both keep their bins bounded; `queue/failed/` is left intact. `prune_sessions` only touches canonically-named session files (`parse_session_filename` accepts the name), leaving foreign files alone, and the live session's recent mtime keeps it from ever being selected.
+Housekeeping (`co_cli/daemons/dream/_housekeeping.py`) runs merge → decay → retention-prune against the full memory corpus AND the user skill library. It is fired from inside the daemon's polling main loop on either a 24h scheduled tick or a manual sentinel-file trigger (`co dream tidy`). It reads the memory item store, the per-skill recall sidecars, and skill markdown bodies; the only transcript-reading phase is the cross-session profile synthesis sub-pass (§2.6, gated off by default) — the merge/decay phases never read transcripts. The retention-prune phase has two independent sweeps: `prune_done_and_snapshots` deletes `queue/done/` files and orphaned `snapshots/` files older than `dream.done_retention_days` (default 7), and `prune_sessions` deletes session transcripts in `sessions_dir` older than `dream.session_retention_days` (default `0` = disabled, opt-in). Both keep their bins bounded; `queue/failed/` is left intact. `prune_sessions` only touches canonically-named session files (`parse_session_filename` accepts the name), leaving foreign files alone, and the live session's recent mtime keeps it from ever being selected.
 
 ```mermaid
 flowchart TD
@@ -305,16 +305,18 @@ flowchart TD
     subgraph Pass["Housekeeping pass — merge → skill decay → count check"]
         MemMerge["Phase 1a: Memory merge\nsame-kind similar clusters (≥ threshold)\nkind=article excluded\nrecall-aware canonical (highest recall_count)\n→ llm_call() consolidates body\n→ archive originals"]
         SkillMerge["Phase 1b: Skill merge\ntoken-Jaccard clusters of user-skill bodies\npinned skills excluded\ncanonical = max (len(recall_days), use_count)\n→ llm_call() consolidates body\n→ archive non-anchor originals to skills/.archive/"]
+        ProfileSynth["Phase 1c: Profile synthesis (gated off by default)\nfires when ≥ lookback//2 sessions since marker\n→ fork PROFILE_SYNTHESIS_SPEC over oldest lookback\nun-settled transcripts under inner asyncio.timeout\n→ on successful write: advance marker lookback//2"]
         SkillDecay["Phase 2: Skill decay\nsidecar age > skills.decay_after_days\nAND no recall in skills.recall_protection_days\nAND not pinned\n→ archive to user_skills_dir/.archive/"]
         CountCheck["Phase 2b: Memory count tripwire\nwarn-only — if active count > MEMORY_ITEM_COUNT_WARN\nlog + co.housekeeping.memory_count_warn event\n(never archives)"]
         Prune["Phase 3: Retention prune\nqueue/done/ + orphaned snapshots/ older than done_retention_days\n+ sessions/ older than session_retention_days (opt-in)\n(failed/ left intact)"]
-        State["Persist HousekeepingState\n(last_housekeeping_at,\n memory_merged,\n skill_merged/decayed)"]
+        State["Persist HousekeepingState\n(last_housekeeping_at,\n memory_merged,\n skill_merged/decayed,\n profile_synthesized,\n last_synthesized_session)"]
     end
 
     Manual --> MemMerge
     Auto --> MemMerge
     MemMerge --> SkillMerge
-    SkillMerge --> SkillDecay
+    SkillMerge --> ProfileSynth
+    ProfileSynth --> SkillDecay
     SkillDecay --> CountCheck
     CountCheck --> Prune
     Prune --> State
@@ -370,6 +372,8 @@ Never-run state returns `True` so a freshly-installed daemon does a baseline pas
 | `stats.memory_merged` | Cumulative memory-merge clusters completed |
 | `stats.skill_merged` | Cumulative skill-merge clusters completed |
 | `stats.skill_decayed` | Cumulative skills archived by decay |
+| `stats.profile_synthesized` | Cumulative profile-synthesis runs that wrote `USER.md` |
+| `last_synthesized_session` | `SessionMarker` (`session_id` + `created_at`) of the newest fully-settled session; the synthesis trigger counts sessions newer than this (`None` = none settled yet) |
 
 Load is forgiving: missing or corrupt state returns a fresh state object. The schema is additive — counters default to `0` so older payloads stay readable.
 
@@ -457,13 +461,25 @@ Both skill phases call `refresh_skills(deps)` after writes so `deps.skill_catalo
 
 **Phase 2b: memory count tripwire.** After skill decay, `run_housekeeping` counts active memory items and, if the count exceeds `MEMORY_ITEM_COUNT_WARN` (10,000 — a constant, not a `settings.json` knob), logs a warning and emits a `co.housekeeping.memory_count_warn` span event. It **never archives or evicts** — auto-eviction would reimport the value-blind deletion that memory decay was removed to avoid. Crossing the threshold (~500× plausible real usage) signals a write loop, runaway agent, or fixture pollution for the operator to investigate. The helper `memory_count_over_cap(items, warn_at=MEMORY_ITEM_COUNT_WARN)` is pure (a test passes a low `warn_at` without patching). The tripwire surfaces on three operator channels: the housekeeping log + span event above, a `/memory stats` warning line, and the welcome-banner `Memory:` row (the active count renders yellow with an `⚠ … (over count tripwire)` marker via `build_memory_line`).
 
-### 2.6 Failure and Timeout Semantics
+### 2.6 Cross-Session Profile Synthesis
 
-`run_housekeeping` wraps the **merge phases** in `asyncio.timeout(cfg.max_pass_seconds)` (default 600 s). Skill decay is synchronous and bounded by `MAX_DECAY_PER_CYCLE` filesystem moves — wrapping it in the same timeout would let a slow merge starve it, so it runs unconditionally after merge regardless of whether merge completed or timed out. The memory count tripwire and the retention-prune phases (`prune_done_and_snapshots`, then `prune_sessions`) are likewise synchronous and run outside the timeout, after skill decay. On merge timeout, partial merge counters are still persisted, the remaining phases still run, and `last_housekeeping_at` is set to now — the next tick fires on schedule rather than stacking missed passes. Individual merge clusters that raise are logged and skipped without aborting the pass.
+`synthesize_user_profile(deps, state)` (Phase 1c, between skill merge and skill decay) is the cross-session user-modeling pass. It re-derives the whole `USER.md` profile from a window of recent session transcripts plus the current profile, consolidating durable cross-session signal and dropping contradicted or stale facts. It is the cross-session reconciler layered on top of the per-session memory reviewer (which writes `USER.md` one transcript at a time, [§1.5](#15-domain-reviewers)); the two are co's two transcript readers.
+
+It is **gated off by default** (`memory.profile_synthesis_enabled=false`) and is also a no-op when the user profile is disabled (`memory.user_profile_enabled=false`).
+
+**Session-gated trigger (not wall-clock).** The housekeeping tick is the clock, but synthesis fires on session accumulation, not elapsed time. Each tick recomputes the **un-settled** sessions — those newer than the persisted `last_synthesized_session` marker — from `list_sessions(...)` (on-disk ground truth, so the trigger survives daemon restarts with no counter persistence). Synthesis fires only when at least `lookback // 2` un-settled sessions have accumulated (`lookback` = `memory.profile_synthesis_lookback_sessions`); otherwise it logs and no-ops. The window is **anchored at the marker** — the oldest `lookback` un-settled sessions, drained oldest-first — not at the newest session, so a backlog larger than `lookback` is never skipped.
+
+**Marker advance (success-gated, 50% overlap).** On a successful write only, the marker advances forward by `lookback // 2` (settling the oldest half of the window; the newer half stays un-settled and reappears next window) and `stats.profile_synthesized` increments. Window `N` with step `N/2` overlaps consecutive runs 50%, so every session lands in ≥2 windows and none is ever skipped; a dense backlog drains `lookback // 2` per tick (the marker lags visibly, never leaps past un-processed sessions). A timed-out, errored, or cancelled run leaves the marker untouched, so the same sessions are re-counted and retried next tick.
+
+The pass forks a reviewer-style agent (`fork_deps_for_reviewer` + `run_standalone` over a `PROFILE_SYNTHESIS_SPEC` with tools `user_profile_view`, `user_profile_write`, `memory_search`) under its **own inner `asyncio.timeout(_PROFILE_SYNTHESIS_MAX_SECONDS)`** nested in the housekeeping pass, so a slow merge cannot starve it. The agent reads the current profile, reconciles, and writes the whole profile back via the atomic, budget-capped `write_user_profile` — the same write contract the live agent and the per-session reviewer use ([memory.md §7](memory.md#7-user-profile-usermd)). No queue, lock, or separate scheduler is needed: the single daemon loop serializes the pass, the atomic wholesale write cannot corrupt, the disk-recomputed marker is restart-safe, and the success-gated advance gives free retry.
+
+### 2.7 Failure and Timeout Semantics
+
+`run_housekeeping` wraps the **merge phases** in `asyncio.timeout(cfg.max_pass_seconds)` (default 600 s). Profile synthesis runs after the merge block under its own inner `asyncio.timeout(_PROFILE_SYNTHESIS_MAX_SECONDS)`; a synthesis timeout or model error is logged and the pass moves on (best-effort — `USER.md` untouched, marker not advanced). Skill decay is synchronous and bounded by `MAX_DECAY_PER_CYCLE` filesystem moves — wrapping it in the same timeout would let a slow merge starve it, so it runs unconditionally after merge regardless of whether merge completed or timed out. The memory count tripwire and the retention-prune phases (`prune_done_and_snapshots`, then `prune_sessions`) are likewise synchronous and run outside the timeout, after skill decay. On merge timeout, partial merge counters are still persisted, the remaining phases still run, and `last_housekeeping_at` is set to now — the next tick fires on schedule rather than stacking missed passes. Individual merge clusters that raise are logged and skipped without aborting the pass.
 
 A KICK review that raises is logged at WARNING with a full traceback (`exc_info`) on **every** failed attempt — not just the terminal one — so transient and retried failures are both visible in `co-dream.jsonl`; the item's attempt counter is incremented and it is moved to `failed/` (with `last_error`) once `max_retry_attempts` is exhausted.
 
-### 2.7 User Inspection and Recovery
+### 2.8 User Inspection and Recovery
 
 | Command | Purpose |
 |---|---|
@@ -472,7 +488,7 @@ A KICK review that raises is logged at WARNING with a full traceback (`exc_info`
 | `/memory stats` | Active counts, archive count, last housekeeping timestamp + cumulative stats (warns if active count exceeds `MEMORY_ITEM_COUNT_WARN`) |
 | `/memory restore [slug]` | List archived artifacts or restore one by unambiguous filename prefix |
 
-### 2.8 Observability
+### 2.9 Observability
 
 | Span | Source | Purpose |
 |---|---|---|
@@ -480,6 +496,7 @@ A KICK review that raises is logged at WARNING with a full traceback (`exc_info`
 | `co.housekeeping.merge` | `@trace` on `merge_memory` | Memory merge phase count |
 | `co.housekeeping.skill_merge` | `@trace` on `merge_skills` | Skill merge phase count |
 | `co.housekeeping.skill_decay` | `@trace` on `decay_skills` | Skill decay phase count |
+| `co.housekeeping.profile_synthesis` | `@trace` on `synthesize_user_profile` | Cross-session profile synthesis sub-pass (gated off by default) |
 | `co.housekeeping.memory_count_warn` | event on `co.housekeeping.pass` | Active memory count exceeded `MEMORY_ITEM_COUNT_WARN` (warn-only) |
 
 ---
@@ -539,6 +556,8 @@ The daemon wires the same observability stack as the main app via `setup_observa
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
 | `memory.consolidation_similarity_threshold` | `CO_MEMORY_CONSOLIDATION_SIMILARITY_THRESHOLD` | `0.75` | Token-Jaccard threshold for memory merge clusters and write-time dedup |
+| `memory.profile_synthesis_enabled` | `CO_MEMORY_PROFILE_SYNTHESIS_ENABLED` | `false` | Enable the cross-session profile synthesis sub-pass (§2.6) |
+| `memory.profile_synthesis_lookback_sessions` | `CO_MEMORY_PROFILE_SYNTHESIS_LOOKBACK_SESSIONS` | `10` | Window width (sessions) for synthesis; `ge=2`. Trigger threshold and marker step are the derived `lookback // 2` |
 
 Memory has no decay knobs — it is never decayed by age/recall. The warn-only count tripwire is the constant `MEMORY_ITEM_COUNT_WARN` (`10_000`, in `co_cli/config/memory.py`), deliberately not a `settings.json` knob.
 
@@ -600,19 +619,21 @@ Internal caps (housekeeping — apply to both domains):
 | `memory_count_over_cap(items, warn_at=MEMORY_ITEM_COUNT_WARN) -> bool` | `co_cli/daemons/dream/_housekeeping.py` | Pure warn-only tripwire — True when active item count exceeds `warn_at`; never archives |
 | `merge_skills(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Async — recall-anchored merge of user-skill clusters; pinned excluded; rewrites anchor in-place, archives siblings to `user_skills_dir/.archive/`; returns clusters merged |
 | `decay_skills(deps, state) -> int` | `co_cli/daemons/dream/_housekeeping.py` | Sync — archive aged + unrecalled user skills with a sidecar; pinned and sidecar-less skills protected; returns count archived |
+| `synthesize_user_profile(deps, state) -> bool` | `co_cli/daemons/dream/_housekeeping.py` | Async — cross-session profile synthesis (§2.6); gated off by default; fires when ≥ `lookback//2` un-settled sessions; forks `PROFILE_SYNTHESIS_SPEC` over the oldest `lookback`; on successful write advances `last_synthesized_session` by `lookback//2` and bumps `profile_synthesized`; returns True when a synthesis ran |
 | `scheduled_tick_due(state, cfg) -> bool` | `co_cli/daemons/dream/_loop.py` | Returns True when ≥ `run_interval_hours` since last pass AND past today's `run_start_at` boundary |
-| `HousekeepingState` / `HousekeepingStats` | `co_cli/daemons/dream/state.py` | Pydantic models for housekeeping state persistence |
+| `HousekeepingState` / `HousekeepingStats` / `SessionMarker` | `co_cli/daemons/dream/state.py` | Pydantic models for housekeeping state persistence; `SessionMarker` (`session_id` + `created_at`) is the profile-synthesis checkpoint |
 | `load_housekeeping_state(daemon_dir)` | `co_cli/daemons/dream/state.py` | Forgiving loader — fresh state on missing/corrupt |
 | `save_housekeeping_state(daemon_dir, state)` | `co_cli/daemons/dream/state.py` | Atomic write of `_dream_state.json` under `daemons/dream/` |
 | `archive_artifacts(entries, memory_dir, memory_store)` | `co_cli/memory/archive.py` | Move items into `memory/_archive/` |
 | `restore_artifact(slug, memory_dir, memory_store)` | `co_cli/memory/archive.py` | Restore archived item by unambiguous filename prefix |
 | `DREAM_TIDY_TAG` | `co_cli/config/core.py` | Path to the sentinel file written by `co dream tidy` |
 
-### Transcript loading (reviewer only)
+### Transcript loading (reviewer + profile synthesis)
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `load_transcript(path, *, max_message_count=None)` | `co_cli/session/persistence.py` | Load JSONL; truncate at `max_message_count` when provided. Housekeeping never reads transcripts. |
+| `load_transcript(path, *, max_message_count=None)` | `co_cli/session/persistence.py` | Load JSONL; truncate at `max_message_count` when provided. The reviewer and profile synthesis (§2.6) are the only transcript readers; the merge/decay phases never read transcripts. |
+| `list_sessions(sessions_dir) -> list[SessionSummary]` | `co_cli/session/browser.py` | Enumerate session transcripts most-recent-first; profile synthesis counts un-settled sessions against the marker from this. |
 
 ---
 
@@ -627,10 +648,11 @@ Internal caps (housekeeping — apply to both domains):
 | `co_cli/daemons/dream/_loop.py` | Polling main loop and queue drain logic |
 | `co_cli/daemons/dream/_reviewer.py` | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review` |
 | `co_cli/daemons/dream/_process.py` | PID-file helpers, advisory flock, `spawn_detached` (Popen + setsid, POSIX-only) |
-| `co_cli/daemons/dream/state.py` | `DaemonState` runtime struct + PID-file loader + `HousekeepingState` / `HousekeepingStats` |
-| `co_cli/daemons/dream/_housekeeping.py` | Memory merge, skill merge + decay, memory count tripwire, retention prune; `run_housekeeping`, `merge_memory`, `memory_count_over_cap`, `merge_skills`, `decay_skills`, `prune_done_and_snapshots`, `prune_sessions` |
+| `co_cli/daemons/dream/state.py` | `DaemonState` runtime struct + PID-file loader + `HousekeepingState` / `HousekeepingStats` / `SessionMarker` |
+| `co_cli/daemons/dream/_housekeeping.py` | Memory merge, skill merge + decay, cross-session profile synthesis, memory count tripwire, retention prune; `run_housekeeping`, `merge_memory`, `memory_count_over_cap`, `merge_skills`, `decay_skills`, `synthesize_user_profile`, `prune_done_and_snapshots`, `prune_sessions` |
 | `co_cli/daemons/dream/prompts/memory_merge.md` | Same-kind memory consolidation prompt |
 | `co_cli/daemons/dream/prompts/skill_merge.md` | Cluster-scoped skill umbrella consolidation prompt |
+| `co_cli/daemons/dream/prompts/profile_synthesis.md` | Cross-session user-profile synthesis prompt |
 | `co_cli/daemons/dream/process.py` | Public surface: `start_daemon`, `stop_daemon`, `status_daemon`, `_run_foreground` |
 | `co_cli/daemons/dream/prompts/memory_review.md` | Memory reviewer instructions |
 | `co_cli/daemons/dream/prompts/skill_review.md` | Skill reviewer instructions |

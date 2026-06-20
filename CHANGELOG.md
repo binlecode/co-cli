@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.428]
+
+Cross-session user-profile synthesis — a dream-daemon housekeeping sub-pass that re-derives USER.md across recent sessions (Gap C). Ships off by default.
+
+- **`synthesize_user_profile` sub-pass** (`co_cli/daemons/dream/_housekeeping.py`): forked local-model agent that reconciles the current profile against a marker-anchored window of session transcripts — preserving durable facts, dropping contradicted/stale ones. Wired into `run_housekeeping` after `merge_skills` under its own inner `asyncio.timeout`.
+- **Session-gated cadence:** fires off the housekeeping tick only when `≥ lookback//2` sessions have accumulated since a persisted, crash-safe `SessionMarker`; window is oldest-first marker-anchored, marker advances `lookback//2` per successful run (50% overlap, no session ever skipped).
+- **Config knobs** (`co_cli/config/memory.py`): `profile_synthesis_enabled` (default `False`), `profile_synthesis_lookback_sessions` (default `10`, `ge=2`).
+- **Synthesis prompt** (`profile_synthesis.md`): encodes four failure-mode counters + four Honcho-Dreamer reasoning techniques (volatility test, update-vs-contradiction split, ≥2-session pattern threshold, quality-over-quantity).
+- **§-delimiter format convention** documented in the `user_profile_view`/`user_profile_write` tool docstrings — readability only, no schema.
+
 ## [0.8.426]
 
 Add `gemini-3.1-pro-preview` as a selectable main-agent backend (Ollama/qwen stays the default).
