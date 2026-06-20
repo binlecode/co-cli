@@ -95,6 +95,7 @@ async def eval_deps(
         )
         apply_eval_workspace(deps)
         agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
+        print(f"[eval_deps] agent backend: {deps.config.llm.provider}/{deps.config.llm.model}")
         print(f"[eval_deps] {apply_eval_judge(deps)}")
         yield deps, agent, frontend
 
@@ -113,5 +114,6 @@ async def make_eval_deps() -> tuple[CoDeps, Agent[CoDeps, Any], EvalFrontend, As
     deps = await create_deps(on_status=frontend.on_status, stack=stack, theme_override=None)
     apply_eval_workspace(deps)
     agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
+    print(f"[eval_deps] agent backend: {deps.config.llm.provider}/{deps.config.llm.model}")
     print(f"[eval_deps] {apply_eval_judge(deps)}")
     return deps, agent, frontend, stack

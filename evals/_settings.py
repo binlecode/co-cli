@@ -110,6 +110,28 @@ def apply_eval_judge(deps: Any) -> str:
     return f"judge: {model_name} (eval-only, distinct from agent)"
 
 
+def eval_agent_uses_ollama(deps: Any) -> bool:
+    """Centralized predicate: is the eval's agent-under-test on the local Ollama backend?
+
+    The agent-under-test backend is selected through the SAME real config mechanism the
+    CLI uses — ``load_config()`` honors ``CO_LLM_PROVIDER`` / ``CO_LLM_MODEL`` (and resolves
+    ``GEMINI_API_KEY`` for the gemini provider), and ``create_deps`` builds the model from
+    that config via ``build_model`` (whose gemini settings come from
+    ``LlmSettings.reasoning_model_settings()`` / ``_gemini_settings``). So an eval points
+    its agent at the live gemini frontier path by running, e.g.::
+
+        CO_LLM_PROVIDER=gemini CO_LLM_MODEL=gemini-3.1-pro-preview \\
+            uv run python evals/eval_rule_compliance.py
+
+    No inline ``ModelSettings`` or model coining at the eval layer (``feedback_evals_centralized_settings``):
+    the backend flows entirely from config. This predicate is the single place the harness
+    asks "is this the local path?" so the Ollama-only warm-up (``ensure_ollama_warm``, which
+    must NOT run on the gemini path) is gated centrally rather than re-deriving the provider
+    check inline in each eval.
+    """
+    return deps.config.llm.uses_ollama()
+
+
 EVAL_WORKSPACE_DIR = USER_DIR / "eval-workspace"
 """Isolated write/read anchor for evals — a real, stable dir under CO_HOME, NOT the
 repo. ``create_deps`` resolves ``workspace_dir`` to ``Path.cwd()`` when

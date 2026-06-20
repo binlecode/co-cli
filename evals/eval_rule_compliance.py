@@ -61,7 +61,7 @@ from typing import Any
 from evals._deps import make_eval_deps
 from evals._fixtures import load_fixture
 from evals._ollama import ensure_ollama_warm
-from evals._settings import apply_eval_window
+from evals._settings import apply_eval_window, eval_agent_uses_ollama
 from evals._timeouts import CALL_TIMEOUT_S
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
@@ -638,9 +638,15 @@ async def main(samples: int = SAMPLES_PER_ARM, section: str | None = None) -> No
             f"{sorted(p.section_title for p in _PROBES)}"
         )
 
-    await ensure_ollama_warm()
     deps, _agent, frontend, stack = await make_eval_deps()
     try:
+        # Warm-up is an Ollama-only infrastructure step (model load + KV-cache flush).
+        # Gated centrally on the configured backend so it does NOT run on the gemini
+        # frontier path — that path has no local model to warm, and a warm-up call would
+        # hit Ollama regardless of the agent-under-test backend. Must stay outside any
+        # asyncio.timeout (cold load is not behavior under test).
+        if eval_agent_uses_ollama(deps):
+            await ensure_ollama_warm()
         apply_eval_window(deps)
         print(
             f"\nSection-ablation — model {deps.model.model.model_name}, "

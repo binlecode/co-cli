@@ -182,14 +182,6 @@ _LLM_SETTINGS: dict[str, Any] = {
                 "thinking_config": {"thinking_budget": 0},
             },
         },
-        "gemini-2.5-flash-lite": {
-            "noreason": {
-                "temperature": 0.7,
-                "top_p": 0.8,
-                "max_tokens": 16384,
-                "thinking_config": {"thinking_budget": 0},
-            },
-        },
     },
 }
 
