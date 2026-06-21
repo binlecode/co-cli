@@ -51,14 +51,17 @@ def _toolset_guidance_provider(deps: CoDeps) -> str | None:
 
 
 def _model_profile_overlay_provider(deps: CoDeps) -> str | None:
-    """Per-profile prompt overlay hook — returns None until Plan B/C fill it.
+    """Append the resolved model profile's prompt overlay after the base.
 
-    Plans B (frontier) and C (weak-local) branch on
-    ``resolve_model_profile(deps.config.llm)`` here, evidence-gated, so per-model
-    prompt content lands at this single seam without a new model-id branch elsewhere
-    in assembly.
+    Resolves ``resolve_model_profile(deps.config.llm)`` and returns that profile's
+    ``overlays/<profile>.md`` block (or ``None`` when absent/empty). Append-only:
+    the overlay only ADDS to the base — no base content is filtered or removed. The
+    per-profile content lands at this single seam, no model-id branch elsewhere.
     """
-    return None
+    from co_cli.config.llm import resolve_model_profile
+    from co_cli.context.assembly import build_profile_overlay
+
+    return build_profile_overlay(resolve_model_profile(deps.config.llm))
 
 
 def _personality_critique_provider(deps: CoDeps) -> str | None:
@@ -76,9 +79,9 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
     name="orchestrator",
     static_instruction_builders=(
         _base_instructions_provider,
+        _model_profile_overlay_provider,
         _user_profile_provider,
         _toolset_guidance_provider,
-        _model_profile_overlay_provider,
         _personality_critique_provider,
     ),
     per_turn_instructions=(

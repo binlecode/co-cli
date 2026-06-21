@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC, _model_profile_overlay_provider
+from co_cli.agent.orchestrator import (
+    ORCHESTRATOR_SPEC,
+    _base_instructions_provider,
+    _model_profile_overlay_provider,
+)
 from co_cli.bootstrap.core import create_deps
 from co_cli.config.llm import (
     FRONTIER_MAX_CONTEXT_TOKENS,
@@ -65,12 +69,23 @@ def test_gemini_pro_inherits_frontier_budget_and_skips_ollama_probe() -> None:
     assert llm.ollama_num_ctx() is None
 
 
-@pytest.mark.asyncio
-async def test_default_assembled_prompt_byte_identical() -> None:
-    """The wired profile-overlay builder contributes nothing on the default backend.
+def test_overlay_provider_immediately_follows_base() -> None:
+    """The overlay seam sits directly after the base builder, so overlay is adjacent to base."""
+    builders = ORCHESTRATOR_SPEC.static_instruction_builders
+    assert (
+        builders.index(_model_profile_overlay_provider)
+        == builders.index(_base_instructions_provider) + 1
+    )
 
-    Assembling the static prefix with vs without the overlay builder yields the same
-    string, so this plan changes no prompt content for the default (weak-local) path.
+
+@pytest.mark.asyncio
+async def test_assembled_prompt_byte_identical_to_base() -> None:
+    """The reordered overlay seam contributes nothing while overlays are empty.
+
+    Assembling the full (reordered) ``ORCHESTRATOR_SPEC`` static prefix equals the
+    prefix with the overlay builder removed entirely — the baseline shape from Plan
+    1a. Unconditional: the overlay file is absent, so this changes no prompt content
+    for the default (weak-local) path regardless of the seam's position.
     """
     deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
     assert resolve_model_profile(deps.config.llm) is ModelProfile.WEAK_LOCAL
@@ -79,6 +94,6 @@ async def test_default_assembled_prompt_byte_identical() -> None:
     def assemble(builders: tuple) -> str:
         return "\n\n".join(piece for b in builders if (piece := b(deps)))
 
-    with_overlay = ORCHESTRATOR_SPEC.static_instruction_builders
-    without_overlay = tuple(b for b in with_overlay if b is not _model_profile_overlay_provider)
-    assert assemble(with_overlay) == assemble(without_overlay)
+    reordered = ORCHESTRATOR_SPEC.static_instruction_builders
+    baseline = tuple(b for b in reordered if b is not _model_profile_overlay_provider)
+    assert assemble(reordered) == assemble(baseline)

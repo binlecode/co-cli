@@ -68,8 +68,9 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart
 from co_cli.agent.build import build_orchestrator
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.agent.spec import OrchestratorSpec
+from co_cli.config.llm import ModelProfile, resolve_model_profile
 from co_cli.context import assembly
-from co_cli.context.assembly import build_rules_block
+from co_cli.context.assembly import build_profile_overlay, build_rules_block
 from co_cli.context.guidance import build_toolset_guidance
 
 # Independent samples per arm for the decisive probes. Full agent turns are heavy
@@ -94,6 +95,7 @@ _TODO_WRITE = frozenset({"todo_write"})
 _SKILL_VIEW = frozenset({"skill_view"})
 
 _RULES_DIR = Path(assembly.__file__).parent / "rules"
+_OVERLAYS_DIR = Path(assembly.__file__).parent / "overlays"
 
 
 # ---------------------------------------------------------------------------
@@ -119,15 +121,17 @@ class Section:
     core: str
     span_text: str
     is_last_in_file: bool
+    home: str = "base"
 
 
-def _parse_file_sections(stem: str, content: str) -> list[Section]:
+def _parse_file_sections(stem: str, content: str, home: str = "base") -> list[Section]:
     """Parse one stripped rule-file's ``##`` sections into spans.
 
     Splits on ``^## `` boundaries and does NOT require a leading ``# `` H1 (the
     parser is robust to a file that opens directly on a ``## `` section). The H1
     and any preamble before the first ``## `` stay attached to the file, never to
-    a span.
+    a span. ``home`` records whether the file is base (``rules/``) or a profile
+    overlay (``overlays/<profile>.md``).
     """
     matches = list(re.finditer(r"(?m)^## .+$", content))
     sections: list[Section] = []
@@ -145,42 +149,78 @@ def _parse_file_sections(stem: str, content: str) -> list[Section]:
                 core=core,
                 span_text=span_text,
                 is_last_in_file=is_last,
+                home=home,
             )
         )
     return sections
 
 
-def _all_sections() -> list[Section]:
-    """Every ``##`` section across all rule files, in assembled order."""
+def _all_sections(profile: ModelProfile) -> list[Section]:
+    """Every ``##`` section in the composed prompt for ``profile``, in assembled order.
+
+    Base sections (``rules/``) first, then any sections in this profile's overlay
+    (``overlays/<profile>.md``) — the append-only composition the production builder
+    assembles.
+    """
     sections: list[Section] = []
     for path in sorted(_RULES_DIR.glob("*.md")):
         content = path.read_text(encoding="utf-8").strip()
         sections.extend(_parse_file_sections(path.stem, content))
+    overlay = build_profile_overlay(profile)
+    if overlay:
+        sections.extend(_parse_file_sections(profile.value, overlay, home="overlay"))
     return sections
 
 
-def _rules_block_drop_section(target: Section) -> str:
-    """Independently reassemble the rules block with ``target`` removed.
+def _full_block(profile: ModelProfile) -> str:
+    """The composed rules block for ``profile``: base + profile overlay (append-only).
 
-    Mirrors ``build_rules_block`` (strip each file, join with blank lines) but
-    drops one section from its file by rebuilding that file from its surviving
-    spans. Independent of the ``span_text`` substring math, so asserting this
-    equals ``full_block.replace(span_text, "")`` catches reassembly drift the
-    full-arm byte-equal guard cannot (CD-m-1).
+    Mirrors the production join (``build_base_instructions`` reduces to the rules
+    block when persona is off, with the overlay appended after by the orchestrator).
+    """
+    base = build_rules_block()
+    overlay = build_profile_overlay(profile)
+    return base if overlay is None else f"{base}\n\n{overlay}"
+
+
+def _drop_section_from_content(content: str, target: Section) -> str:
+    """Rebuild one stripped file's ``content`` with ``target`` removed.
+
+    Splits the file into spans, drops the matching section by core text, and
+    rejoins the survivors with blank lines so no doubled separator remains.
+    """
+    sections = _parse_file_sections(target.rule_stem, content)
+    first_start = content.index(sections[0].core)
+    header = content[:first_start].strip()
+    kept = [s.core for s in sections if s.core != target.core]
+    body = "\n\n".join(kept)
+    return f"{header}\n\n{body}".strip() if header else body
+
+
+def _rules_block_drop_section(target: Section, profile: ModelProfile) -> str:
+    """Independently reassemble the composed block (base + overlay) with ``target`` removed.
+
+    Mirrors ``_full_block`` (strip each base file, join, append overlay) but drops one
+    section from whichever home it lives in (base file or the profile overlay) by
+    rebuilding that file from its surviving spans. Independent of the ``span_text``
+    substring math, so asserting this equals ``full_block.replace(span_text, "")``
+    catches reassembly drift the full-arm byte-equal guard cannot (CD-m-1).
     """
     parts: list[str] = []
     for path in sorted(_RULES_DIR.glob("*.md")):
         content = path.read_text(encoding="utf-8").strip()
-        if path.stem == target.rule_stem:
-            sections = _parse_file_sections(path.stem, content)
-            first_start = content.index(sections[0].core)
-            header = content[:first_start].strip()
-            kept = [s.core for s in sections if s.core != target.core]
-            body = "\n\n".join(kept)
-            content = f"{header}\n\n{body}".strip() if header else body
+        if target.home == "base" and path.stem == target.rule_stem:
+            content = _drop_section_from_content(content, target)
         if content:
             parts.append(content)
-    return "\n\n".join(parts)
+    base = "\n\n".join(parts)
+
+    overlay = build_profile_overlay(profile)
+    if overlay is None:
+        return base
+    if target.home == "overlay":
+        overlay = _drop_section_from_content(overlay, target)
+    return f"{base}\n\n{overlay}" if overlay else base
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +236,10 @@ def _rules_block_drop_section(target: Section) -> str:
 #                         out of this single-turn harness's reach, not scored.
 #   OUT-OF-REACH        — steers response content/tone; no tool-call signal.
 # Keyed (stem, title). Built from inspection per plan — NOT from eval budget.
+# Each section's home (base vs overlay) is NOT duplicated here: it is sourced
+# authoritatively from the parsed ``Section.home`` (which dir the file came from)
+# in ``_emit_inventory`` and carried into the emitted record, so there is one source
+# of truth and no literal-vs-file drift. Overlay sections (Plans 02/03) add a row here.
 _INVENTORY: tuple[tuple[str, str, str, str, str], ...] = (
     ("01_interaction", "Relationship", "OUT-OF-REACH", "-", "tone/continuity; no tool signal"),
     ("01_interaction", "Anti-sycophancy", "OUT-OF-REACH", "-", "response content; no tool signal"),
@@ -423,9 +467,9 @@ _PROBES: tuple[SectionProbe, ...] = (
 )
 
 
-def _resolve_section(stem: str, title: str) -> Section:
+def _resolve_section(stem: str, title: str, profile: ModelProfile) -> Section:
     """Find the parsed Section for a (stem, title); fail loud on a typo'd probe."""
-    for section in _all_sections():
+    for section in _all_sections(profile):
         if section.rule_stem == stem and section.title == title:
             return section
     raise KeyError(
@@ -438,12 +482,16 @@ def _build_arm_agent(deps: Any, ablated_block: str | None) -> Any:
     production block when ``None``).
 
     Persona is off by default, so the production base layer is the rules block
-    alone (``build_base_instructions`` reduces to ``build_rules_block``). The
-    custom spec swaps that one builder and reuses the real toolset guidance,
-    per-turn instructions, and history processors verbatim, so the only
-    difference from the shipped prompt is the ablated section.
+    alone (``build_base_instructions`` reduces to ``build_rules_block``), with the
+    resolved profile's overlay appended after — assembled via the production
+    ``build_profile_overlay`` so the arm measures the exact composed prompt the
+    deps' backend ships, not a fixed base-only block. The custom spec swaps that
+    one builder and reuses the real toolset guidance, per-turn instructions, and
+    history processors verbatim, so the only difference from the shipped prompt is
+    the ablated section.
     """
-    block = ablated_block if ablated_block is not None else build_rules_block()
+    profile = resolve_model_profile(deps.config.llm)
+    block = ablated_block if ablated_block is not None else _full_block(profile)
 
     def _rules_builder(_deps: Any, _block: str = block) -> str | None:
         return _block
@@ -518,13 +566,18 @@ async def _arm_fire_rate(
 
 
 async def _measure_section(
-    deps: Any, frontend: Any, probe: SectionProbe, full_block: str, samples: int
+    deps: Any,
+    frontend: Any,
+    probe: SectionProbe,
+    full_block: str,
+    samples: int,
+    profile: ModelProfile,
 ) -> dict[str, Any]:
     """Measure one section: full vs ablated fire-rate, then STEERS/DEAD-WEIGHT."""
     print(f"\n[{probe.rule_stem} :: {probe.section_title}] {probe.label}")
-    section = _resolve_section(probe.rule_stem, probe.section_title)
+    section = _resolve_section(probe.rule_stem, probe.section_title, profile)
 
-    ablated_block = _rules_block_drop_section(section)
+    ablated_block = _rules_block_drop_section(section, profile)
     # Two assembly-fidelity guards (one ablated section at a time):
     #  - the full arm is byte-equal to the shipped prompt (checked once in main);
     #  - the ablated arm equals the full block with exactly this span removed.
@@ -575,46 +628,50 @@ async def _measure_section(
     }
 
 
-def _emit_inventory() -> list[dict[str, Any]]:
-    """Build, print, and return the 25-section observability inventory.
+def _emit_inventory(profile: ModelProfile) -> list[dict[str, Any]]:
+    """Build, print, and return the section-observability inventory for ``profile``.
 
-    Validates the span parser end to end (count, uniqueness, clean reassembly)
-    for every section so ``--inventory`` is also the parser's self-test.
+    Spans the composed prompt (base + that profile's overlay), so the count and
+    parser self-test cover any overlay-resident sections too. Validates the span
+    parser end to end (count, uniqueness, clean reassembly) for every section so
+    ``--inventory`` is also the parser's self-test.
     """
-    sections = _all_sections()
-    full_block = build_rules_block()
-    assert full_block == build_rules_block(), "full block is not stable"
+    sections = _all_sections(profile)
+    full_block = _full_block(profile)
+    assert full_block == _full_block(profile), "full block is not stable"
 
     by_key = {(s.rule_stem, s.title): s for s in sections}
     inventory: list[dict[str, Any]] = []
     probed_keys = {(p.rule_stem, p.section_title) for p in _PROBES}
 
     print(f"\n=== Section-observability inventory ({len(sections)} sections) ===")
-    print(f"{'rule':<18} {'section':<24} {'status':<26} {'signal':<14} note")
+    print(f"{'rule':<18} {'section':<24} {'status':<26} {'signal':<14} {'home':<8} note")
     for stem, title, status, signal, note in _INVENTORY:
         key = (stem, title)
         assert key in by_key, f"inventory references missing section {key}"
         section = by_key[key]
+        home = section.home
         # Parser self-test: every span removes cleanly from the full block.
         assert full_block.count(section.span_text) == 1, f"span not unique: {key}"
-        ablated = _rules_block_drop_section(section)
+        ablated = _rules_block_drop_section(section, profile)
         assert ablated == full_block.replace(section.span_text, ""), f"reassembly drift: {key}"
         assert "\n\n\n" not in ablated, f"doubled blank line: {key}"
         if status == "PROBED":
             assert key in probed_keys, f"inventory marks {key} PROBED but no probe exists"
-        print(f"{stem:<18} {title:<24} {status:<26} {signal:<14} {note}")
+        print(f"{stem:<18} {title:<24} {status:<26} {signal:<14} {home:<8} {note}")
         inventory.append(
             {
                 "rule": stem,
                 "section": title,
                 "status": status,
                 "signal": signal,
+                "home": home,
                 "note": note,
             }
         )
 
-    assert len(_INVENTORY) == len(sections) == 25, (
-        f"inventory ({len(_INVENTORY)}) / parser ({len(sections)}) disagree on 25 sections"
+    assert len(_INVENTORY) == len(sections), (
+        f"inventory ({len(_INVENTORY)}) / parser ({len(sections)}) disagree on section count"
     )
     probed = [r for r in inventory if r["status"] == "PROBED"]
     out_of_harness = [r for r in inventory if r["status"] == "OBSERVABLE-OUT-OF-HARNESS"]
@@ -627,9 +684,21 @@ def _emit_inventory() -> list[dict[str, Any]]:
     return inventory
 
 
+def _eval_profile() -> ModelProfile:
+    """The model profile of the eval's configured backend (deps-free, no LLM).
+
+    Resolved from the same real config ``create_deps`` builds from, so the inventory
+    self-test (and ``--inventory``) compose the same base + overlay the run measures.
+    """
+    from co_cli.config.core import load_config
+
+    return resolve_model_profile(load_config().llm)
+
+
 async def main(samples: int = SAMPLES_PER_ARM, section: str | None = None) -> None:
-    full_block = build_rules_block()
-    inventory = _emit_inventory()
+    profile = _eval_profile()
+    full_block = _full_block(profile)
+    inventory = _emit_inventory(profile)
 
     probes = tuple(p for p in _PROBES if p.section_title == section) if section else _PROBES
     if section and not probes:
@@ -655,7 +724,9 @@ async def main(samples: int = SAMPLES_PER_ARM, section: str | None = None) -> No
         )
         results = []
         for probe in probes:
-            results.append(await _measure_section(deps, frontend, probe, full_block, samples))
+            results.append(
+                await _measure_section(deps, frontend, probe, full_block, samples, profile)
+            )
 
         deadweight = [
             f"{r['rule']}/{r['section']}" for r in results if r["verdict"] == "DEAD-WEIGHT"
@@ -735,7 +806,7 @@ def _arg_value(*flags: str) -> str | None:
 
 if __name__ == "__main__":
     if "--inventory" in sys.argv:
-        _emit_inventory()
+        _emit_inventory(_eval_profile())
     else:
         samples_arg = _arg_value("--samples", "-n")
         section_arg = _arg_value("--section")

@@ -9,7 +9,8 @@ plan's F5 (``docs/exec-plans/.../instruction-floor-audit.md``).
 
 This guard iterates the live ``deps.tool_catalog`` for DEFERRED-visibility tools and asserts
 none of their names appears with a call-signature pattern (``\\bname\\s*\\(``) in the
-assembled floor (``build_rules_block() + build_toolset_guidance(deps.tool_catalog)``). The
+assembled floor — the base rules block, the weak-local profile overlay (the worst-case
+profile that ships extra reflex prose), and the toolset guidance. The
 deferred set is derived live — no hardcoded allowlist — so any future defer is auto-covered.
 """
 
@@ -20,7 +21,8 @@ import re
 import pytest
 
 from co_cli.bootstrap.core import create_deps
-from co_cli.context.assembly import build_rules_block
+from co_cli.config.llm import ModelProfile
+from co_cli.context.assembly import build_profile_overlay, build_rules_block
 from co_cli.context.guidance import build_toolset_guidance
 from co_cli.deps import VisibilityPolicyEnum
 
@@ -38,7 +40,8 @@ async def test_no_deferred_tool_signature_on_floor() -> None:
         if info.visibility == VisibilityPolicyEnum.DEFERRED
     ]
 
-    floor = build_rules_block() + build_toolset_guidance(deps.tool_catalog)
+    floor = build_rules_block() + (build_profile_overlay(ModelProfile.WEAK_LOCAL) or "")
+    floor += build_toolset_guidance(deps.tool_catalog)
 
     for name in deferred_names:
         match = re.search(rf"\b{re.escape(name)}\s*\(", floor)

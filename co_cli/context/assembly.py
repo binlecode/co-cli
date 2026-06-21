@@ -11,10 +11,14 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from co_cli.config.llm import ModelProfile
+
 if TYPE_CHECKING:
     from co_cli.config.core import Settings
 
 _RULES_DIR = Path(__file__).parent / "rules"
+
+_OVERLAYS_DIR = Path(__file__).parent / "overlays"
 
 _RULE_FILENAME_RE = re.compile(r"^(?P<order>\d{2})_(?P<rule_id>[a-z0-9_]+)\.md$")
 
@@ -67,10 +71,14 @@ def build_rules_block() -> str:
     """Assemble the behavioral rules into one block, in strict numbered order.
 
     The numbered ``NN_rule_id.md`` files under ``rules/``, each stripped and
-    joined with blank lines in order. Public so callers that need the rules
-    independently of soul/mindset assembly — prompt-ablation evals composing
+    joined with blank lines in order. This is the **base** — the shared
+    intersection rule set, profile-agnostic. Public so callers that need the
+    rules independently of soul/mindset assembly — prompt-ablation evals composing
     ``seed + <varied mindsets> + rules`` — reuse the exact production rule text
     without importing the private ``_collect_rule_files`` or duplicating the walk.
+
+    Per-profile divergence is append-only and lives entirely in
+    :func:`build_profile_overlay`; nothing here filters or removes base content.
     """
     rule_parts: list[str] = []
     for _order, _name, rule_path in _collect_rule_files():
@@ -78,6 +86,22 @@ def build_rules_block() -> str:
         if content:
             rule_parts.append(content)
     return "\n\n".join(rule_parts)
+
+
+def build_profile_overlay(profile: ModelProfile) -> str | None:
+    """Return the append-only prompt overlay for ``profile``, or ``None``.
+
+    One file per profile: ``overlays/<profile>.md`` (e.g. ``overlays/frontier.md``).
+    Absent or empty → ``None`` → nothing is appended. Append-only by construction:
+    this reads and returns a profile's own overlay file and never touches the base,
+    so there is no expressible path by which an overlay removes or filters base
+    content. The composed prompt is always ``base + overlay(profile)``.
+    """
+    overlay_path = _OVERLAYS_DIR / f"{profile.value}.md"
+    if not overlay_path.is_file():
+        return None
+    content = overlay_path.read_text(encoding="utf-8").strip()
+    return content or None
 
 
 def build_base_instructions(config: Settings) -> str:
@@ -121,7 +145,7 @@ def build_base_instructions(config: Settings) -> str:
     if mindsets:
         parts.append(mindsets)
 
-    # 3. Behavioral rules (strict numbered order)
+    # 3. Behavioral rules (strict numbered order, profile-agnostic base)
     rules_block = build_rules_block()
     if rules_block:
         parts.append(rules_block)

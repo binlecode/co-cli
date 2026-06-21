@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.432]
+
+Model-profile 1b — append-only base + dual-overlay prompt-composition mechanism (profile-agnostic infra; freezes 1a's cleaned base, ships byte-identical with both overlays empty).
+
+- **Append-only overlay seam** (`co_cli/context/assembly.py`): `build_rules_block()` reverted to no-arg profile-agnostic base; new `build_profile_overlay(profile)` reads `overlays/<profile>.md` (absent/empty → `None`) — append-only by construction (reads a profile's own file, never touches base, so subtraction is structurally inexpressible).
+- **Overlay provider wired + reordered** (`co_cli/agent/orchestrator.py`): `_model_profile_overlay_provider` resolves the profile and appends its overlay, placed immediately after `_base_instructions_provider` so the composed prompt is `base + overlay(profile)`. Subtractive seam B (`_FRONTIER_EXCLUDED_SECTIONS` / `_drop_sections`) deleted.
+- **Overlay-aware harness** (`evals/eval_rule_compliance.py`): `_build_arm_agent` composes base + `overlay(resolve_model_profile(deps.config.llm))`; `_all_sections(profile)` / `_rules_block_drop_section(target, profile)` ablate in base OR overlay; the `== 25` inventory literal replaced by `len(_INVENTORY) == len(sections)`; `Section.home` carried into the `--inventory` output.
+- **Floor guards measure base + overlay(weak_local)** (`tests/test_instruction_budget.py`, `tests/test_instruction_floor_coupling.py`) at the 25k-char `INSTRUCTION_BLOCK_CEILING`.
+- **Spec sync** (`docs/specs/prompt-assembly.md` §2.1): documents the now-five static builders and the append-only overlay semantics.
+
 ## [0.8.430]
 
 Model-profile 1a — rule↔tool-surface partition correction on the always-injected BASE rule layer (profile-agnostic; the cleaned base 1b will freeze).
