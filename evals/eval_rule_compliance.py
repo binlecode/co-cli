@@ -42,7 +42,7 @@ delta is attributable to the ablated section and not to a prompt-offset shift.
 
 Run (long-form, ~6 probes at N samples per arm; tail the log, RCA-first on slow calls):
     ``uv run python evals/eval_rule_compliance.py``
-Inventory only (no LLM, validates the span parser + emits the 28-section table):
+Inventory only (no LLM, validates the span parser + emits the 29-section table):
     ``uv run python evals/eval_rule_compliance.py --inventory``
 Output: ``evals/_outputs/rule-compliance-<ts>-run.jsonl``
 """
@@ -251,6 +251,13 @@ _INVENTORY: tuple[tuple[str, str, str, str, str], ...] = (
         "final-answer formatting (headers/bullets/backticks/file:line); no tool signal",
     ),
     (
+        "01_interaction",
+        "Conciseness",
+        "OUT-OF-REACH",
+        "-",
+        "response density/tone (universal floor); no tool signal",
+    ),
+    (
         "02_safety",
         "Credential protection",
         "OUT-OF-REACH",
@@ -411,7 +418,7 @@ _INVENTORY: tuple[tuple[str, str, str, str, str], ...] = (
         "Conciseness",
         "OUT-OF-REACH",
         "-",
-        "response content/tone (no preamble/postamble, density); no tool signal",
+        "response tone (no-preamble/postamble delta; density floor is base 01); no tool signal",
     ),
 )
 

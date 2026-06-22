@@ -43,7 +43,7 @@ flowchart TD
 `build_orchestrator()` assembles `static_instructions` by calling each builder in `ORCHESTRATOR_SPEC.static_instruction_builders` in order — five thin closures, each taking `deps` and returning `str | None`. All evaluated once at agent construction:
 
 1. **`_base_instructions_provider(deps)`** — wraps `build_base_instructions(deps.config)`: soul seed, mindsets, numbered rules (`co_cli/context/rules/NN_rule_id.md`), recency advisory. The numbered rules are the profile-agnostic **base** (shared intersection). Character memories and critique are NOT included here.
-2. **`_model_profile_overlay_provider(deps)`** — wraps `build_profile_overlay(resolve_model_profile(deps.config.llm))`: the resolved model profile's **append-only overlay** (`co_cli/context/overlays/<profile>.md`), placed immediately after the base so the composed prompt is `base + overlay(profile)`. Append-only — the overlay only ADDS profile-specific prose; nothing in the base is filtered or removed. Returns `None` when the profile's overlay file is absent or empty. `overlays/weak_local.md` ships the weak-model scaffolding relocated out of the (now profile-agnostic) base — the intent taxonomy, act-this-turn Execution, sub-goal Completeness, over-planning calibration, error-recovery loop-prevention, and a conciseness reflex; `overlays/frontier.md` is absent today (a strong reasoner needs nothing beyond the neutral base), so the frontier composition reduces to base alone. `ModelProfile` is resolved from the configured provider (Ollama → `WEAK_LOCAL`, otherwise `FRONTIER`) in `co_cli/config/llm.py`.
+2. **`_model_profile_overlay_provider(deps)`** — wraps `build_profile_overlay(resolve_model_profile(deps.config.llm))`: the resolved model profile's **append-only overlay** (`co_cli/context/overlays/<profile>.md`), placed immediately after the base so the composed prompt is `base + overlay(profile)`. Append-only — the overlay only ADDS profile-specific prose; nothing in the base is filtered or removed. Returns `None` when the profile's overlay file is absent or empty. `overlays/weak_local.md` ships the weak-model scaffolding relocated out of the (now profile-agnostic) base — the intent taxonomy, act-this-turn Execution, sub-goal Completeness, over-planning calibration, error-recovery loop-prevention, and the no-preamble half of the conciseness reflex; `overlays/frontier.md` is absent today, so the frontier composition reduces to base alone (its planned cost-cliff conciseness delta is deferred to the frontier-overlay plan). The universal conciseness *floor* (density, lead-with-outcome, don't-restate) is NOT weak-specific — it lives in BASE `01_interaction` and reaches every profile; each overlay adds only its profile-specific delta on top. `ModelProfile` is resolved from the configured provider (Ollama → `WEAK_LOCAL`, otherwise `FRONTIER`) in `co_cli/config/llm.py`.
 3. **`_user_profile_provider(deps)`** — reads `deps.user_profile_path` (`~/.co-cli/USER.md`) once and wraps it in a `## USER PROFILE (who the user is)` block; gated on `deps.config.memory.user_profile_enabled`. Returns `None` when the flag is off or the file is empty, so an absent profile injects nothing. Snapshot-at-load, frozen for the session. See [memory.md](memory.md) §7.
 4. **`_toolset_guidance_provider(deps)`** — wraps `build_toolset_guidance(deps.tool_catalog)`: tool-specific guidance blocks, each gated on the tool being present. Currently gated: `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
 5. **`_personality_critique_provider(deps)`** — wraps `load_soul_critique(deps.config.personality)` and prefixes with `## Review lens` heading; appended last when a personality is configured and a critique file exists. Placed after operational guidance so the review frame wraps the complete prompt.
@@ -52,11 +52,38 @@ The parts are joined with `"\n\n"` and passed as the `instructions=` string to `
 
 Each personality role is fully self-contained under `souls/{role}/`. Adding a role requires only a new directory — no Python changes. Adding a tool-specific guidance block requires adding a constant to `co_cli/context/guidance.py` and a gate in `build_toolset_guidance`.
 
+**On-disk rule/overlay layout.** The base and the per-profile overlays are plain Markdown under `co_cli/context/`:
+
+```
+co_cli/context/
+├── rules/                  BASE — model-agnostic, every profile (build_rules_block)
+│   ├── 01_interaction.md     Relationship, Anti-sycophancy, Output format, Conciseness floor
+│   ├── 02_safety.md          Credential, Source control, Approval, Injected content, State mutation
+│   ├── 03_reasoning.md       Verification, Resolving contradictions, Two kinds of unknowns
+│   ├── 04_tool_protocol.md   Responsiveness, Strategy, Todo completion
+│   ├── 05_workflow.md        (empty — kept so the 01–07 sequence stays contiguous)
+│   ├── 06_skill_protocol.md  Discovery, Use, Drift, Create
+│   └── 07_memory_protocol.md Recall, Explicit saves, Curation, Anti-patterns
+└── overlays/               per-profile delta — exactly one appended per request (build_profile_overlay)
+    ├── weak_local.md         Intent classification, Execution, Completeness, When NOT to over-plan,
+    │                         Error recovery, Conciseness (no-preamble delta)
+    └── frontier.md           (absent today; the cost-cliff conciseness delta is deferred)
+```
+
+Files are read in `NN_` filename order (`build_rules_block`); empty/whitespace-only files contribute nothing. The `##` section *headings* above are the current contents for orientation only — the rule/overlay files are the source of truth and `eval_rule_compliance.py`'s `_INVENTORY` mirrors them for the observability map; do not treat this listing as a contract. Composition is `base + overlay(resolved_profile)`:
+
+| Profile | Resolved from (`config/llm.py`) | Composed prompt | Sections |
+| --- | --- | --- | --- |
+| `WEAK_LOCAL` | Ollama provider | BASE + `overlays/weak_local.md` | base + weak delta |
+| `FRONTIER` | any other provider (e.g. gemini) | BASE only (`frontier.md` absent) | base |
+
 The numbered rule files (`co_cli/context/rules/NN_rule_id.md`) and the per-profile overlays (`co_cli/context/overlays/<profile>.md`) are authored to two standards.
 
 **Low-inference reflexes.** The configured weak model under-executes high-inference judgment calls, so every rule is written as a reflex, not a metacognitive ask. A rule is a reflex when it: (1) fires on an *observable cue self-evident at the moment it fires* ("before you ask the user X", "when a tool returns an error") — never "when you suspect…" or anything requiring the model to know what it does not know; (2) states *one imperative action*, not a paragraph of considerations to weigh; (3) *names the concrete tool* in plain words (`memory_search`) — never the category ("search tools"), and never with `tool_name(` call syntax (the signature-coherence invariant of §2.2, guarded by `tests/test_instruction_floor_coupling.py`); (4) *shows the anti-pattern in quotes* where a wrong behavior is common ("don't restate an answer you already gave"); (5) *enumerates the exceptions up front* so the residual default needs no judgment; (6) is *co-fit, not coding-fit* — borrow the reflex form from terse coding prompts but not their length caps, since co is knowledge-work and reflexes brake redundant/no-op steps, never thoroughness during work. A rule that fails one of these is a judgment-call candidate for an evidence-gated rewrite — rewrite only on a demonstrated failure or a clean ablation signal, never on faith. This is the anti-erosion yardstick for every rule edit; without it, rule style is re-litigated every change.
 
 **Base-vs-overlay partition.** A section belongs in an overlay (not BASE) only when it is *dead-weight for a strong reasoner* — something a frontier model does natively. If a strong model still benefits, the section is universal and stays in BASE. Because overlays are additive (§2.1 #2), over-keeping in BASE is harmless (a frontier prompt carries minor dead weight) while under-keeping risks stripping a universal from every profile — so **when in doubt, keep it in BASE**. When a section mixes a weak scaffold with an embedded universal, split it: the weak half relocates to the overlay, the universal half re-homes in BASE (e.g. the state-mutation gate in `02_safety`, the `todo_read` completion gate in `04_tool_protocol`) so the frontier composition never loses it.
+
+Exactly one overlay is active per request — `resolve_model_profile` picks a single profile, so the profiles are mutually exclusive and a weak prompt never carries the frontier overlay (or vice versa). The consequence: a reflex that *both* profiles need can only reach them from BASE — there is no shared overlay. Conciseness is the worked example. Its universal density core (lead with the outcome, stay dense, don't restate) is wanted by weak and frontier alike, so it lives in BASE `01_interaction`; each overlay then adds only its delta — `weak_local` the named preamble/postamble anti-patterns a weak model needs spelled out, `frontier` (deferred) a length budget for the cost cliff. This matches peer convergence (hermes/opencode/codex all give conciseness a base-level home; the explicit reinforcement is profile-scoped).
 
 ### 2.2 Dynamic Instruction Layers
 
@@ -162,7 +189,9 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `co_cli/agent/build.py` | `build_orchestrator()` — composes static instructions from `ORCHESTRATOR_SPEC.static_instruction_builders`, registers `per_turn_instructions` callbacks, attaches history processors |
 | `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` — static builders (`_base_instructions_provider`, `_toolset_guidance_provider`, `_personality_critique_provider`) and per-turn instructions (`safety_prompt`, `current_time_prompt`, `deferred_tool_awareness_prompt`, `skill_manifest_prompt`) |
 | `co_cli/agent/_instructions.py` | per-turn instruction callbacks: `safety_prompt`, `current_time_prompt`, `deferred_tool_awareness_prompt`, `skill_manifest_prompt` |
-| `co_cli/context/assembly.py` | `build_base_instructions()` — soul + mindsets + rules; rule-file validation |
+| `co_cli/context/assembly.py` | `build_base_instructions()` — soul + mindsets + rules; `build_rules_block()` (BASE) and `build_profile_overlay(profile)` (per-profile overlay); rule-file validation |
+| `co_cli/context/rules/NN_*.md` | BASE rule files (model-agnostic), read in filename order by `build_rules_block()` |
+| `co_cli/context/overlays/<profile>.md` | per-profile overlay delta appended by `build_profile_overlay()`; absent/empty → nothing appended |
 | `co_cli/context/guidance.py` | `CAPABILITIES_GUIDANCE` constant; `build_toolset_guidance()` — gated on tool presence |
 | `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — `<available_skills>` XML block; called per-turn from `skill_manifest_prompt` |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` — personality asset loaders |

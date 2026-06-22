@@ -100,6 +100,6 @@ async def test_weak_local_overlay_reaches_assembled_prompt() -> None:
     base_only = assemble(baseline)
 
     assert "## Execution" in full
-    assert "## Conciseness" in full
+    assert "## Error recovery" in full
     assert "## Execution" not in base_only
-    assert "## Conciseness" not in base_only
+    assert "## Error recovery" not in base_only
