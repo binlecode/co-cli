@@ -203,10 +203,10 @@ Two specs in `co_cli/daemons/dream/_reviewer.py`:
 
 | Spec | Tool surface | Prompt |
 |---|---|---|
-| `MEMORY_REVIEW_SPEC` | `memory_search`, `memory_create`, `memory_append`, `memory_replace` | `daemons/dream/prompts/memory_review.md` |
+| `MEMORY_REVIEW_SPEC` | `memory_search`, `memory_create`, `memory_append`, `memory_replace`, `user_profile_view`, `user_profile_write` | `daemons/dream/prompts/memory_review.md` |
 | `SKILL_REVIEW_SPEC` | `skill_view`, `skill_create`, `skill_edit`, `skill_patch`, `memory_search`; `include_skill_manifest=True` | `daemons/dream/prompts/skill_review.md` |
 
-**Memory review** — focused on persona, preferences, and references extracted from the transcript.
+**Memory review** — focused on persona, preferences, and references extracted from the transcript. It carries `user_profile_view` / `user_profile_write` so the per-session reviewer also writes `USER.md` one transcript at a time (the cross-session reconciler is profile synthesis, §2.6).
 
 **Skill review** — focused on corrections, techniques, and umbrella discipline patterns extracted from the transcript. The skill manifest is injected so the reviewer can reference and patch existing skills by name.
 
@@ -331,9 +331,9 @@ Inside the daemon's polling main loop, on every empty-queue iteration (before th
 ```python
 if DREAM_TIDY_TAG.exists():
     DREAM_TIDY_TAG.unlink(missing_ok=True)
-    await run_housekeeping(deps, cfg)
+    await run_housekeeping(deps, cfg, state)
 elif scheduled_tick_due(state, cfg):
-    await run_housekeeping(deps, cfg)
+    await run_housekeeping(deps, cfg, state)
 ```
 
 Manual trigger:

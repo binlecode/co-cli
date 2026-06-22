@@ -15,11 +15,25 @@ a PDF prompt selects ``documents`` (not ``office``); a deck / spreadsheet prompt
 The observable is which skill name reaches ``skill_view`` — the descriptions are the only
 selection signal, so this is the durable regression gate on their mutual exclusivity.
 
-The structural cases (env restore, skill CRUD, built-in shadowing, deferred-tool
-discovery) are covered by pytest under ``tests/`` — see the phase-2 coverage map.
+W4.R (skill_reviewer_encodes_correction, judged): drives the per-session skill
+reviewer (``process_review(domain="skill")``) over a seeded transcript and judges
+the encoded skill is faithful to the one durable correction.
 
-Eval-seeded artifact (deterministic name; reruns overwrite in place):
+W4.M (skill_merge_preserves_distinct_steps, judged): the skill-side analogue of
+daily_chat W1.F. Seeds two near-duplicate user skills (shared boilerplate body,
+one distinct final step each), runs the housekeeping ``merge_skills`` consolidation,
+and judges that BOTH distinct steps survive in the umbrella — the lossless-merge gate.
+
+The structural cases (env restore, skill CRUD, built-in shadowing, deferred-tool
+discovery) and the deterministic housekeeping mechanics (clustering threshold,
+canonical-anchor pick, sibling archival, skill decay) are covered by pytest under
+``tests/`` — see the phase-2 coverage map. These evals own only the model-driven
+halves a unit test cannot assert.
+
+Eval-seeded artifacts (deterministic/per-run names; reruns overwrite in place):
   - ``~/.co-cli/skills/eval_smoke/SKILL.md`` — written by W4.A; left in place.
+  - ``~/.co-cli/skills/eval_merge_{a,b}_<rand>/`` — written by W4.M; one archived
+    on merge, the surviving umbrella left in place; purged at the next W4.M run.
 
 Specs: docs/specs/skills.md, tui.md
 Mission tenet: operator — procedural capability
@@ -54,7 +68,9 @@ from pydantic_ai.messages import (
 from co_cli.agent.orchestrate import run_turn
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, DelegateToAgent, SlashOutcome
+from co_cli.daemons.dream._housekeeping import merge_skills
 from co_cli.daemons.dream._reviewer import process_review
+from co_cli.daemons.dream.state import HousekeepingState
 from co_cli.deps import CoDeps
 from co_cli.session.filename import session_filename
 from co_cli.session.persistence import append_messages
@@ -561,6 +577,149 @@ async def case_skill_reviewer_encodes_correction(
 
 
 # ---------------------------------------------------------------------------
+# W4.M — skill merge (housekeeping consolidation)
+# ---------------------------------------------------------------------------
+
+_MERGE_SHARED_BODY = (
+    "This skill documents the backend service deploy release procedure. "
+    "Always pull the latest main branch before starting. "
+    "Build the release artifact with the standard build command. "
+    "Verify the build output before continuing the deploy. "
+    "Tag the release commit so the rollout is traceable. "
+    "Finally, run the {distinct} before finishing the deploy."
+)
+
+
+def _purge_merge_skills(user_skills_dir: Path) -> None:
+    """Remove prior-run eval_merge_* skills (live + archived) to avoid stale interference."""
+    import shutil
+
+    for parent in (user_skills_dir, user_skills_dir / ".archive"):
+        if not parent.exists():
+            continue
+        for path in parent.glob("eval_merge_*"):
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+
+
+def _write_merge_skill(user_skills_dir: Path, name: str, distinct_step: str) -> Path:
+    """Write a user skill whose body shares a boilerplate block + one distinct final step."""
+    skill_dir = user_skills_dir / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    body = _MERGE_SHARED_BODY.format(distinct=distinct_step)
+    text = (
+        "---\n"
+        f"name: {name}\n"
+        "description: Eval merge fixture — backend deploy release procedure.\n"
+        "---\n\n"
+        f"{body}\n"
+    )
+    path = skill_dir / "SKILL.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+async def case_w4_m_skill_merge_preserves_distinct_steps(
+    deps: CoDeps,
+    agent,
+    frontend: EvalFrontend,
+    run,
+) -> CaseResult:
+    """W4.M — housekeeping skill merge consolidates near-duplicates losslessly.
+
+    The skill-side analogue of daily_chat W1.F. Seeds two user skills with a large
+    shared boilerplate body (clears the token-Jaccard gate by construction, so the
+    merge LLM is reached) but each carrying ONE genuinely distinct final step. Runs
+    ``merge_skills`` and judges that BOTH distinct steps survive in the consolidated
+    umbrella skill — a regression that drops one as "redundant" fails the judge.
+
+    Partition note: the deterministic half — clustering threshold, canonical-anchor
+    pick, sibling archival, refresh — is pytest-owned (test_skill_housekeeping.py).
+    This eval owns ONLY the LLM consolidation quality (lossless umbrella), which a
+    unit test cannot assert.
+
+    ``agent``/``frontend`` are unused (calls ``merge_skills`` directly) but kept for
+    the runner signature.
+    """
+    case_id = "W4.M"
+    t0 = time.monotonic()
+    suffix = secrets.token_hex(3)
+    name_a = f"eval_merge_a_{suffix}"
+    name_b = f"eval_merge_b_{suffix}"
+    step_a = "staging smoke suite"
+    step_b = "production approval check"
+
+    try:
+        _purge_merge_skills(deps.user_skills_dir)
+        _write_merge_skill(deps.user_skills_dir, name_a, step_a)
+        _write_merge_skill(deps.user_skills_dir, name_b, step_b)
+        refresh_skills(deps)
+
+        async with asyncio.timeout(DREAM_CYCLE_BUDGET_S):
+            merged_count = await merge_skills(deps, HousekeepingState())
+    except Exception as exc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"{type(exc).__name__}: {exc}",
+        )
+
+    live = {p.parent.name for p in deps.user_skills_dir.glob("*/SKILL.md")}
+    survivors = [n for n in (name_a, name_b) if n in live]
+    reason_parts = [f"merged={merged_count} survivors={survivors}"]
+
+    # Structural gate: the cluster fused — exactly one of the pair remains live
+    # (the anchor, rewritten), the other was archived.
+    if not (merged_count >= 1 and len(survivors) == 1):
+        reason_parts.append("structural gate: pair did not consolidate to a single umbrella")
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=" ".join(reason_parts),
+        )
+
+    umbrella_body = (deps.user_skills_dir / survivors[0] / "SKILL.md").read_text(encoding="utf-8")
+    rubric = (
+        "Two near-duplicate skills documenting the same backend deploy procedure were just run "
+        "through a consolidation pass into the single umbrella skill below. The two originals were "
+        "identical EXCEPT for their final step: one required running the STAGING SMOKE SUITE, the "
+        "other required a PRODUCTION APPROVAL CHECK. These are two genuinely distinct steps.\n"
+        "PASS only if BOTH distinct final steps are present in the consolidated skill below — "
+        "whether kept as two listed steps or folded into one combined procedure.\n"
+        "FAIL if either step was dropped (only staging OR only production survives), or a step "
+        "absent from the originals was invented.\n"
+        "Ignore boilerplate and wording — judge only whether both distinct steps survive."
+    )
+    try:
+        async with asyncio.timeout(CALL_TIMEOUT_S):
+            jverdict = await judge_with_llm(
+                rubric,
+                [{"role": "assistant", "content": umbrella_body}],
+                deps=deps,
+                model=deps.judge_model,
+            )
+    except Exception as jexc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"{' '.join(reason_parts)} | judge_error: {type(jexc).__name__}",
+        )
+
+    reason_parts.append(f"judge.score={jverdict.score} {judge_model_annotation(deps)}")
+    if jverdict.rationale:
+        reason_parts.append(jverdict.rationale[:120])
+    return CaseResult(
+        name=case_id,
+        verdict=Verdict.PASS if jverdict.passed else Verdict.SOFT_FAIL,
+        duration_s=time.monotonic() - t0,
+        reason=" ".join(reason_parts),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -624,6 +783,25 @@ async def main() -> int:
                 else ("PASS" if cr_r.passed else "FAIL")
             )
             print(f"[skills] {cr_r.name}: {label} — {cr_r.reason or 'ok'}")
+            try:
+                cr_m = await case_w4_m_skill_merge_preserves_distinct_steps(
+                    deps, agent, frontend, run
+                )
+            except Exception as exc:
+                cr_m = CaseResult(
+                    name="W4.M",
+                    verdict=Verdict.FAIL,
+                    duration_s=0.0,
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+            cases.append(cr_m)
+            run.append(cr_m)
+            m_label = (
+                "SOFT_FAIL"
+                if cr_m.verdict is Verdict.SOFT_FAIL
+                else ("PASS" if cr_m.passed else "FAIL")
+            )
+            print(f"[skills] {cr_m.name}: {m_label} — {cr_m.reason or 'ok'}")
     finally:
         await stack.aclose()
     return 0 if all(c.passed for c in cases) else 1

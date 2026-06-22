@@ -30,6 +30,15 @@ Cases:
                                   T2 reverts to the recalled Python default.
   W10.C  decay_under_disuse      SOFT-only: age ``pref_terse`` ~95d, run dream,
                                   check survival. Never emits PASS/FAIL.
+  W10.D  profile_synthesis       Seed a starting USER.md (durable Rust identity +
+                                  transient vacation) + 3 sessions reinforcing the
+                                  durable trait and contradicting the transient
+                                  one; run ``synthesize_user_profile``. PASS if the
+                                  rewritten profile keeps the durable fact, drops
+                                  the contradicted one, and stays within budget.
+                                  Partition: the gate/marker/no-op mechanics are
+                                  pytest-owned (test_housekeeping.py); this eval
+                                  owns only the model's reconciliation quality.
 
 Specs: docs/specs/core-loop.md, prompt-assembly.md, memory.md, dream.md.
 Mission tenet: trusted — durable user model is real and usable when consulted.
@@ -48,6 +57,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from evals._deps import eval_deps
 from evals._fixtures import load_fixture
@@ -59,11 +69,20 @@ from evals._rubrics import load_rubric
 from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S, DREAM_CYCLE_BUDGET_S, TURN_BUDGET_S
 from evals._trace import record_turn, response_text
-from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
 
 from co_cli.agent.orchestrate import run_turn
-from co_cli.daemons.dream._housekeeping import merge_memory
-from co_cli.daemons.dream.state import HousekeepingState
+from co_cli.daemons.dream._housekeeping import merge_memory, synthesize_user_profile
+from co_cli.daemons.dream.state import HousekeepingState, SessionMarker
+from co_cli.session.browser import list_sessions
+from co_cli.session.filename import session_filename
+from co_cli.session.persistence import append_messages
 
 _FIXTURE_NAME = "user_model_baseline"
 
@@ -435,8 +454,179 @@ async def _case_w10_c_decay_under_disuse(
     )
 
 
+def _seed_synthesis_sessions(deps: Any, specs: list[tuple[str, str]]) -> list[str]:
+    """Write one real-JSONL session per ``(user, assistant)`` spec, newest-first.
+
+    Stamps strictly-increasing recent timestamps so the seeds sort as the newest
+    sessions on disk (above any pre-existing session). Returns the 8-char id
+    prefixes in seed order (oldest → newest).
+    """
+    deps.sessions_dir.mkdir(parents=True, exist_ok=True)
+    base = datetime.now(UTC)
+    ids: list[str] = []
+    for i, (user_text, assistant_text) in enumerate(specs):
+        created = base + timedelta(seconds=i)
+        sid = uuid4().hex
+        path = deps.sessions_dir / session_filename(created, sid)
+        append_messages(
+            path,
+            [
+                ModelRequest(parts=[UserPromptPart(content=user_text)]),
+                ModelResponse(parts=[TextPart(content=assistant_text)]),
+            ],
+        )
+        ids.append(sid[:8])
+    return ids
+
+
+async def _case_w10_d_profile_synthesis(
+    deps: Any,
+    agent: Any,
+    frontend: Any,
+    run: Any,
+    spans_log: Path,
+) -> CaseResult:
+    """W10.D — cross-session USER.md synthesis reconciles durable vs. stale signal.
+
+    The UAT smoke for the ``synthesize_user_profile`` dream sub-pass. Seeds a
+    starting USER.md carrying one durable identity fact (Rust developer) and one
+    transient fact (on vacation), plus three recent sessions that reinforce the
+    durable trait and contradict the transient one (the user is actively working).
+    Runs the synthesis pass against the real local model and judges the rewritten
+    profile.
+
+    Partition note: the deterministic half of this workflow — the session-count
+    gate, marker advance, disabled/below-threshold no-ops, atomic write — is owned
+    by pytest (``tests/daemons/dream/test_housekeeping.py``). This eval owns ONLY
+    the model-driven reconciliation quality (durable kept, contradicted dropped,
+    within budget), which a unit test cannot assert.
+
+    Verdict partition: synthesis is a **best-effort** production pass (a local-model
+    output/token failure is caught and retried next tick — see ``run_housekeeping``).
+    So a model-capability failure here is SOFT_FAIL (non-gating review signal),
+    mirroring W10.C; a hard PASS/FAIL is reserved for the case where the model
+    completes and the judge rules on reconciliation quality.
+
+    ``agent``/``frontend``/``spans_log`` are unused (this case calls the pass
+    directly, not ``run_turn``) but kept for the runner tuple signature.
+    """
+    case_id = "W10.D"
+    case_t0 = time.monotonic()
+    reason_parts: list[str] = [judge_model_annotation(deps)]
+    case_verdict = Verdict.FAIL
+
+    try:
+        # Anchor the marker at the current newest session so only the seeds below
+        # count as un-settled — keeps the synthesis window to exactly our sessions
+        # regardless of what else lives in the real workspace's sessions_dir.
+        prior = list_sessions(deps.sessions_dir)
+        marker = (
+            SessionMarker(
+                session_id=prior[0].session_id,
+                created_at=prior[0].created_at.isoformat(),
+            )
+            if prior
+            else None
+        )
+
+        session_specs = [
+            (
+                "Help me tighten this Rust trait impl — I'm writing Rust again today.",
+                "Sure, here's a tighter Rust trait impl.",
+            ),
+            (
+                "I'm back from leave and working full-time again; more Rust refactoring.",
+                "Welcome back — let's refactor that Rust module.",
+            ),
+            (
+                "Another full Rust day. Review my borrow-checker fix?",
+                "Reviewed — your Rust borrow fix looks correct.",
+            ),
+        ]
+        _seed_synthesis_sessions(deps, session_specs)
+
+        deps.user_profile_path.write_text(
+            "The user is a Rust developer who values memory-safe systems code.\n"
+            "§\n"
+            "The user is on vacation this week and away from work.\n",
+            encoding="utf-8",
+        )
+
+        deps.config.memory.profile_synthesis_enabled = True
+        deps.config.memory.profile_synthesis_lookback_sessions = len(session_specs)
+
+        try:
+            async with asyncio.timeout(DREAM_CYCLE_BUDGET_S):
+                ran = await synthesize_user_profile(
+                    deps, HousekeepingState(last_synthesized_session=marker)
+                )
+        except Exception as synth_exc:
+            # Best-effort production contract: a local-model output/token-budget
+            # failure is caught + retried next tick, never a regression. SOFT, not gate.
+            reason_parts.append(
+                f"synthesis model failure (SOFT, best-effort): "
+                f"{type(synth_exc).__name__}: {str(synth_exc)[:120]}"
+            )
+            return CaseResult(
+                name=case_id,
+                verdict=Verdict.SOFT_FAIL,
+                duration_s=time.monotonic() - case_t0,
+                reason=" ".join(reason_parts).strip(),
+                perf=None,
+            )
+
+        profile = deps.user_profile_path.read_text(encoding="utf-8")
+        budget = deps.config.memory.user_profile_char_budget
+        within_budget = len(profile) <= budget
+        reason_parts.append(f"ran={ran} chars={len(profile)}/{budget}")
+
+        if not (ran and profile.strip() and within_budget):
+            reason_parts.append("structural gate: synthesis did not fire / empty / over budget")
+            return CaseResult(
+                name=case_id,
+                verdict=Verdict.FAIL,
+                duration_s=time.monotonic() - case_t0,
+                reason=" ".join(reason_parts).strip(),
+            )
+
+        rubric = (
+            "A profile synthesizer reconciled a user profile against three recent sessions. "
+            "The starting profile said (1) the user is a Rust developer who values memory-safe "
+            "systems code — a DURABLE identity fact — and (2) the user is on vacation this week — "
+            "a TRANSIENT fact the recent sessions contradict (the user is actively working in Rust "
+            "every day and explicitly says they are back from leave working full-time).\n"
+            "PASS only if the rewritten profile below KEEPS the durable Rust-developer identity AND "
+            "no longer asserts the user is on vacation/away.\n"
+            "FAIL if it drops the Rust identity, still claims the user is on vacation, or invents a "
+            "fact not supported by the profile or sessions.\n"
+            "Judge profile content only; ignore formatting and § delimiters."
+        )
+        async with asyncio.timeout(CALL_TIMEOUT_S):
+            verdict = await judge_with_llm(
+                rubric,
+                [{"role": "assistant", "content": profile}],
+                deps=deps,
+                model=deps.judge_model,
+            )
+        reason_parts.append(f"judge.score={verdict.score}")
+        if verdict.rationale:
+            reason_parts.append(verdict.rationale[:160])
+        case_verdict = Verdict.PASS if verdict.passed else Verdict.SOFT_FAIL
+    except Exception as exc:
+        case_verdict = Verdict.FAIL
+        reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
+
+    return CaseResult(
+        name=case_id,
+        verdict=case_verdict,
+        duration_s=time.monotonic() - case_t0,
+        reason=" ".join(reason_parts).strip(),
+        perf=None,
+    )
+
+
 async def main() -> int:
-    """Drive W10.A-W10.C end-to-end, write trace, return exit code."""
+    """Drive W10.A-W10.D end-to-end, write trace, return exit code."""
     await ensure_ollama_warm()
 
     async with eval_deps() as (deps, agent, frontend), open_eval_run("user_model") as run:
@@ -448,6 +638,7 @@ async def main() -> int:
             _case_w10_a_recall_then_apply,
             _case_w10_b_contradiction_handling,
             _case_w10_c_decay_under_disuse,
+            _case_w10_d_profile_synthesis,
         ):
             try:
                 case = await runner(deps, agent, frontend, run, spans_log)
