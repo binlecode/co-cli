@@ -29,7 +29,12 @@ from pydantic_ai.usage import UsageLimits
 # Local alias — DeferredToolResults carries approval decisions (allow/deny),
 # not executed tool output. Actual tool output returns later as ToolReturnPart.
 ToolApprovalDecisions = DeferredToolResults
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
+from pydantic_ai.exceptions import (
+    ModelAPIError,
+    ModelHTTPError,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+)
 from pydantic_ai.messages import (
     BinaryContent,
     FinalResultEvent,
@@ -271,6 +276,36 @@ async def _collect_deferred_tool_approvals(
 # ---------------------------------------------------------------------------
 
 
+class _StallTimer:
+    """Drives the run's stall timeout: re-arm on model progress, disarm during tools.
+
+    LLM_RUN_TIMEOUT_SECS bounds wall-time the run waits for *model progress* while
+    no tool is in flight — it is not an absolute run deadline. note() is called for
+    every stream event: a fresh window is armed on each event seen with zero tools
+    outstanding, and the timer is disarmed while one or more tools execute (no stream
+    events flow between a tool call and its result, so a long legit tool is bounded
+    by its own timeout, not by this loop). Parallel tool calls stay disarmed until
+    the outstanding count returns to zero.
+    """
+
+    def __init__(self, timeout_cm: asyncio.Timeout, loop: asyncio.AbstractEventLoop) -> None:
+        self._timeout_cm = timeout_cm
+        self._loop = loop
+        self._outstanding_tools = 0
+
+    def note(self, event: object) -> None:
+        if isinstance(event, FunctionToolCallEvent):
+            self._outstanding_tools += 1
+            if self._outstanding_tools == 1:
+                self._timeout_cm.reschedule(None)
+        elif isinstance(event, FunctionToolResultEvent):
+            self._outstanding_tools -= 1
+            if self._outstanding_tools == 0:
+                self._timeout_cm.reschedule(self._loop.time() + LLM_RUN_TIMEOUT_SECS)
+        elif self._outstanding_tools == 0:
+            self._timeout_cm.reschedule(self._loop.time() + LLM_RUN_TIMEOUT_SECS)
+
+
 def _handle_tool_call_event(
     event: FunctionToolCallEvent,
     renderer: StreamRenderer,
@@ -335,6 +370,15 @@ def _handle_stream_event(
     return None
 
 
+def _resolve_request_limit(deps: CoDeps) -> int | None:
+    """Turn-cumulative model-request cap for the SDK's UsageLimits, or None to disable.
+
+    max_model_requests_per_turn=0 disables the cap.
+    """
+    cap = deps.config.llm.max_model_requests_per_turn
+    return cap if cap > 0 else None
+
+
 async def _execute_run(
     turn_state: _TurnState,
     agent: SessionAgent,
@@ -357,6 +401,7 @@ async def _execute_run(
     Stream rendering policy (buffering, flush, thinking gating) is owned by
     StreamRenderer. Tool display metadata is owned by tool_display.
     """
+    request_limit = _resolve_request_limit(deps)
     result: SessionRunResult | None = None
     renderer = StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)
     _t0 = time.monotonic()
@@ -369,12 +414,16 @@ async def _execute_run(
             "co.agent.model": getattr(deps.model.model, "model_name", str(deps.model.model))
             if deps.model
             else None,
-            "co.agent.request_limit": None,
+            "co.agent.request_limit": request_limit,
         },
     )
     try:
         try:
-            async with asyncio.timeout(LLM_RUN_TIMEOUT_SECS):
+            # LLM_RUN_TIMEOUT_SECS is a model-generation STALL window, not an
+            # absolute run deadline — see _StallTimer.
+            loop = asyncio.get_running_loop()
+            async with asyncio.timeout(LLM_RUN_TIMEOUT_SECS) as timeout_cm:
+                stall_timer = _StallTimer(timeout_cm, loop)
                 async with agent.run_stream_events(
                     turn_state.current_input,
                     deps=deps,
@@ -383,19 +432,22 @@ async def _execute_run(
                     else turn_state.current_history,
                     model_settings=model_settings,
                     usage=turn_state.latest_usage,
-                    # Orchestrator is intentionally unbounded — the human drives
-                    # turn count. Explicit None is required: the SDK default is 50
-                    # requests (unlike task agents, which keep a real limit at
-                    # agent/run.py).
-                    usage_limits=UsageLimits(request_limit=None),
+                    # Turn-cumulative request cap, enforced by the SDK before every
+                    # request. co threads one turn-scoped RunUsage across all runs
+                    # (usage= above, reassigned from each result below), so the SDK
+                    # check (usage.requests >= request_limit) bounds the whole turn and
+                    # fires mid-run — a single autonomous tool-loop cannot run past it.
+                    # max_model_requests_per_turn=0 disables (request_limit=None).
+                    usage_limits=UsageLimits(request_limit=request_limit),
                     deferred_tool_results=turn_state.tool_approval_decisions,
                     metadata={
                         "session_id": deps.session.session_path.stem[-8:],
                         "role": "orchestrator",
-                        "request_limit": None,
+                        "request_limit": request_limit,
                     },
                 ) as stream:
                     async for event in stream:
+                        stall_timer.note(event)
                         event_result = _handle_stream_event(event, renderer, deps, frontend)
                         if event_result is not None:
                             result = event_result
@@ -480,17 +532,17 @@ def _check_turn_caps(
     deps: CoDeps,
     frontend: Frontend,
 ) -> TurnResult | None:
-    """Return an error TurnResult if the hard-stop or model-request cap fired, else None."""
+    """Return an error TurnResult if the consecutive tool-call hard-stop fired, else None.
+
+    The turn-cumulative model-request cap is enforced mid-run by the SDK
+    (``request_limit`` in ``_execute_run``) and surfaces as ``UsageLimitExceeded``
+    in ``run_turn``, not here.
+    """
     if deps.runtime.tool_cap_hard_stop:
         frontend.on_status(
             f"Tool-call cap exceeded {TOOL_CAP_HARD_STOP_CONSECUTIVE} consecutive"
             " model requests — stopping."
         )
-        turn_state.outcome = "error"
-        return _build_error_turn_result(turn_state)
-    cap = deps.config.llm.max_model_requests_per_turn
-    if cap > 0 and turn_state.model_requests >= cap:
-        frontend.on_status(f"Model-request cap reached ({cap} LLM calls this turn) — stopping.")
         turn_state.outcome = "error"
         return _build_error_turn_result(turn_state)
     return None
@@ -747,6 +799,40 @@ async def _attempt_overflow_recovery(
     return True
 
 
+async def _handle_model_http_error(
+    e: ModelHTTPError,
+    turn_state: _TurnState,
+    agent: SessionAgent,
+    deps: CoDeps,
+    frontend: Frontend,
+) -> TurnResult | None:
+    """Resolve a ModelHTTPError. Returns a terminal TurnResult, or None to retry the loop.
+
+    Context overflow must resolve completely (compact+retry OR terminal) and, by design
+    invariant, NEVER falls through to the 400 reformulation handler.
+    """
+    code = e.status_code
+    if is_context_overflow(e):
+        if await _attempt_overflow_recovery(turn_state, agent, deps, frontend):
+            return None
+        turn_state.outcome = "error"
+        return _build_error_turn_result(turn_state)
+    if code == 400 and _apply_400_reformulation(turn_state, e):
+        frontend.on_status("Tool call rejected (HTTP 400), reflecting to model...")
+        await asyncio.sleep(0.5)
+        return None
+    frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
+    turn_state.outcome = "error"
+    current_span().add_event(
+        "provider_error",
+        {
+            "http.status_code": code,
+            "error.body": str(e.body)[:500],
+        },
+    )
+    return _build_error_turn_result(turn_state)
+
+
 # ---------------------------------------------------------------------------
 # run_turn — the main orchestration entry point
 # ---------------------------------------------------------------------------
@@ -761,6 +847,52 @@ def _prompt_char_count(user_input: str | list[str | BinaryContent]) -> int:
     if isinstance(user_input, str):
         return len(user_input)
     return sum(len(part) for part in user_input if isinstance(part, str))
+
+
+def _finalize_run(
+    turn_state: _TurnState,
+    deps: CoDeps,
+    frontend: Frontend,
+    active_settings: ModelSettings | None,
+) -> tuple[TurnResult | None, ModelSettings | None]:
+    """Post-run finalization after _execute_run + approval loop succeed.
+
+    Returns ``(result, active_settings)``:
+      - ``(TurnResult, _)``    — terminal; run_turn returns it.
+      - ``(None, boosted)``    — length-continuation retry; run_turn loops again
+                                 with the boosted settings.
+    """
+    if cap_result := _check_turn_caps(turn_state, deps, frontend):
+        return cap_result, active_settings
+    latest_result = turn_state.latest_result
+    assert latest_result is not None
+    turn_state.current_history = _history_after_successful_run(turn_state, latest_result)
+    _emit_final_output_if_needed(turn_state, latest_result, frontend)
+
+    boosted_settings = _length_retry_settings(latest_result, active_settings)
+    if boosted_settings is not None:
+        # Do NOT set current_input=None here. Keeping the original user prompt
+        # ensures the retry sends a proper user turn instead of a bare continuation
+        # request (conversation ending with an assistant message). qwen3.6 enters
+        # thinking mode on bare continuations regardless of think=False, exhausting
+        # any token budget before producing text.
+        frontend.on_status(
+            f"Response truncated — retrying with {boosted_settings['max_tokens']:,} output tokens…"
+        )
+        return None, boosted_settings
+
+    _check_output_limits(turn_state, deps, frontend)
+    return (
+        TurnResult(
+            messages=turn_state.current_history,
+            output=latest_result.output,
+            usage=turn_state.latest_usage,
+            interrupted=False,
+            outcome="continue",
+            model_requests=turn_state.model_requests,
+        ),
+        active_settings,
+    )
 
 
 @trace("co.turn", new_trace=True)
@@ -809,62 +941,32 @@ async def run_turn(
                 )
 
                 await _run_approval_loop(turn_state, agent, deps, active_settings, frontend)
-                if cap_result := _check_turn_caps(turn_state, deps, frontend):
-                    return cap_result
-                latest_result = turn_state.latest_result
-                assert latest_result is not None
-                turn_state.current_history = _history_after_successful_run(
-                    turn_state, latest_result
+                result, active_settings = _finalize_run(
+                    turn_state, deps, frontend, active_settings
                 )
-                _emit_final_output_if_needed(turn_state, latest_result, frontend)
+                if result is not None:
+                    return result
+                # result is None — length-continuation retry with boosted settings.
+                continue
 
-                boosted_settings = _length_retry_settings(latest_result, active_settings)
-                if boosted_settings is not None:
-                    active_settings = boosted_settings
-                    # Do NOT set current_input=None here. Keeping the original user prompt
-                    # ensures the retry sends a proper user turn instead of a bare continuation
-                    # request (conversation ending with an assistant message). qwen3.6 enters
-                    # thinking mode on bare continuations regardless of think=False, exhausting
-                    # any token budget before producing text.
-                    frontend.on_status(
-                        f"Response truncated — retrying with {active_settings['max_tokens']:,} output tokens…"
-                    )
-                    continue
-
-                _check_output_limits(turn_state, deps, frontend)
-
-                return TurnResult(
-                    messages=turn_state.current_history,
-                    output=latest_result.output,
-                    usage=turn_state.latest_usage,
-                    interrupted=False,
-                    outcome="continue",
-                    model_requests=turn_state.model_requests,
+            except UsageLimitExceeded:
+                # Turn-cumulative request cap hit mid-run (SDK check_before_request).
+                # The abort skips the post-run model_requests accumulation, so set the
+                # reporting field to the cap — the abort is definitionally at the cap.
+                cap = deps.config.llm.max_model_requests_per_turn
+                frontend.on_status(
+                    f"Model-request cap reached ({cap} LLM calls this turn) — stopping."
                 )
+                turn_state.outcome = "error"
+                turn_state.model_requests = cap
+                span.add_event("model_request_cap", {"cap": cap})
+                return _build_error_turn_result(turn_state)
 
             except ModelHTTPError as e:
-                code = e.status_code
-                # Context overflow — must resolve completely (compact+retry OR terminal).
-                # Design invariant: NEVER falls through to the 400 reformulation handler.
-                if is_context_overflow(e):
-                    if await _attempt_overflow_recovery(turn_state, agent, deps, frontend):
-                        continue
-                    turn_state.outcome = "error"
-                    return _build_error_turn_result(turn_state)
-                if code == 400 and _apply_400_reformulation(turn_state, e):
-                    frontend.on_status("Tool call rejected (HTTP 400), reflecting to model...")
-                    await asyncio.sleep(0.5)
+                http_result = await _handle_model_http_error(e, turn_state, agent, deps, frontend)
+                if http_result is None:
                     continue
-                frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
-                turn_state.outcome = "error"
-                span.add_event(
-                    "provider_error",
-                    {
-                        "http.status_code": code,
-                        "error.body": str(e.body)[:500],
-                    },
-                )
-                return _build_error_turn_result(turn_state)
+                return http_result
 
             except (ModelAPIError, httpx.ReadError, TimeoutError) as e:
                 frontend.on_status(_transient_error_message(e))

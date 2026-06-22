@@ -82,22 +82,22 @@ def _make_capped_deps(max_model_requests: int) -> CoDeps:
 # Integration (b): model-request cap via run_turn
 #
 # Strategy: build a stub agent with one approval-required tool. The model
-# returns that tool call twice (model requests 1 and 2), triggering the approval
-# loop to run two resume runs. On the third model call, it returns text.
-# With max_model_requests_per_turn=3, the cap fires after the approval loop.
+# returns that tool call on every call, driving approval-resume runs that
+# accumulate model requests across the turn. With max_model_requests_per_turn=2,
+# the SDK request cap fires mid-turn before the 3rd request (before-request
+# semantics: the request that would exceed the cap is blocked, not the one that
+# reaches it).
 # ---------------------------------------------------------------------------
 
 
 def _make_model_request_cap_agent() -> Agent:
-    """Agent that accumulates 3 model requests via approval-loop resume runs.
+    """Agent that issues an approval-required tool call on every model request.
 
     Protocol:
       model call 1 — yield approval-required tool call (initial run)
       model call 2 — yield approval-required tool call (resume run 1)
-      model call 3 — yield text "done" (resume run 2)
-
-    Total = 3 ModelResponse messages.  With max_model_requests_per_turn=3, the cap
-    fires after _run_approval_loop returns without the hard-stop being set.
+      model call 3+ — would yield another approval call, but with the cap pinned
+                      at 2 the SDK blocks the 3rd request before it is sent.
     """
     call_count = {"n": 0}
 
@@ -106,7 +106,7 @@ def _make_model_request_cap_agent() -> Agent:
     ) -> AsyncIterator[str | DeltaToolCalls]:
         call_count["n"] += 1
         n = call_count["n"]
-        if n <= 2:
+        if n <= 4:
             yield {0: DeltaToolCall(name="needs_approval", json_args="{}", tool_call_id=f"c{n}")}
         else:
             yield "done"
@@ -128,13 +128,13 @@ def _make_model_request_cap_agent() -> Agent:
 
 @pytest.mark.asyncio
 async def test_model_request_cap_fires_after_approval_loop() -> None:
-    """run_turn with max_model_requests_per_turn=3 must stop after 3 model requests.
+    """run_turn with max_model_requests_per_turn=2 must stop before the 3rd request.
 
-    The stub model returns approval-required tool calls twice, driving two
-    approval-resume runs. After model request 3 (resume run 2's final
-    model call), the cap fires before the turn can return successfully.
+    The stub model returns approval-required tool calls, driving approval-resume
+    runs that accumulate requests across the turn. After requests 1 and 2 complete,
+    the SDK blocks request 3 (before-request semantics) and the turn errors.
     """
-    deps = _make_capped_deps(max_model_requests=3)
+    deps = _make_capped_deps(max_model_requests=2)
     agent = _make_model_request_cap_agent()
     frontend = HeadlessFrontend(approval_response="y")
 
@@ -150,8 +150,8 @@ async def test_model_request_cap_fires_after_approval_loop() -> None:
     assert any("Model-request cap" in s for s in frontend.statuses), (
         f"status must mention 'Model-request cap'; got statuses: {frontend.statuses}"
     )
-    assert turn.model_requests >= 3, (
-        f"must have run at least 3 model requests; got {turn.model_requests}"
+    assert turn.model_requests == 2, (
+        f"reported requests must equal the cap; got {turn.model_requests}"
     )
 
 
@@ -468,4 +468,70 @@ async def test_hard_stop_fires_in_single_run_without_approval() -> None:
     assert turn.outcome == "error", f"expected error outcome; got {turn.outcome!r}"
     assert any("Tool-call cap exceeded" in s for s in frontend.statuses), (
         f"status must mention 'Tool-call cap exceeded'; got statuses: {frontend.statuses}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression (f): a within-cap autonomous loop (1 tool call per request, no
+# approval gate, never terminates) stays inside a single run_stream_events call.
+# It never trips the consecutive over-cap hard-stop, so only the SDK request
+# cap (request_limit, checked before every request) can interrupt it mid-stream.
+# ---------------------------------------------------------------------------
+
+
+def _make_within_cap_runaway_agent() -> Agent:
+    """Agent: one noop call on every model request, no approval tool, never stops.
+
+    Each request stays within MAX_TOOL_CALLS_PER_MODEL_REQUEST, so the hard-stop
+    never fires. A high sentinel bails to text only if the request cap failed to
+    fire — so a broken cap fails the assertion instead of looping forever.
+    """
+    call_count = {"n": 0}
+
+    async def stream_fn(
+        messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        call_count["n"] += 1
+        n = call_count["n"]
+        if n > 50:
+            yield "done"
+        else:
+            yield {0: DeltaToolCall(name="noop", json_args='{"x":0}', tool_call_id=f"c{n}")}
+
+    toolset: FunctionToolset = FunctionToolset()
+
+    async def noop(ctx: RunContext[CoDeps], x: int) -> str:
+        return f"noop {x}"
+
+    toolset.add_function(noop, requires_approval=False)
+
+    return Agent(
+        FunctionModel(stream_function=stream_fn),
+        deps_type=CoDeps,
+        output_type=[str, DeferredToolRequests],
+        toolsets=[_CallSeamToolset(toolset)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_request_cap_interrupts_within_cap_single_run_loop() -> None:
+    """A non-terminating ≤cap-per-request loop in one run must be interrupted mid-stream."""
+    deps = _make_capped_deps(max_model_requests=3)
+    agent = _make_within_cap_runaway_agent()
+    frontend = HeadlessFrontend(approval_response="y")
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="within-cap runaway",
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "error", f"expected error outcome; got {turn.outcome!r}"
+    assert any("Model-request cap" in s for s in frontend.statuses), (
+        f"status must mention 'Model-request cap'; got statuses: {frontend.statuses}"
+    )
+    assert turn.model_requests == 3, (
+        f"reported requests must equal the cap; got {turn.model_requests}"
     )
