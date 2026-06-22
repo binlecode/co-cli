@@ -473,14 +473,12 @@ def spill_largest_tool_results(
         _emit_terminal("all_spilled", tokens_after=trigger)
         return messages
 
-    spilled_by_id, local_after, spilled_count, spill_errors = _spill_largest_first(
+    spilled_by_id, effective_after, spilled_count, spill_errors = _spill_largest_first(
         spillable,
-        starting_tokens=local_total,
+        starting_tokens=trigger,
         threshold=threshold,
         tool_results_dir=deps.tool_results_dir,
     )
-
-    effective_after = deps.static_floor_tokens + local_after
 
     if not spilled_by_id:
         _emit_terminal(

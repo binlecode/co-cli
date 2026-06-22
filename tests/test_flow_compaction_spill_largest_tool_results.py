@@ -459,6 +459,64 @@ async def test_three_spills_under_threshold_classified_below_not_fallback(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_nonzero_static_floor_keeps_spilling_until_floor_inclusive_fits(tmp_path: Path):
+    """With a positive static floor, the loop spills until the floor-INCLUSIVE total fits.
+
+    Regression for the frame-mismatch under-spill: the fire check and the
+    done/fallback verdict both count ``static_floor_tokens + message_tokens``,
+    but the spill loop used to be seeded with the message-only count. With a
+    nonzero floor it therefore stopped ``static_floor_tokens`` short of the
+    verdict's goal and reported ``fallback_to_summarize`` while cheap spill
+    capacity remained.
+
+    Sizes are measured at runtime and the threshold is pinned to the loop's
+    post-first-spill local count, so a floor-blind loop spills only the larger
+    return and lands above threshold once the floor is added (fallback). The
+    floor-inclusive loop sees it is still over, spills the second return too,
+    and lands done (empty skip_reason). Single turn group → no tail protection,
+    both returns are spillable.
+    """
+    from co_cli.fileio.spill import spill_if_oversized
+
+    big_len, small_len = 40_000, 30_000
+    user_text = "do stuff"
+    stub_big = len(spill_if_oversized("a" * big_len, tmp_path, "shell_exec", force=True))
+    stub_small = len(spill_if_oversized("b" * small_len, tmp_path, "shell_exec", force=True))
+
+    local_total = (big_len + small_len + len(user_text)) // 4
+    freed_big = big_len - stub_big
+    freed_small = small_len - stub_small
+    local_after_big = local_total - freed_big // 4
+    local_after_both = local_total - (freed_big + freed_small) // 4
+
+    threshold = local_after_big
+    static_floor = max(1, (threshold - local_after_both) // 2)
+
+    messages: list[ModelMessage] = [
+        _user_request(user_text),
+        _tool_response("shell_exec", "tc_big"),
+        _tool_request("shell_exec", "tc_big", "a" * big_len),
+        _tool_response("shell_exec", "tc_small"),
+        _tool_request("shell_exec", "tc_small", "b" * small_len),
+    ]
+    deps = _make_deps(tmp_path, threshold_tokens=threshold)
+    deps.static_floor_tokens = static_floor
+
+    out, attrs = _run_capturing_event(deps, messages)
+
+    returns = _collect_returns(out)
+    assert returns["tc_big"].startswith(PERSISTED_OUTPUT_TAG)
+    assert returns["tc_small"].startswith(PERSISTED_OUTPUT_TAG), (
+        "floor-inclusive loop must spill the second return too — a floor-blind "
+        "loop would stop after the first and defer to the summarizer"
+    )
+    assert attrs["request.skip_reason"] == "", (
+        "floor-inclusive total fits after both spills — classify done, not fallback_to_summarize"
+    )
+    assert attrs["request.tokens_after"] <= threshold
+
+
+@pytest.mark.asyncio
 async def test_many_small_returns_emit_zero_spill_errors(tmp_path: Path):
     """Many ≤1500-char tool returns are not spill candidates: spill_errors stays 0.
 

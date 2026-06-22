@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.445]
+
+Fix a frame mismatch in the spill tier that made it under-spill and defer to the LLM summarizer when a nonzero static floor was present.
+
+- **Spill loop seeded with the floor-inclusive total** — `spill_largest_tool_results` (`co_cli/context/history_processors.py`) computes its fire check and its done/fallback verdict in the floor-inclusive frame (`static_floor_tokens + message_tokens`), but `_spill_largest_first` was seeded with the message-only count. With a positive `static_floor_tokens` the loop therefore stopped `static_floor_tokens` short of the verdict's goal and emitted `fallback_to_summarize` — paying for the LLM summarizer — while cheap spill capacity remained. The loop is now seeded with `trigger` (floor-inclusive), so its break condition is byte-identical to the success verdict, and the redundant `static_floor_tokens + local_after` re-add is dropped.
+- **Tests**: `test_nonzero_static_floor_keeps_spilling_until_floor_inclusive_fits` — the first spill test to set `static_floor_tokens > 0` (the only regime where the bug manifests; prior tests ran with floor `= 0`, where old and new code are identical). Verified discriminating: fails on the pre-fix code, passes on the fix.
+
 ## [0.8.443]
 
 Run background dream-daemon derivations (profile synthesis, memory review, skill review) in non-reasoning mode, fixing an intermittent output truncation.
