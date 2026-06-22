@@ -147,6 +147,9 @@ class _TurnState:
     # Tool-call reformulation budget (HTTP 400 only — app logic, not transport retry).
     # Independent of SDK transport retries (429/5xx handled by OpenAI SDK).
     tool_reformat_budget: int = 2
+    # Clean history snapshot (real user turn materialized) captured on the first
+    # 400 reformulation; used to strip synthetic nudges from the final transcript.
+    reformulation_clean_history: list[ModelMessage] | None = None
     # Overflow recovery: one-shot flag — emergency compact attempted at most once per turn.
     overflow_recovery_attempted: bool = False
     # in-turn (updated after each run)
@@ -675,9 +678,15 @@ def _apply_400_reformulation(
     """
     if turn_state.tool_reformat_budget <= 0:
         return False
+    # Materialize the pending user turn (no-op once current_input is None on a
+    # second injection) and snapshot it once, so run_turn can rebuild a clean
+    # history on success — the failed run's all_messages() is lost on the raise.
+    base = _history_with_pending_user_input(turn_state)
+    if turn_state.reformulation_clean_history is None:
+        turn_state.reformulation_clean_history = base
     turn_state.tool_reformat_budget -= 1
     turn_state.current_history = [
-        *turn_state.current_history,
+        *base,
         ModelRequest(
             parts=[
                 UserPromptPart(
@@ -692,6 +701,23 @@ def _apply_400_reformulation(
     ]
     turn_state.current_input = None
     return True
+
+
+def _history_after_successful_run(
+    turn_state: _TurnState,
+    latest_result: SessionRunResult,
+) -> list[ModelMessage]:
+    """Build the post-run history, stripping any 400-reformulation nudges.
+
+    Normal case: the run's all_messages() (input history + generated). After a
+    400 reformulation, that history carries the synthetic nudges; instead, splice
+    the clean snapshot (real user turn, captured before the first injection) with
+    only this run's new_messages() — which excludes the passed-in history, so the
+    nudges drop out structurally.
+    """
+    if turn_state.reformulation_clean_history is None:
+        return latest_result.all_messages()
+    return [*turn_state.reformulation_clean_history, *latest_result.new_messages()]
 
 
 async def _attempt_overflow_recovery(
@@ -791,7 +817,9 @@ async def run_turn(
                     return cap_result
                 latest_result = turn_state.latest_result
                 assert latest_result is not None
-                turn_state.current_history = latest_result.all_messages()
+                turn_state.current_history = _history_after_successful_run(
+                    turn_state, latest_result
+                )
                 _emit_final_output_if_needed(turn_state, latest_result, frontend)
 
                 boosted_settings = _length_retry_settings(latest_result, active_settings)

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.437]
+
+Fix HTTP 400 tool-call reformulation dropping the user turn and persisting the synthetic nudge.
+
+- **`_apply_400_reformulation`** now snapshots a clean history (the real user turn materialized via `_history_with_pending_user_input`) on the first injection, so the original prompt survives the failed run whose `all_messages()` is lost on the raise.
+- **`run_turn` success path** rebuilds history through the new `_history_after_successful_run` helper: after a reformulation it splices the clean snapshot with only the successful run's `new_messages()`, structurally dropping the synthetic "reformulate your tool call" nudges instead of baking them into the transcript as user turns.
+- **Bug**: previously a malformed-JSON tool call (HTTP 400) erased the user's input from the persisted transcript and recorded the provider-rejection nudge as user speech. Handles single and double (full-budget) reformulation without index arithmetic.
+- **Tests**: new `test_flow_orchestrate_reformulation.py` drives the real `run_turn` with a fake model that 400s then succeeds — asserts the user turn survives and the nudge is absent, for both single- and double-400 paths.
+
 ## [0.8.436]
 
 Promote a universal conciseness floor to the model-agnostic BASE; slim the weak_local overlay to its delta.
