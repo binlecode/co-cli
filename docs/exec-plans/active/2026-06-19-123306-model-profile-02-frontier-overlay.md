@@ -1,67 +1,36 @@
-# Model-profile 02 — Frontier prompt overlay (evidence-gated content for the gemini-3.1-pro profile)
+# Model-profile 02 — frontier overlay (`overlays/frontier.md`)
 
-Task type: evidence-gated core-prompt content — fill the `FRONTIER` profile overlay hook built by Plan A with prompt blocks that measurably help a frontier model, each shipped only on measured lift. Plan B of the 3-plan model-profile split.
+## Goal
+Author `overlays/frontier.md`: the prompt content a **frontier (strong) model** specifically needs, borrowed from the peer-converged parity. BASE stays model-agnostic; this overlay holds only what a frontier reasoner needs that the neutral core does not.
 
-## Plan group (model-profile)
-- **01** (`2026-06-19-114937-model-profile-01-seam`) — the profile seam + gemini budget (mechanism). **Prerequisite for this plan.**
-- **02 (this plan)** — frontier overlay content. Live-gemini measurement gate.
-- **03** (`2026-06-19-123307-model-profile-03-weak-local-reflexes`) — weak-local reflexes + base Recall fix + KEEP record.
+Mechanism is shipped (Plan 1b: `build_rules_block()` = BASE, `build_profile_overlay(frontier)` appends `overlays/frontier.md`). **Nothing to build — this plan is content only.**
 
-## Context
-Plan A built one `ModelProfile` resolver and a `static_instruction_builder` overlay hook that currently returns `None`. This plan fills the `FRONTIER` branch. The frontier model (`gemini-3.1-pro-preview`) is the polar opposite of the weak local model co's rules are tuned for: its prompt needs are different *and* it has a long-context pricing cliff (>200k) that makes verbosity a cost lever, not just style.
+co's frontier backend today is gemini (`gemini-3.1-pro-preview`), resolved to the single `frontier` profile. The per-provider split (`frontier` → `gemini`/`openai`/…) is **deferred until a 2nd frontier backend is wired** — until then `overlays/frontier.md` IS the frontier overlay.
 
-Two candidate divergences, from `RESEARCH-behavioral-rules-peer-survey.md`:
-- **G1 — output-formatting/verbosity rule.** The strongest sourced gap (4/4 peers instruct it; codex heavily, `gpt_5_2_prompt.md:160-242`). co's only coverage is `05 ## When NOT to over-plan` (planning effort, not output shape). Lands hardest on the frontier profile: gemini is verbose by default and the cliff makes length a cost.
-- **Reflex-stripping.** co's low-inference reflexes (`03 ## Verification` enumeration, `07 ## Recall` cascade, the persistence hammering) are tuned to counter weak-model limits. On a frontier model they are dead tokens at best, over-constraint at worst. Candidate to omit from the `FRONTIER` overlay.
+## Peer sources (converged parity)
+- hermes `GOOGLE_MODEL_OPERATIONAL_GUIDANCE` / `OPENAI_MODEL_EXECUTION_GUIDANCE` (`prompt_builder.py`)
+- opencode `gemini.txt` / `gpt.txt` (`system.ts:25-39` selector)
+- codex `gpt_5_codex_prompt.md` + `prompts/`
+- openclaw `gpt5-prompt-overlay.ts`
 
-Discipline: this is measure-first (`feedback_eval_real_world_data`, `feedback_instructions_counter_model_limits`). No block ships on faith.
-
-## Problem & Outcome
-**Problem.** With the seam in place but the `FRONTIER` branch empty, gemini runs on the qwen-tuned shared base — over-constrained by reflexes it does not need and missing the verbosity control it most needs (verbose default + pricing cliff).
-
-**Failure cost.** (1) Leave it empty → gemini wastes tokens on counterproductive reflexes and over-runs the cliff. (2) Fill it speculatively → carry per-model prose with no measured lift, busting the lean-prompt advantage.
-
-**Outcome.** The `FRONTIER` overlay diverges from the shared base ONLY where measured to help: a verbosity/output block if it lifts, reflex omissions where ablation shows gemini behavior unchanged/improved without them. Net floor delta ≤ 0 per shipped block.
-
-**Shippable contract:** the measured verdict per candidate block + whichever blocks clear the gate. A block with no measured lift is dropped (recorded) — a valid outcome.
-
-## Behavioral Constraints
-- **Evidence-gated**, same bar as `per-model-prompt-calibration` / `eval_rule_compliance.py`: measured behavior delta on the **live gemini path**, never faith. Needs `GEMINI_API_KEY` (`~/env-secrets/`).
-- Editing any rule/overlay `.md` trips floor guards (`test_instruction_floor_coupling` F5 + `test_instruction_budget` ceiling); no `tool_name(` syntax in prose; net floor delta ≤ 0 per block; preserve `##` heading text verbatim (eval `_INVENTORY` keyed `(stem,title)` — `--inventory` after any base-heading touch, though the overlay should be profile-layer-additive, not base retitles).
-- Rule/overlay prose = core-level review (platform core).
-- Tail the log; RCA-first on slow gemini calls; never fold cold-start into a call budget.
+Borrow the form and content these converge on for a strong reasoner (compactness/verbosity tiers, keep-going/persistence, output-shape discipline). **Authoring caveat:** the peers' *gemini* guidance targets gemini-flash (a weak tier) and is hand-holding; co's frontier is gemini-3.1-pro, so weight the strong-model sources (gpt-5/codex/openclaw) over flash-tier gemini guidance. Judgment per section, recorded with its peer source.
 
 ## Scope
-### In scope
-- Probe + ship-or-drop each `FRONTIER` candidate block: (a) G1 output/verbosity block; (b) reflex-stripping omissions.
-- Per-block live-gemini measurement arms in `evals/eval_rule_compliance.py`.
-
-### Out of scope
-- The seam itself (Plan A). Weak-local content (Plan C). Vision (gemini plan). Base consolidation (C4 shipped via `2026-06-18-151602`; C2 → future persistence-split plan). Making gemini the default.
+**In:** extract the frontier-specific guidance the peers converge on, adapt to co's tool surface, author into `overlays/frontier.md` as append-only `##` sections.
+**Out:** BASE neutralization (Plan 03 owns it); the weak overlay (Plan 03); the mechanism (1b); the 2nd-provider split (deferred — co has no 2nd frontier backend; authoring one now is a faith build).
 
 ## Tasks
 
-**TASK-1 — G1 output/verbosity block (ship-or-drop)**
-- files: the `FRONTIER` overlay source (location pinned by Plan A's wiring), `evals/eval_rule_compliance.py`
-- done_when: a verbosity/output-formatting block is drafted (cliff-aware length guidance + final-answer shape), measured on the live gemini path via `eval_rule_compliance.py` arms (with/without the block) at the agreed N; **ships** only on a measured behavior lift (more compact/structured output, fewer tokens) at net floor delta ≤ 0 with floor guards passing — else **dropped** and recorded. If the probe shows qwen also lifts (OQ-1), the model-agnostic part moves to the shared base (Plan C / consolidation) and only the cliff-aware length cap stays frontier-scoped.
-- success_signal: gemini's output is measurably tighter/structured, or the block is dropped with evidence.
-- prerequisites: Plan A delivered; `GEMINI_API_KEY`
-
-**TASK-2 — Reflex-stripping for the frontier profile (ship-or-drop)**
-- files: the `FRONTIER` overlay source, `evals/eval_rule_compliance.py`
-- done_when: for each reflex candidate (`03` Verification enumeration, `07` Recall cascade, persistence hammering), an ablation on the live gemini path measures whether gemini's target behavior is unchanged/improved without it; reflexes that prove dead/counterproductive are **omitted from the `FRONTIER` overlay** (recorded with the Δ); reflexes that still steer gemini are KEPT; net floor delta ≤ 0; floor guards pass; `--inventory` unaffected. Any candidate also measured frontier-counterproductive that Plan C would otherwise put in the shared base is flagged to Plan C as `weak_local`-scoped.
-- success_signal: gemini's prompt sheds the reflexes it does not need, measured; the ones it does need stay.
-- prerequisites: TASK-1 (shared harness), Plan A
+**TASK-1 — Author `overlays/frontier.md` from peer-converged frontier parity**
+- files: `co_cli/context/overlays/frontier.md` (create + author), `evals/eval_rule_compliance.py` (one `_INVENTORY` row per authored section; `_PROBES` entry only if a section is single-turn observable), this plan (record peer source per section)
+- done_when: frontier-specific sections borrowed from the peers are authored as append-only `##` sections in `overlays/frontier.md` (no `tool_name(` call-syntax; backtick bare tool names); each section records its peer source(s); `uv run python evals/eval_rule_compliance.py --inventory` passes (inventory count = parsed sections); floor guards pass (`tests/test_instruction_budget.py`); full suite passes. If nothing is warranted for a strong frontier model beyond BASE, `overlays/frontier.md` stays empty and that is recorded as the valid outcome.
+- success_signal: `overlays/frontier.md` holds exactly the frontier-specific content the peer convergence supports.
+- prerequisites: Plan 1b shipped; gemini backend wired (`f5dab436`); `GEMINI_API_KEY`.
 
 ## Testing
-- Live-gemini measurement = evals (UAT smoke) via `eval_rule_compliance.py` arms; artifacts under `evals/_outputs/`. No pytest against the live API.
-- Floor guards on every overlay `.md` edit; `--inventory` if base headings touched.
+- `--inventory` + floor guards + full suite on any overlay change.
+- Optional (not a gate): a behavioral smoke (`tmp/weather_smoke.py` pattern) on the live gemini path to sanity-check an authored section changes frontier behavior. Peer convergence is the authoring basis; smoke is a spot-check, not a gate.
+- No structural/fitness tests on overlay files.
 
-## Open Questions
-1. **G1: base or frontier-only?** qwen may also benefit from an output-format rule. Default: measure both arms; if qwen lifts, the model-agnostic part goes to the shared base and only the cliff-aware cap stays frontier-scoped.
-2. **Reflex-stripping granularity.** Strip whole sections, or specific high-inference enumerations within them? Default: ablate at the section level first; only sub-split if a section is mixed.
-
-## Final — Team Lead
-> Gate 1 — PO + TL review required before proceeding.
-> Right problem (fill the FRONTIER overlay only where measured)? Correct scope (G1 + reflex-stripping, both ship-or-drop; seam and weak-local content out)?
-> Prerequisite: Plan A delivered. Once approved, run: `/orchestrate-plan 2026-06-19-123306-model-profile-02-frontier-overlay` then `/orchestrate-dev`.
+## Decisions
+**Reset 2026-06-22 (first-principle rewrite).** Supersedes the prior framing (ablation Δ → "dead-on-frontier set" → joint BASE re-partition). That approach was over-engineered and structurally blind to the actual task: ablation tests whether co's *existing* rules fire, never whether co is *missing* frontier techniques the peers have. The real job is borrowing peer-converged frontier content into an additive overlay; BASE neutralization is Plan 03's. No measurement gate; peer convergence is the evidence.
