@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.439]
+
+Fix the tool-call-cap hard-stop being silently erased when a maxed violation streak crosses a deferred-tool exit.
+
+- **`CoRuntimeState.tool_cap_hard_stop`** — a latch set the instant the consecutive-violation streak first reaches `TOOL_CAP_HARD_STOP_CONSECUTIVE`, at the one increment site in `toolset.py`. Never cleared within a turn, so a later within-cap request (which legitimately resets the streak counter) can no longer un-earn the stop.
+- **`orchestrate.py`** — the hard-stop flag moved off `_TurnState` onto the runtime (net-zero state, not duplicated); `_run_approval_loop` and `_check_turn_caps` now read the latch. The threshold comparison lives in one place instead of being re-derived at the check site.
+- **Bug**: three over-cap requests reach the streak threshold inside the initial run, then a within-cap request defers on an approval-gated call; the counter resets at the run boundary and again at the start of the resume run, wiping the earned hard-stop so the turn continued instead of stopping. The latch also closes a second gap — a runaway reaching the threshold within a single run (no approval loop) is now hard-stopped, where previously the check existed only inside the approval loop.
+- **Tests**: `test_hard_stop_survives_deferred_exit` and `test_hard_stop_fires_in_single_run_without_approval` drive the real `run_turn`, asserting the error outcome and cap-exceeded status; the existing sub-threshold recovery test still passes (recovery semantics unchanged).
+
 ## [0.8.437]
 
 Fix HTTP 400 tool-call reformulation dropping the user turn and persisting the synthetic nudge.

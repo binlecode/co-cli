@@ -9,7 +9,11 @@ from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import FunctionToolset, WrapperToolset
 from pydantic_ai.toolsets.abstract import ToolsetTool
 
-from co_cli.config.tuning import MAX_TOOL_CALLS_PER_MODEL_REQUEST, SPILL_THRESHOLD_CHARS
+from co_cli.config.tuning import (
+    MAX_TOOL_CALLS_PER_MODEL_REQUEST,
+    SPILL_THRESHOLD_CHARS,
+    TOOL_CAP_HARD_STOP_CONSECUTIVE,
+)
 from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 from co_cli.fileio.spill import spill_with_span
 from co_cli.observability.serialize import serialize_tool_args, truncate_tool_result
@@ -170,6 +174,8 @@ class _CallSeamToolset(WrapperToolset[CoDeps]):
         runtime.tool_calls_in_model_request += 1
         if runtime.tool_calls_in_model_request == cap + 1:
             runtime.consecutive_tool_cap_violations += 1
+            if runtime.consecutive_tool_cap_violations >= TOOL_CAP_HARD_STOP_CONSECUTIVE:
+                runtime.tool_cap_hard_stop = True
 
         push_span(
             f"tool {name}",

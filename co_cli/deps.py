@@ -189,6 +189,10 @@ class CoRuntimeState:
     # Reset to 0 per turn by reset_for_turn(); also reset to 0 when a non-violating
     # CallToolsNode fires (so only unbroken consecutive violations trigger the hard-stop).
     consecutive_tool_cap_violations: int = 0
+    # Latched True the moment the streak first reaches TOOL_CAP_HARD_STOP_CONSECUTIVE.
+    # Never cleared within a turn, so a later within-cap request (which resets the
+    # streak counter above) cannot un-earn the hard-stop. Read by the orchestrator.
+    tool_cap_hard_stop: bool = False
     # Written by spill_largest_tool_results (all exit paths); read by proactive_window_processor
     # for OTEL diagnostics only (no logic branches on it).
     current_request_tokens_estimate: int | None = None
@@ -246,6 +250,7 @@ class CoRuntimeState:
         self.skip_compaction_snapshot = False
         self.current_request_tokens_estimate = None
         self.consecutive_tool_cap_violations = 0
+        self.tool_cap_hard_stop = False
         self.tool_call_limit_run_step = -1
         self.tool_calls_in_model_request = 0
 

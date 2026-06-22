@@ -316,3 +316,156 @@ async def test_under_cap_request_after_over_cap_does_not_hard_stop() -> None:
 
     assert turn.outcome == "continue", f"expected normal completion; got {turn.outcome!r}"
     assert turn.output == "done"
+
+
+# ---------------------------------------------------------------------------
+# Regression (d): an earned hard-stop must survive a deferred-tool exit.
+#
+# Three consecutive over-cap requests reach the streak threshold inside the
+# initial run; the next request stays within cap but defers on an approval-gated
+# call, then a within-cap resume run follows. The within-cap requests reset the
+# streak counter, so the hard-stop must be latched at the moment it was earned,
+# not re-derived from the (now-zero) counter after the resume.
+# ---------------------------------------------------------------------------
+
+
+def _make_streak_then_deferred_agent() -> Agent:
+    """Agent: 3 over-cap requests, then a within-cap request that defers, then resume.
+
+    Protocol:
+      model calls 1-3 — each streams MAX_TOOL_CALLS_PER_MODEL_REQUEST+1 noop calls
+                        (3 consecutive violations → streak hits the hard-stop threshold)
+      model call 4    — 1 noop + 1 approval-gated call → DeferredToolRequests (within cap)
+      model call 5    — 1 noop (resume run, under cap)
+      model call 6    — text "done"
+    """
+    call_count = {"n": 0}
+    _OVER = MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1
+
+    async def stream_fn(
+        messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        call_count["n"] += 1
+        n = call_count["n"]
+        if 1 <= n <= 3:
+            for i in range(_OVER):
+                yield {
+                    i: DeltaToolCall(
+                        name="noop", json_args=f'{{"x":{i}}}', tool_call_id=f"c{n}x{i}"
+                    )
+                }
+        elif n == 4:
+            yield {0: DeltaToolCall(name="noop", json_args='{"x":0}', tool_call_id="c4x0")}
+            yield {1: DeltaToolCall(name="needs_approval", json_args="{}", tool_call_id="c4ap")}
+        elif n == 5:
+            yield {0: DeltaToolCall(name="noop", json_args='{"x":0}', tool_call_id="c5x0")}
+        else:
+            yield "done"
+
+    toolset: FunctionToolset = FunctionToolset()
+
+    async def needs_approval(ctx: RunContext[CoDeps]) -> str:
+        return "approved"
+
+    async def noop(ctx: RunContext[CoDeps], x: int) -> str:
+        return f"noop {x}"
+
+    toolset.add_function(needs_approval, requires_approval=True)
+    toolset.add_function(noop, requires_approval=False)
+
+    return Agent(
+        FunctionModel(stream_function=stream_fn),
+        deps_type=CoDeps,
+        output_type=[str, DeferredToolRequests],
+        toolsets=[_CallSeamToolset(toolset)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_survives_deferred_exit() -> None:
+    """A streak that reaches the threshold must hard-stop even when a deferred exit
+    and a within-cap resume reset the violation counter in between."""
+    deps = _make_capped_deps(max_model_requests=90)
+    agent = _make_streak_then_deferred_agent()
+    frontend = HeadlessFrontend(approval_response="y")
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="streak then defer",
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "error", f"expected error outcome; got {turn.outcome!r}"
+    assert any("Tool-call cap exceeded" in s for s in frontend.statuses), (
+        f"status must mention 'Tool-call cap exceeded'; got statuses: {frontend.statuses}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Regression (e): a runaway that reaches the threshold inside a single run
+# (no approval-gated tool, run completes normally) must still hard-stop. The
+# hard-stop is not gated behind entering the approval loop.
+# ---------------------------------------------------------------------------
+
+
+def _make_single_run_runaway_agent() -> Agent:
+    """Agent: 3 over-cap requests in one run, no approval tool, then text.
+
+    Protocol:
+      model calls 1-3 — each streams MAX_TOOL_CALLS_PER_MODEL_REQUEST+1 noop calls
+      model call 4    — text "done"
+    """
+    call_count = {"n": 0}
+    _OVER = MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1
+
+    async def stream_fn(
+        messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        call_count["n"] += 1
+        n = call_count["n"]
+        if 1 <= n <= 3:
+            for i in range(_OVER):
+                yield {
+                    i: DeltaToolCall(
+                        name="noop", json_args=f'{{"x":{i}}}', tool_call_id=f"c{n}x{i}"
+                    )
+                }
+        else:
+            yield "done"
+
+    toolset: FunctionToolset = FunctionToolset()
+
+    async def noop(ctx: RunContext[CoDeps], x: int) -> str:
+        return f"noop {x}"
+
+    toolset.add_function(noop, requires_approval=False)
+
+    return Agent(
+        FunctionModel(stream_function=stream_fn),
+        deps_type=CoDeps,
+        output_type=[str, DeferredToolRequests],
+        toolsets=[_CallSeamToolset(toolset)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_fires_in_single_run_without_approval() -> None:
+    """A streak reaching the threshold within one run (no deferred tool) must hard-stop."""
+    deps = _make_capped_deps(max_model_requests=90)
+    agent = _make_single_run_runaway_agent()
+    frontend = HeadlessFrontend(approval_response="y")
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="single run runaway",
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "error", f"expected error outcome; got {turn.outcome!r}"
+    assert any("Tool-call cap exceeded" in s for s in frontend.statuses), (
+        f"status must mention 'Tool-call cap exceeded'; got statuses: {frontend.statuses}"
+    )

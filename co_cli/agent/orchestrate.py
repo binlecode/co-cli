@@ -166,9 +166,6 @@ class _TurnState:
     # regardless of whether it contains tool calls. Compaction (which replaces
     # current_history) does not reset this; the accumulator is run-level state.
     model_requests: int = 0
-    # Set by _run_approval_loop when consecutive_tool_cap_violations crosses the threshold.
-    # Read by run_turn to drive the hard-stop exit.
-    tool_cap_hard_stop: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -473,8 +470,7 @@ async def _run_approval_loop(
         turn_state.current_history = latest_result.all_messages()
         turn_state.tool_approval_decisions = approvals
         await _execute_run(turn_state, agent, deps, model_settings, frontend)
-        if deps.runtime.consecutive_tool_cap_violations >= TOOL_CAP_HARD_STOP_CONSECUTIVE:
-            turn_state.tool_cap_hard_stop = True
+        if deps.runtime.tool_cap_hard_stop:
             break
     deps.runtime.resume_tool_names = None
 
@@ -485,7 +481,7 @@ def _check_turn_caps(
     frontend: Frontend,
 ) -> TurnResult | None:
     """Return an error TurnResult if the hard-stop or model-request cap fired, else None."""
-    if turn_state.tool_cap_hard_stop:
+    if deps.runtime.tool_cap_hard_stop:
         frontend.on_status(
             f"Tool-call cap exceeded {TOOL_CAP_HARD_STOP_CONSECUTIVE} consecutive"
             " model requests — stopping."
