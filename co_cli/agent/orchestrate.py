@@ -532,20 +532,42 @@ def _check_turn_caps(
     deps: CoDeps,
     frontend: Frontend,
 ) -> TurnResult | None:
-    """Return an error TurnResult if the consecutive tool-call hard-stop fired, else None.
+    """Return a terminal TurnResult if the consecutive tool-call hard-stop fired, else None.
+
+    On a hard-stop the SDK run has already completed, so the model's final answer
+    (if it produced one) sits in ``latest_result.output``. Surface that answer as a
+    ``continue`` turn rather than discarding it — the status line already tells the
+    user the loop was capped. Only fall back to an error result when there is no
+    usable answer (output is ``DeferredToolRequests``, empty, or absent).
 
     The turn-cumulative model-request cap is enforced mid-run by the SDK
     (``request_limit`` in ``_execute_run``) and surfaces as ``UsageLimitExceeded``
     in ``run_turn``, not here.
     """
-    if deps.runtime.tool_cap_hard_stop:
-        frontend.on_status(
-            f"Tool-call cap exceeded {TOOL_CAP_HARD_STOP_CONSECUTIVE} consecutive"
-            " model requests — stopping."
+    if not deps.runtime.tool_cap_hard_stop:
+        return None
+    frontend.on_status(
+        f"Tool-call cap exceeded {TOOL_CAP_HARD_STOP_CONSECUTIVE} consecutive"
+        " model requests — stopping."
+    )
+    latest_result = turn_state.latest_result
+    out = latest_result.output if latest_result else None
+    if isinstance(out, str) and out.strip():
+        # The capped run already produced a final answer. Returning a terminal
+        # result keeps the turn ending here (no length-retry re-entry, which would
+        # issue more requests while tool_cap_hard_stop is still latched).
+        turn_state.current_history = _history_after_successful_run(turn_state, latest_result)
+        _emit_final_output_if_needed(turn_state, latest_result, frontend)
+        return TurnResult(
+            messages=turn_state.current_history,
+            output=out,
+            usage=turn_state.latest_usage,
+            interrupted=False,
+            outcome="continue",
+            model_requests=turn_state.model_requests,
         )
-        turn_state.outcome = "error"
-        return _build_error_turn_result(turn_state)
-    return None
+    turn_state.outcome = "error"
+    return _build_error_turn_result(turn_state)
 
 
 def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:

@@ -13,7 +13,7 @@ This doc describes one complete foreground turn, from prompt input to post-turn 
 
 | Layer | Bound | Mechanism |
 | --- | --- | --- |
-| model request → tool calls | `MAX_TOOL_CALLS_PER_MODEL_REQUEST` (3) parallel tool calls per response; `TOOL_CAP_HARD_STOP_CONSECUTIVE` (3) consecutive over-cap requests end the turn | `_CallSeamToolset.call_tool` rejects the `(cap+1)`-th call; the consecutive-violation streak is finalized at the run boundary in `_execute_run` and read by `_check_turn_caps` |
+| model request → tool calls | `MAX_TOOL_CALLS_PER_MODEL_REQUEST` (3) parallel tool calls per response; `TOOL_CAP_HARD_STOP_CONSECUTIVE` (3) consecutive over-cap requests end the turn, surfacing the model's final answer if the capped run produced one (`outcome="continue"`, with a cap-stop status), else `outcome="error"` | `_CallSeamToolset.call_tool` rejects the `(cap+1)`-th call; the consecutive-violation streak is finalized at the run boundary in `_execute_run` and read by `_check_turn_caps` |
 | run + turn → model requests | `max_model_requests_per_turn` (40; `0` disables) caps total model requests **across all runs in the turn**, checked **before every request** | `_execute_run` passes `UsageLimits(request_limit=...)` (resolved by `_resolve_request_limit`). co threads one turn-scoped `RunUsage` across every run (`usage=` carried forward, reassigned from each result), so the SDK's `check_before_request` (`usage.requests >= request_limit`) bounds the whole turn and fires **mid-run** — a single autonomous tool-loop cannot run past it. Surfaces as `UsageLimitExceeded`, caught in `run_turn` → error `TurnResult` |
 
 There is no separate open run-level ceiling: the turn cap *is* the run limit, because the `RunUsage` it is checked against is turn-scoped (carried across approval-resume and length-continuation retries). Enforcement is **before-request** (the request that *would* exceed the cap is blocked), not boundary-inclusive — a turn that legitimately runs exactly `max_model_requests_per_turn` requests and stops completes successfully; only a run continuing past the cap is interrupted.
@@ -142,7 +142,7 @@ Turn-scoped mutable state is explicit in `_TurnState`:
 | `tool_approval_decisions` | `DeferredToolResults` consumed by the next resume hop |
 | `outcome` / `interrupted` | final turn outcome flags |
 | `model_requests` | `ModelResponse` count accumulator across all runs this turn (reporting only; the request cap is SDK-enforced — see §1) |
-| `tool_cap_hard_stop` | set by `_run_approval_loop` when consecutive violations reach threshold; drives hard-stop exit in `run_turn` |
+| `tool_cap_hard_stop` | set by `_run_approval_loop` when consecutive violations reach threshold; drives the hard-stop exit in `run_turn` (`_check_turn_caps` surfaces the run's final answer when present, else returns an error) |
 
 Cross-cutting turn state that lives on `deps.runtime` instead:
 
@@ -329,6 +329,8 @@ Error matrix:
 | `ModelAPIError` (network errors exhausted by SDK) | set `outcome='error'` and return `_build_error_turn_result()` |
 | `TimeoutError` (run hang guard) | no retry; set `outcome='error'` and return `_build_error_turn_result()` |
 | `UnexpectedModelBehavior` | no retry; surface as a user-facing status message, set `outcome='error'` and return `_build_error_turn_result()` |
+| `UsageLimitExceeded` (model-request cap hit mid-run; see §1) | emit a cap-reached status, set `outcome='error'`, record a `model_request_cap` span event, return `_build_error_turn_result()` — the run aborted mid-stream, so there is no final answer to surface |
+| tool-call hard-stop (`tool_cap_hard_stop` latched; see §1) | **not unconditionally an error** — the run already completed, so `_check_turn_caps` surfaces the model's final answer as `outcome='continue'` (with a cap-stop status) when one exists; only when there is no usable answer (output is `DeferredToolRequests`, empty, or absent) does it set `outcome='error'` and return `_build_error_turn_result()` |
 | `KeyboardInterrupt` / `CancelledError` | return `_build_interrupted_turn_result()` |
 
 Output-limit diagnostics happen only after a successful final run:

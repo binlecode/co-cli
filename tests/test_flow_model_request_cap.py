@@ -217,14 +217,15 @@ def _make_hard_stop_agent() -> Agent:
 
 
 @pytest.mark.asyncio
-async def test_hard_stop_fires_after_consecutive_violations() -> None:
-    """run_turn must return outcome='error' with hard-stop status after 3 consecutive violations.
+async def test_hard_stop_surfaces_final_answer_after_consecutive_violations() -> None:
+    """After 3 consecutive violations the hard-stop must surface the model's final answer.
 
     Flow:
       initial run — model streams approval-required tool → DeferredToolRequests
       resume run  — 3 rounds of MAX_TOOL_CALLS_PER_MODEL_REQUEST+1 noop calls trigger
-                        3 consecutive tool-cap violations → _run_approval_loop hard-stops
-      _check_turn_caps → outcome='error', status 'Tool-call cap exceeded'
+                        3 consecutive tool-cap violations → _run_approval_loop hard-stops,
+                        then the model emits final text "done"
+      _check_turn_caps → outcome='continue', output 'done', cap status still emitted
     """
     deps = _make_capped_deps(max_model_requests=90)
     agent = _make_hard_stop_agent()
@@ -238,7 +239,8 @@ async def test_hard_stop_fires_after_consecutive_violations() -> None:
         frontend=frontend,
     )
 
-    assert turn.outcome == "error", f"expected error outcome; got {turn.outcome!r}"
+    assert turn.outcome == "continue", f"expected surfaced answer; got {turn.outcome!r}"
+    assert turn.output == "done"
     assert any("Tool-call cap exceeded" in s for s in frontend.statuses), (
         f"status must mention 'Tool-call cap exceeded'; got statuses: {frontend.statuses}"
     )
@@ -384,7 +386,9 @@ def _make_streak_then_deferred_agent() -> Agent:
 @pytest.mark.asyncio
 async def test_hard_stop_survives_deferred_exit() -> None:
     """A streak that reaches the threshold must hard-stop even when a deferred exit
-    and a within-cap resume reset the violation counter in between."""
+    and a within-cap resume reset the violation counter in between.
+
+    The latched hard-stop still ends the turn, surfacing the model's final answer."""
     deps = _make_capped_deps(max_model_requests=90)
     agent = _make_streak_then_deferred_agent()
     frontend = HeadlessFrontend(approval_response="y")
@@ -397,7 +401,8 @@ async def test_hard_stop_survives_deferred_exit() -> None:
         frontend=frontend,
     )
 
-    assert turn.outcome == "error", f"expected error outcome; got {turn.outcome!r}"
+    assert turn.outcome == "continue", f"expected surfaced answer; got {turn.outcome!r}"
+    assert turn.output == "done"
     assert any("Tool-call cap exceeded" in s for s in frontend.statuses), (
         f"status must mention 'Tool-call cap exceeded'; got statuses: {frontend.statuses}"
     )
@@ -452,7 +457,8 @@ def _make_single_run_runaway_agent() -> Agent:
 
 @pytest.mark.asyncio
 async def test_hard_stop_fires_in_single_run_without_approval() -> None:
-    """A streak reaching the threshold within one run (no deferred tool) must hard-stop."""
+    """A streak reaching the threshold within one run (no deferred tool) must hard-stop,
+    surfacing the model's final answer once the cap latches."""
     deps = _make_capped_deps(max_model_requests=90)
     agent = _make_single_run_runaway_agent()
     frontend = HeadlessFrontend(approval_response="y")
@@ -465,7 +471,78 @@ async def test_hard_stop_fires_in_single_run_without_approval() -> None:
         frontend=frontend,
     )
 
+    assert turn.outcome == "continue", f"expected surfaced answer; got {turn.outcome!r}"
+    assert turn.output == "done"
+    assert any("Tool-call cap exceeded" in s for s in frontend.statuses), (
+        f"status must mention 'Tool-call cap exceeded'; got statuses: {frontend.statuses}"
+    )
+
+
+def _make_hard_stop_no_answer_agent() -> Agent:
+    """Agent that hard-stops with no final text answer to surface.
+
+    Protocol:
+      model calls 1-3 — each streams MAX_TOOL_CALLS_PER_MODEL_REQUEST+1 noop calls
+                        (3 consecutive violations → hard-stop latches)
+      model call 4    — approval-gated call → DeferredToolRequests (initial run ends)
+      model call 5    — approval-gated call again → DeferredToolRequests (resume run)
+    The hard-stop break exits the approval loop with output still a
+    DeferredToolRequests, so there is no usable string answer to surface.
+    """
+    call_count = {"n": 0}
+    _OVER = MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1
+
+    async def stream_fn(
+        messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        call_count["n"] += 1
+        n = call_count["n"]
+        if 1 <= n <= 3:
+            for i in range(_OVER):
+                yield {
+                    i: DeltaToolCall(
+                        name="noop", json_args=f'{{"x":{i}}}', tool_call_id=f"c{n}x{i}"
+                    )
+                }
+        else:
+            yield {0: DeltaToolCall(name="needs_approval", json_args="{}", tool_call_id=f"ap{n}")}
+
+    toolset: FunctionToolset = FunctionToolset()
+
+    async def needs_approval(ctx: RunContext[CoDeps]) -> str:
+        return "approved"
+
+    async def noop(ctx: RunContext[CoDeps], x: int) -> str:
+        return f"noop {x}"
+
+    toolset.add_function(needs_approval, requires_approval=True)
+    toolset.add_function(noop, requires_approval=False)
+
+    return Agent(
+        FunctionModel(stream_function=stream_fn),
+        deps_type=CoDeps,
+        output_type=[str, DeferredToolRequests],
+        toolsets=[_CallSeamToolset(toolset)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_without_answer_errors() -> None:
+    """A hard-stop whose run produced no final text answer must still return error."""
+    deps = _make_capped_deps(max_model_requests=90)
+    agent = _make_hard_stop_no_answer_agent()
+    frontend = HeadlessFrontend(approval_response="y")
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="hard stop no answer",
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
+
     assert turn.outcome == "error", f"expected error outcome; got {turn.outcome!r}"
+    assert turn.output is None
     assert any("Tool-call cap exceeded" in s for s in frontend.statuses), (
         f"status must mention 'Tool-call cap exceeded'; got statuses: {frontend.statuses}"
     )
