@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.441]
+
+Harden the foreground turn against runaway/wedged loops: the run-loop timeout becomes a stall detector, the model-request cap is enforced mid-run, and the tool-call hard-stop surfaces the model's answer instead of discarding it.
+
+- **Run-loop timeout → stall detector** — `_execute_run` no longer wraps the whole run in an absolute `asyncio.timeout(120s)` deadline (which killed legitimate long-but-progressing runs and fired below a single tool's own 300s budget). A `_StallTimer` re-arms on each stream event and disarms while any tool is in flight, so model-generation liveness is bounded by the loop and tool liveness by each tool's own timeout. A genuine provider stall still terminates the turn.
+- **Model-request cap enforced mid-run** — `_execute_run` now passes `UsageLimits(request_limit=max_model_requests_per_turn)` (via `_resolve_request_limit`) instead of `None`. Because one turn-scoped `RunUsage` is threaded across all runs, the SDK's before-request check bounds the whole turn and fires *mid-run* — a single autonomous tool-loop on auto-approved tools can no longer run past the cap (previously only the per-run wall clock bounded it). Surfaces as `UsageLimitExceeded`, caught in `run_turn`; the redundant boundary check is dropped from `_check_turn_caps`.
+- **Tool-call hard-stop surfaces the final answer** — when the 3-consecutive-over-cap hard-stop latches, `_check_turn_caps` now returns the capped run's final text as `outcome='continue'` (with the cap-stop status) instead of always erroring; it falls back to an error only when there is no usable answer.
+- **Refactor**: `run_turn`'s success path extracted to `_finalize_run`; the `ModelHTTPError` handler to `_handle_model_http_error`; request-limit resolution to `_resolve_request_limit` — keeping both functions under the complexity gate.
+- **Spec**: `core-loop.md` §1 bounds table, state-var table, and error matrix rewritten to the mid-run cap and continue-or-error hard-stop semantics. `timeouts.py` docstring updated to the dual stall/tool-budget model.
+- **Tests**: `test_flow_orchestrate_stall_timeout.py` (stall vs steady-progress vs long-tool); request-cap mid-stream interruption and before-request semantics in `test_flow_model_request_cap.py`; hard-stop answer-surfacing and no-answer-error coverage.
+
 ## [0.8.439]
 
 Fix the tool-call-cap hard-stop being silently erased when a maxed violation streak crosses a deferred-tool exit.
