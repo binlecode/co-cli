@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.443]
+
+Run background dream-daemon derivations (profile synthesis, memory review, skill review) in non-reasoning mode, fixing an intermittent output truncation.
+
+- **`run_standalone` defaults to noreason settings** — `co_cli/agent/run.py` now falls back to `deps.model.settings_noreason` instead of `deps.model.settings` when no explicit `model_settings` override is passed. `run_standalone` is exclusively the daemon background path (profile synthesis, memory review, skill review); these derivations carry their reasoning techniques wholly in the prompt, so model-level thinking was redundant. Reasoning mode (`think=True`, 4096-token cap) let thinking tokens contend against the cap and intermittently truncate the output; noreason disables thinking and lifts the cap to 8192. Matches hermes doctrine (background derivations never reason) and co's own `llm/call.py` convention. Callers that need reasoning can still pass an explicit override.
+
 ## [0.8.441]
 
 Harden the foreground turn against runaway/wedged loops: the run-loop timeout becomes a stall detector, the model-request cap is enforced mid-run, and the tool-call hard-stop surfaces the model's answer instead of discarding it.

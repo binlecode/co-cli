@@ -35,7 +35,11 @@ async def run_standalone(
         deps: Already-forked deps (caller did fork_deps_for_reviewer).
         prompt: User prompt.
         budget: Request limit override (defaults to spec.default_budget).
-        model_settings: Optional override; defaults to deps.model.settings.
+        model_settings: Optional override. Defaults to deps.model.settings_noreason —
+            standalone runs are background daemon derivations (synthesis, review), which
+            never reason at the model level (reasoning techniques live wholly in the
+            prompt); thinking-off also lifts the output cap. Pass an override to force
+            reasoning settings.
     """
     from co_cli.agent.build import build_task_agent
     from co_cli.observability.tracing import pop_span, push_span
@@ -44,7 +48,7 @@ async def run_standalone(
     if deps.model is None:
         raise ValueError(f"{spec.name}: run_standalone requires deps.model to be set.")
     request_limit = budget if budget else spec.default_budget
-    settings = model_settings if model_settings is not None else deps.model.settings
+    settings = model_settings if model_settings is not None else deps.model.settings_noreason
     agent = build_task_agent(spec, deps, deps.model.model)
 
     agent_name = getattr(agent, "name", None) or "<unknown>"
