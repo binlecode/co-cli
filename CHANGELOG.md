@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.434]
+
+Model-profile 03 — ship `overlays/weak_local.md` and neutralize the BASE rule layer so it is model-wisdom-agnostic (works for a strong or weak model).
+
+- **Weak scaffolding relocated out of BASE** into `co_cli/context/overlays/weak_local.md`: three sections moved whole (`Execution`, `When NOT to over-plan`, `Error recovery`) and two split — the `Intent classification` taxonomy and the `Completeness` self-verify checklist move to the overlay. `05_workflow.md` is now empty.
+- **Embedded universals re-homed in BASE** (not lost): the state-mutation gate → `02_safety.md` (`## State mutation`); the `todo_read` completion gate → `04_tool_protocol.md` (`## Todo completion`).
+- **New `## Conciseness` overlay reflex** (no preamble/postamble with bad-phrase citations, density ceiling, lead-with-outcome), borrowed from opencode/openclaw/hermes/codex convergence.
+- **Composition**: weak_local = base (22 sections) + overlay (6) = 28; frontier composes to base alone, shedding all weak reflexes while keeping both re-homed universals. Floor guards green (17,732 ≤ 25,000 ceiling).
+- **Eval + tests**: `eval_rule_compliance.py` inventory re-homed (base ↔ overlay); composition and model-profile seam tests updated to the shipped reality (overlay ships; base no longer carries the relocated reflexes).
+
 ## [0.8.432]
 
 Model-profile 1b — append-only base + dual-overlay prompt-composition mechanism (profile-agnostic infra; freezes 1a's cleaned base, ships byte-identical with both overlays empty).
