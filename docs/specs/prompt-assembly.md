@@ -130,7 +130,7 @@ Four dynamic instruction functions are registered via `agent.instructions()` and
 | Dynamic instruction | Behavior |
 | --- | --- |
 | `safety_prompt` | detects identical-tool-call streaks and shell-error streaks; returns warning text injected into the instructions context |
-| `current_time_prompt` | returns current date/time string at tail position — ephemeral grounding just before the model sees the user turn; keeps Block 0 cache-stable |
+| `current_time_prompt` | returns current date/time string — ephemeral grounding kept out of the static Block 0 (it is a dynamic instruction), so the changing timestamp never freezes into the cached prefix |
 | `deferred_tool_awareness_prompt` | re-reads `ctx.deps.tool_catalog` each turn — newly registered deferred tools surface immediately without restart |
 | `skill_manifest_prompt` | re-reads `ctx.deps.skill_catalog` each turn — newly created skills become visible to the model on the very next turn |
 
