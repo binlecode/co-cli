@@ -42,7 +42,7 @@ delta is attributable to the ablated section and not to a prompt-offset shift.
 
 Run (long-form, ~6 probes at N samples per arm; tail the log, RCA-first on slow calls):
     ``uv run python evals/eval_rule_compliance.py``
-Inventory only (no LLM, validates the span parser + emits the 25-section table):
+Inventory only (no LLM, validates the span parser + emits the 28-section table):
     ``uv run python evals/eval_rule_compliance.py --inventory``
 Output: ``evals/_outputs/rule-compliance-<ts>-run.jsonl``
 """
@@ -267,6 +267,13 @@ _INVENTORY: tuple[tuple[str, str, str, str, str], ...] = (
     ("02_safety", "Approval", "OUT-OF-REACH", "-", "system-handled confirmation; no tool signal"),
     ("02_safety", "Injected content", "OUT-OF-REACH", "-", "refusal/content; no tool signal"),
     (
+        "02_safety",
+        "State mutation",
+        "OUT-OF-REACH",
+        "-",
+        "negative guardrail (don't persist during inquiry); no positive tool signal",
+    ),
+    (
         "03_reasoning",
         "Verification",
         "PROBED",
@@ -303,38 +310,10 @@ _INVENTORY: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "04_tool_protocol",
-        "Error recovery",
-        "OUT-OF-REACH",
-        "-",
-        "multi-turn retry behavior; not single-turn observable",
-    ),
-    (
-        "05_workflow",
-        "Intent classification",
-        "OUT-OF-REACH",
-        "-",
-        "internal classification; no tool signal",
-    ),
-    (
-        "05_workflow",
-        "Execution",
-        "PROBED",
-        "todo_write",
-        "decompose multi-step work into a todo list",
-    ),
-    (
-        "05_workflow",
-        "Completeness",
+        "Todo completion",
         "OBSERVABLE-OUT-OF-HARNESS",
         "todo_read",
         "needs a prior todo_write this session; multi-turn state, not single-turn",
-    ),
-    (
-        "05_workflow",
-        "When NOT to over-plan",
-        "OUT-OF-REACH",
-        "-",
-        "response length/tone; no tool signal",
     ),
     (
         "06_skill_protocol",
@@ -392,6 +371,48 @@ _INVENTORY: tuple[tuple[str, str, str, str, str], ...] = (
         "-",
         "negative (what NOT to save); no positive tool signal",
     ),
+    (
+        "weak_local",
+        "Intent classification",
+        "OUT-OF-REACH",
+        "-",
+        "internal classification; no tool signal",
+    ),
+    (
+        "weak_local",
+        "Execution",
+        "PROBED",
+        "todo_write",
+        "decompose multi-step work into a todo list",
+    ),
+    (
+        "weak_local",
+        "Completeness",
+        "OUT-OF-REACH",
+        "-",
+        "self-verify checklist; response content; no tool signal",
+    ),
+    (
+        "weak_local",
+        "When NOT to over-plan",
+        "OUT-OF-REACH",
+        "-",
+        "response length/tone; no tool signal",
+    ),
+    (
+        "weak_local",
+        "Error recovery",
+        "OUT-OF-REACH",
+        "-",
+        "multi-turn retry behavior; not single-turn observable",
+    ),
+    (
+        "weak_local",
+        "Conciseness",
+        "OUT-OF-REACH",
+        "-",
+        "response content/tone (no preamble/postamble, density); no tool signal",
+    ),
 )
 
 
@@ -438,7 +459,7 @@ _PROBES: tuple[SectionProbe, ...] = (
         fixture=None,
     ),
     SectionProbe(
-        rule_stem="05_workflow",
+        rule_stem="weak_local",
         section_title="Execution",
         label="decompose multi-step work into a todo list",
         user_input=(

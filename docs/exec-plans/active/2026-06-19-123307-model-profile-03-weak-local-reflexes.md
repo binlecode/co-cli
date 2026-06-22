@@ -1,80 +1,157 @@
-# Model-profile 03 — Weak-local reflex calibration + base Recall fix + KEEP record (absorbed from the deleted rules-reflex-migration-backlog)
+# Model-profile 03 — weak-local overlay (`overlays/weak_local.md`) + BASE neutralization
 
-Task type: evidence-gated core-prompt content — probe the 3 judgment-call reflex candidates the prior audit flagged, rewrite only those that under-fire on the configured local model, scope them to the `weak_local` profile, apply the model-agnostic Recall fix, and record the KEEP decisions. Plan C of the 3-plan model-profile split. Absorbs the live content of the never-implemented `rules-reflex-migration-backlog` (now deleted).
+## Goal
+Two coupled outcomes:
+1. **Neutralize BASE.** Today's BASE is calibrated to the weak local model — it carries compensatory scaffolding (verify-first reflexes, decompose-into-todos, recall reminders, act-this-turn, thoroughness nags) that a strong model does not need. Move that weak-specific scaffolding **out of BASE into `overlays/weak_local.md`**, leaving BASE model-agnostic (works for heavy or weak — model-wisdom-agnostic).
+2. **Author `overlays/weak_local.md`.** It holds the scaffolding relocated from BASE **plus** additional weak-model techniques co lacks, borrowed from the peer-converged parity.
 
-## Plan group (model-profile)
-- **01** (`2026-06-19-114937-model-profile-01-seam`) — profile seam + gemini budget (mechanism). **Prerequisite.**
-- **02** (`2026-06-19-123306-model-profile-02-frontier-overlay`) — frontier overlay content.
-- **03 (this plan)** — weak-local reflexes + base Recall fix + KEEP record.
+Result: **BASE = neutral core; `overlays/weak_local.md` = everything weak-specific.** Mechanism is shipped (Plan 1b). Content only.
 
-## Context
-The prior reflex-migration audit (increment 1) classified all 28 rule sections — 19 reflex / 9 judgment-call — and found **no judgment-call section carries live failure evidence today.** The genuine reflex-rewrite candidates are **three**, each lacking evidence:
-- `01 ## Relationship`
-- `06 ## Create`
-- `07 ## Curation` (promotion)
+**Absorbs Plan 03b (deleted).** The measure-then-author split is gone; this is one authoring plan. Peer convergence is the evidence — not co's own ablation.
 
-The honest move is evidence-first: probe whether each under-fires on the configured local model, rewrite only what does. Under the new profile architecture (Plan A), these reflexes are **`weak_local`-scoped** — they strengthen the calibration for the model whose limits they counter, and do NOT enter the shared base (where they would re-widen the gemini gap that Plan B is stripping). If Plan B measures any of them frontier-counterproductive, this plan keeps them out of the frontier overlay.
+## Peer sources (converged parity)
+- hermes weak-enforcement guidance (`GOOGLE_MODEL_OPERATIONAL_GUIDANCE`, `prompt_builder.py`)
+- opencode `gemini.txt` (flash/weak tier, `system.ts:25-39`)
+- codex `prompts/`, openclaw overlay (where they special-case a less-steerable model)
+- **co's own weak-tuned BASE content** — already weak-specific; it relocates into the overlay.
 
-Also folded from the deleted backlog:
-- **07 Recall stale-phrasing fix** — drop "this user's specific setup or preferences" from the `07 ## Recall` trigger; the always-injected USER.md profile owns that now (shipped `402203e1`). Model-agnostic accuracy fix.
-- **KEEP decisions** — 4 sections are deliberately not reflexes and stay as-is.
-- The backlog's `04 Strategy` split + persistence-dedup hand-offs are NOT here — they belong to the C2 persistence consolidation, handed off by the DELIVERED `2026-06-18-151602` to a future `behavioral-rules-persistence-consolidation` plan.
-
-## Problem & Outcome
-**Problem.** Three judgment-call sections may under-fire on the local model, but none has been measured; bulk-rewriting on faith is the rejected over-build, and leaving them un-probed stalls the calibration with its backlog un-actioned.
-
-**Failure cost.** (1) Skip → the 3 keep under-firing silently. (2) Over-act → rewrite stances/scaffolded sections that should stay, or rewrite candidates without evidence, destabilizing the core prompt with no proven lift.
-
-**Outcome.** A probe verdict per candidate (under-fires / fine / unmeasurable); evidence-gated `weak_local`-scoped reflex rewrites for only the under-firing ones; explicit recorded KEEP decisions for the 4 stay-sections; the 07 Recall stale-phrasing fix.
-
-**Shippable contract:** the probe verdicts + the reflex rewrites that clear their gate + the Recall fix + the KEEP record. A candidate measured fine/unmeasurable is KEPT (not rewritten) and reported — a valid outcome.
-
-## Behavioral Constraints
-- **Evidence-gated:** ablation-gated via `eval_rule_compliance.py` (N=40, threshold+1SE ≈0.59 per the noise floor) where the section is probeable; behavioral-smoke-gated (`tmp/weather_smoke.py` pattern) where multi-turn; review-gated rubric-conformance (token-neutral, NO behavioral claim) only where neither fits — and never described as measured-safe.
-- **Stances are not defects.** Do not "fix" value anchors into reflexes.
-- Rule prose = core-level review; floor guards (`test_instruction_floor_coupling` F5 + `test_instruction_budget`) on every rule edit; no `tool_name(` in prose; net floor delta ≤ 0 per edit; preserve `##` heading text verbatim (`_INVENTORY` keyed `(stem,title)`, `--inventory` after any edit); rubric = `.agent_docs/rule-authoring-standard.md`.
-- All eval data real; centralized eval settings; `ensure_ollama_warm` outside `asyncio.timeout`; tail the log + RCA-first on slow calls.
+The peer 4-form rubric for a weak-model reflex (borrowed as form): imperative not descriptive; observable trigger first; concrete tool named (backtick bare name, no `tool_name(`); quantified limit where applicable; bad-phrase citation for output/conciseness reflexes; hard block (NEVER/MUST) only on critical paths.
 
 ## Scope
-### In scope
-- Probe campaign for `01 Relationship`, `06 Create`, `07 Curation`-promotion → per-candidate verdict.
-- Evidence-gated `weak_local`-scoped reflex rewrites for the under-firing ones (rubric-satisfying, body-only).
-- Recorded KEEP decisions for `01 Thoroughness-over-speed`, `05 When-NOT-to-over-plan` (value-anchor stances), `01 Anti-sycophancy`, `05 Intent-classification` (scaffolded-mild).
-- `07 ## Recall` stale-phrasing fix (model-agnostic base accuracy).
+**In:** (a) identify which of today's BASE `##` sections are weak-model-specific scaffolding vs genuinely universal, and relocate the weak-specific ones into `overlays/weak_local.md` — whole-section where clean, or split where a universal is embedded (the weak half relocates, the universal half re-homes within BASE per the split table); (b) borrow weak-model techniques co lacks from peer parity (e.g. a conciseness/no-chitchat reflex with bad-phrase citation) into the same overlay.
+**Out:** the frontier overlay (Plan 02); the mechanism (1b); the heavy model. Genuinely universal rules (safety, approval, core tool/memory mechanics, output format) **stay in BASE** — they are not weak-specific.
 
-### Out of scope
-- The seam (Plan A); frontier content (Plan B); `04 Strategy` split + persistence dedup (future `behavioral-rules-persistence-consolidation` / C2 plan); vision; the 19 already-reflex sections; any candidate that is unmeasurable AND not smoke-reproducible (deferred, recorded).
+## Proposed split (recorded for G1)
+
+**Test:** relocate a section only if it is **dead-weight for a strong reasoner** (it does that natively). If a strong model still benefits → universal → stays in BASE. A weak model needing something *more* does not make it weak-*specific*. Because overlays are additive, over-keeping in BASE is harmless (frontier carries minor dead weight); under-keeping risks stripping a universal — so **when in doubt, keep in BASE.**
+
+**Whole-section relocation is the default, NOT a hard rule (revised at G1).** Section boundaries were drawn for a weak-tuned BASE, so three sections mix a relocatable weak scaffold with an embedded *universal* rule. Where the weak portion is substantial enough to be worth removing from frontier AND a genuine universal is bundled with it, **split the section**: relocate the weak half verbatim to the overlay, keep/re-home the universal half in BASE. Splitting preserves weak parity (weak_local = base + overlay still contains both halves) and only changes frontier (it keeps the universal, sheds the weak scaffold) — exactly the intent. Where the weak portion is merely *minor dead weight*, keep the section whole in BASE (the over-keep-is-harmless principle wins; no split).
+
+**→ Relocate WHOLE to `overlays/weak_local.md` (verbatim — clearly compensatory, no embedded universal):**
+| Section | Why dead-weight for a strong model |
+|---|---|
+| `04 Error recovery` | loop-prevention; strong models don't repeat identical failed calls |
+| `05 Execution` | act-this-turn / don't-end-on-intent; strong models act in-turn natively |
+| `05 When NOT to over-plan` | over-planning calibration; strong models calibrate length natively |
+
+**→ SPLIT (relocate weak half; keep universal half in BASE):**
+| Section | Relocate to overlay (weak scaffold) | Keep in BASE (embedded universal) |
+|---|---|---|
+| `05 Intent classification` | directive/deep/shallow taxonomy + "default to Shallow" + "act directly for shallow" — strong models infer intent | the state-mutation gate ("for Deep Inquiry, do not modify files or persist state until an explicit Directive; exception: durable memory saves always permitted"). Universal behavioral guardrail — a frontier model needs it or it writes files mid-inquiry. Re-home to `02_safety` (approval-adjacent: governs when state mutation is permitted); dev's call, `03_reasoning` is the alternative. |
+| `05 Completeness` | sub-goal verification + the 5-point validation checklist (Correctness/Grounding/Format/Side-effect/Blockers) — strong models self-verify | the `todo_read` gate ("if todo_write was called this session, call todo_read and confirm no pending/in_progress items before responding done"). Core tool mechanics — the keep-rule retains those in BASE. Re-home to `04_tool_protocol`. |
+
+**→ Keep WHOLE in BASE (universal — a strong model still benefits):** all of `01` (stances), `02` (safety), `06` (skill mechanics), `07` (memory mechanics); plus `03 Verification` (verify-state / tool>training / deps / stale-facts — universal correctness), `03 Resolving contradictions` (surface conflicts, don't flatten — universal quality), `03 Two kinds of unknowns` (discover-before-asking is minor frontier dead weight, but the section embeds universal interaction style — "present 2-4 options with a recommended default", "state assumptions explicitly"; over-keep is harmless, not worth a split), `04 Responsiveness` (preamble style), `04 Strategy` (depth-over-breadth / prerequisites / parallelization — universal good practice).
+
+Net: `05 workflow` empties entirely (taxonomy + Execution + Completeness-self-verify + When-NOT relocate; the two embedded universals re-home to `02`/`04`); `03 reasoning` keeps Verification + Resolving contradictions + Two kinds of unknowns; `04 tool_protocol` drops Error recovery and gains the re-homed `todo_read` gate. Two splits each add one `##` heading, so the weak_local profile inventory goes **25 → 27** sections (content preserved; an embedded universal and its weak scaffold are now separate headings) — TASK-1's `--inventory` count is **27 for weak_local**, not unchanged. `06 Discovery` / `07 Recall` firing reflexes stay in BASE; TASK-2 may sharpen weak firing in the overlay if peer parity supports it.
+
+**Ordering consequence (accepted):** relocated sections move from their interleaved numbered position to the trailing overlay block (base first, overlay appended). weak_local *content* is preserved; *order* is not. Inherent to additive overlays, accepted as-is.
+
+**Plan 02 coordination:** Plan 02 borrows frontier "keep-going/persistence" for `overlays/frontier.md` while this plan relocates co's act-this-turn/thoroughness (`05 Execution`) into `overlays/weak_local.md`. Independent files, no mechanical conflict — but the same "don't stop early" concept will live in both overlays. Author them so frontier and weak don't drift into contradictory versions of it.
 
 ## Tasks
 
-**TASK-1 — Probe campaign for the 3 candidates (ASSESS / measure; no rule edits)**
-- files: `evals/eval_rule_compliance.py` (probe additions only if a single-turn probe genuinely fits), this plan (append verdict table)
-- done_when: each of `01 Relationship`, `06 Create`, `07 Curation`-promotion has a recorded verdict — **under-fires** (ablation Δ or reproduced behavioral failure), **fine** (steers / scaffolding suffices), or **unmeasurable** (no single-turn probe fits, no smoke reproduces); any new probe runs at N=40 and does not change the section set or `_INVENTORY`; no rule `.md` edited. An `unmeasurable` candidate is deferred, not promoted.
-- success_signal: a per-candidate evidence verdict exists; TASK-2 acts only on `under-fires`.
-- prerequisites: Plan A delivered (so a rewrite can be `weak_local`-scoped)
+**✓ DONE — TASK-1 — Neutralize BASE: relocate weak-specific sections into `overlays/weak_local.md`**
+- files: `co_cli/context/rules/*.md` (remove relocated sections), `co_cli/context/overlays/weak_local.md` (create + add them), this plan (record the keep-in-BASE vs relocate decision per `##` section)
+- done_when: the relocations in the recorded split above are applied — 3 sections moved **whole** and 2 sections **split** (weak half → `overlays/weak_local.md` verbatim; universal half re-homed in BASE: state-mutation gate → `02_safety`, `todo_read` gate → `04_tool_protocol`); BASE retains the recorded keep-whole set; `uv run python evals/eval_rule_compliance.py --inventory` passes with the **weak_local profile at 27 sections** (25 + 2 split headings; content preserved, not byte-identical); floor guards pass (`tests/test_instruction_budget.py`); full suite passes.
+- success_signal: BASE reads as model-agnostic but still carries every universal (the two split-out gates re-homed, not lost); `overlays/weak_local.md` holds the relocated weak scaffolding; weak_local's assembled prompt (base+overlay) preserves all of today's content (reordered, not byte-identical); frontier's BASE-only prompt sheds the weak scaffolding while keeping both universal gates.
+- prerequisites: Plan 1b shipped.
 
-**TASK-2 — Evidence-gated weak-local reflex rewrites (only `under-fires` candidates)**
-- files: the specific rule/overlay file(s) for the `under-fires` candidates (`01_interaction.md` / `06_skill_protocol.md` / `07_memory_protocol.md` or the `weak_local` overlay, per Plan A's mechanism)
-- done_when: each `under-fires` candidate is rewritten as a rubric-satisfying low-inference reflex (observable cue, imperative, concrete tool named, no `tool_name(`), body-only with `##` heading preserved, scoped to `weak_local`; net floor delta ≤ 0; floor guards pass; `--inventory` count unchanged; the TASK-1 gate re-runs and confirms the rewrite steers (≥ threshold+1SE) or the smoke shows corrected behavior; core-level review recorded. If TASK-1 found zero `under-fires`, this is a no-op recorded as such. Any candidate Plan B flags frontier-counterproductive is confirmed `weak_local`-only here.
-- success_signal: measured-under-firing sections now steer on the local model; no faith rewrites; gemini gap not re-widened.
-- prerequisites: TASK-1 (acts only on `under-fires`)
-
-**TASK-3 — Recorded KEEP decisions + 07 Recall stale-phrasing fix (review-gated)**
-- files: `co_cli/context/rules/07_memory_protocol.md` (stale-phrasing fix only), this plan (KEEP rationale)
-- done_when: KEEP decisions for `01 Thoroughness-over-speed`, `05 When-NOT-to-over-plan`, `01 Anti-sycophancy`, `05 Intent-classification` recorded with one-line rationale each; AND the `07 ## Recall` trigger drops "this user's specific setup or preferences" — body-only, `##` heading unchanged, net floor delta ≤ 0, floor guards pass, `--inventory` unaffected, stale-anchor grep clean; full suite passes; core-level review recorded (value: accuracy; NO behavioral claim).
-- success_signal: stay-sections explicitly decided; the stale Recall trigger corrected.
-- prerequisites: none (file-disjoint from TASK-2 unless TASK-1 verdicts `07 Curation` as `under-fires` → then serialize on `07_memory_protocol.md`, floor-account once)
+**✓ DONE — TASK-2 — Borrow weak-model techniques co lacks from peer parity**
+- files: `co_cli/context/overlays/weak_local.md` (append), `evals/eval_rule_compliance.py` (one `_INVENTORY` row per net-new section; `_PROBES` entry if single-turn observable), this plan (record peer source per section)
+- done_when: weak-specific techniques the peers converge on that co lacks are authored as append-only `##` sections in `overlays/weak_local.md` in the 4-form rubric (imperative, observable-cue-first, concrete backtick tool, quantified where applicable, hard-block only on critical paths, no `tool_name(`); each records its peer source(s); `--inventory` passes; floor guards pass (base+overlay ≤ `INSTRUCTION_BLOCK_CEILING`); full suite passes. If a candidate technique co already covers in BASE/relocated content, it is recorded as already-covered, not duplicated.
+- success_signal: `overlays/weak_local.md` adopts the weak-model techniques co was missing; no duplication of relocated content.
+- prerequisites: TASK-1.
 
 ## Testing
-- Floor guards on every rule edit; `--inventory` after any edit (28-count + span reassembly). NOT `test_orchestrator_schema_budget` (tool-schema scoped).
-- TASK-1 ablation N=40/arm only where a single-turn probe fits; smokes follow `tmp/weather_smoke.py`. Tail the log; RCA-first on slow calls.
-- No new structural/fitness tests on rule files; behavioral pytest (if any) asserts observable behavior only (`feedback_functional_tests_only`).
+- `--inventory` + floor guards + full suite on any rules/overlay change.
+- Optional (not a gate): behavioral smoke on the weak ollama path to spot-check an authored section steers the weak model. Peer convergence is the authoring basis; smoke is a spot-check.
+- No structural/fitness tests on rule/overlay files.
 
-## Open Questions
-1. **07 Recall fix — here or standalone `/sync-doc`?** Default: include in TASK-3 (it touches `07`, which TASK-2 may also touch if `07 Curation` is `under-fires` — single-owner).
-2. **Probeability of 06 Create / 07 Curation-promotion.** Both gate an inference ("is it reusable" / "is it useful") behind an observable sub-cue. Default: attempt ablation; fall back to smoke; accept `unmeasurable` if neither fits.
+## Decisions
+**Reset 2026-06-22 (first-principle rewrite).** Supersedes the prior measure-only framing (ablation Δ → "live-on-weak set" → 03b authoring → joint re-partition). That split was over-engineered: ablation only tests whether co's *existing* rules under-fire, and is structurally blind to *missing* peer techniques — so it can never tell you what to *add*. The real job is (1) make BASE neutral by relocating weak scaffolding into the weak overlay, and (2) borrow the weak-model techniques the peers converged on. Plan 03b folds in here and is deleted. The earlier ablation run (Verification steers weak Δ+0.68, Recall saturated/inconclusive) is a discarded artifact, not a gate.
 
-## Final — Team Lead
-> Gate 1 — PO + TL review required before proceeding.
-> Right problem (evidence-first migration of the audited backlog, weak-local-scoped)? Correct scope (3 candidates probed; 4 keeps; Recall fix; structural split stays with consolidation)?
-> Prerequisite: Plan A delivered. Once approved, run: `/orchestrate-plan 2026-06-19-123307-model-profile-03-weak-local-reflexes` then `/orchestrate-dev`.
+## Delivery Summary — 2026-06-22
+
+### TASK-1 — relocation record (per `##` section)
+Applied exactly as recorded in the G1 split:
+
+**Relocated WHOLE → `overlays/weak_local.md` (verbatim):**
+| Section | From | Inventory key now |
+|---|---|---|
+| Execution | `05_workflow` | `(weak_local, Execution)` |
+| When NOT to over-plan | `05_workflow` | `(weak_local, When NOT to over-plan)` |
+| Error recovery | `04_tool_protocol` | `(weak_local, Error recovery)` |
+
+**SPLIT (weak half → overlay verbatim; universal half re-homed in BASE, reworded to drop the relocated taxonomy vocabulary so it stands alone for a frontier model):**
+| Section | Weak half → overlay | Universal half → BASE |
+|---|---|---|
+| Intent classification | taxonomy + default-Shallow + act-directly-for-Shallow + research-thoroughly-for-Deep → `(weak_local, Intent classification)` | state-mutation gate → new `## State mutation` in `02_safety` (reworded: "When a request is for analysis or information only, do not modify files or persist state until the user explicitly asks…" — no longer references Directive/Deep Inquiry) |
+| Completeness | verify-sub-goals + 5-point validation checklist → `(weak_local, Completeness)` | `todo_read` gate → new `## Todo completion` in `04_tool_protocol` |
+
+**Kept WHOLE in BASE (universal):** all of `01`, `02` (+ new State mutation), `06`, `07`; `03` Verification / Resolving contradictions / Two kinds of unknowns; `04` Responsiveness / Strategy (+ new Todo completion). `05_workflow.md` is now empty (kept as a file so `_collect_rule_files` contiguity 01–07 holds; stripped-empty content is skipped by `build_rules_block`).
+
+Net: base 22 sections + weak_local overlay 5 = **27** (`--inventory` green for the weak_local profile, the configured Ollama backend). Frontier composition (base only) = 22, sheds all 5 weak reflexes while keeping both re-homed universals.
+
+### TASK-2 — peer-source record (per authored section)
+One net-new overlay section authored (`overlays/weak_local.md`), bringing weak_local to **28**:
+
+| Section | Technique | Peer convergence (verified file:line) | Observable? |
+|---|---|---|---|
+| `## Conciseness` | no preamble/postamble (bad-phrase citations), few-sentence density ceiling, don't-repeat-prompt, lead-with-outcome for simple requests | opencode `gemini.txt:40-43` (Concise & Direct / Minimal Output <3 lines / No Chitchat); openclaw `gpt5-prompt-overlay.ts:32,70,78` (avoid preambles/restatement, don't narrate routine tool calls, dense replies); hermes `prompt_builder.py:417-429` (`GOOGLE_MODEL_OPERATIONAL_GUIDANCE` Conciseness, gated to Gemini/Gemma); codex `gpt_5_2_prompt.md:220` (concise & factual, no filler) | No — response content/tone only, no tool-call signal → `OUT-OF-REACH`, no probe |
+
+**Already-covered / not duplicated:** output structure (headers/bullets/backticks/`file:line`) is BASE `01 Output format`; per-task completion is BASE `04 Todo completion` + overlay `Completeness`; the "model-family gating" insight (hermes gates to gemini/gemma) is the deferred per-provider axis, not authored here.
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1 | 3 whole + 2 split relocations applied; `--inventory` weak_local = 27; floor guards pass | ✓ pass |
+| TASK-2 | Conciseness reflex authored in 4-form rubric w/ peer sources; `--inventory` passes (28); floor guards pass | ✓ pass |
+
+**Tests:** scoped — 14 (TASK-1) + 7 (TASK-2) passed, 0 failed; floor budget guard 17,732 chars ≤ 25,000 ceiling; F5 deferred-signature guard green. Full suite deferred to `/review-impl`.
+**Doc Sync:** fixed (narrow) — `docs/specs/prompt-assembly.md:46` stale "both overlays are empty" claim updated to describe the shipped weak_local overlay + absent frontier overlay.
+**⚠ Extra files (beyond TASK-1 `files:`, announced):** `evals/eval_rule_compliance.py` (`_INVENTORY` re-homing + `Execution` probe stem; forced by the `--inventory`/full-suite done_when) and `tests/test_profile_rules_composition.py` (the `test_overlays_empty_for_every_profile` invariant is falsified by shipping the overlay; rewritten to assert the new reality).
+
+**Overall: DELIVERED**
+BASE is now model-agnostic (both split-out universals re-homed, none lost); `overlays/weak_local.md` holds all relocated weak scaffolding plus the peer-converged Conciseness reflex; weak_local composition preserves all prior content (reordered) and frontier sheds the weak scaffold while keeping both universals.
+
+## Implementation Review — 2026-06-22
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1 | 3 whole + 2 split relocations; `--inventory` weak_local count; floor guards | ✓ pass | Whole relocations verbatim — `overlays/weak_local.md:17-37` (Execution), `:51-53` (When NOT to over-plan), `:55-66` (Error recovery); confirmed byte-equal to the deleted `05_workflow`/`04_tool_protocol` blocks in `git diff`. Splits: Intent taxonomy → `overlays/weak_local.md:3-15` with the state-mutation gate stripped and re-homed standalone to `02_safety.md:25-30` (`## State mutation`, reworded — no Directive/Deep vocabulary); Completeness checklist → `overlays/weak_local.md:39-49` with the `todo_read` gate excised and re-homed to `04_tool_protocol.md:32-35` (`## Todo completion`). `05_workflow.md` is empty (0 bytes). |
+| TASK-1 | `--inventory` passes | ✓ pass | `eval_rule_compliance.py --inventory` → 28 sections (22 base + 6 `weak_local` overlay), home column correct (`base`/`overlay`); re-homed `State mutation`→base, `Todo completion`→base, relocated 5→overlay. |
+| TASK-2 | Conciseness authored in 4-form rubric, peer sources recorded, no dup | ✓ pass | `overlays/weak_local.md:68-76` — imperative, bad-phrase citations, no `tool_name(` syntax; peer convergence recorded in plan Delivery table (opencode/openclaw/hermes/codex file:line). Already-covered items (output structure, per-task completion) correctly not duplicated. |
+| both | floor guards (base+overlay ≤ ceiling) | ✓ pass | `test_instruction_budget.py::test_instruction_floor_within_budget` PASS (17,732 ≤ 25,000); F5 deferred-signature guard green. |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| Stale test: `test_assembled_prompt_byte_identical_to_base` asserted the now-falsified "overlay provider returns None for default path" contract — broke the full suite (delivery's "full suite passes" was deferred and untrue). Sibling to the `test_overlays_empty_for_every_profile` invariant the delivery did rewrite. | tests/test_flow_model_profile.py:82-99 | blocking | Rewrote to `test_weak_local_overlay_reaches_assembled_prompt` — asserts the seam injects the weak overlay into the assembled prompt for the default path (overlay sections present in full prefix, absent from base-only). Updated stale module docstring (`:1-7`). RCA: stale test (behavior intentionally changed), not a source bug. |
+
+### Scope (extra files in working tree — NOT part of this plan)
+The diff carries files beyond TASK-1/TASK-2 `files:`. **In-scope & announced:** `eval_rule_compliance.py`, `tests/test_profile_rules_composition.py`, `docs/specs/prompt-assembly.md` (narrow doc-sync, verified accurate). Plus my fix to `tests/test_flow_model_profile.py`. **Out of scope — belong to concurrent dream/profile-synthesis & Plan 02 work, must NOT be staged with this ship:**
+```
+⚠ evals/eval_skills.py          — dream skill-reviewer / merge_skills eval coverage
+⚠ evals/eval_user_model.py      — profile-synthesis (W10.D) eval coverage
+⚠ docs/specs/dream.md           — dream user_profile tool surface + run_housekeeping signature
+⚠ docs/reference/RESEARCH-self-learning-co-vs-hermes.md
+⚠ docs/exec-plans/active/2026-06-19-123306-model-profile-02-frontier-overlay.md  (sibling Plan 02)
+⚠ uv.lock
+```
+`/ship` must stage only this plan's files (the 3 rules + `overlays/weak_local.md` + `eval_rule_compliance.py` + the two test files + `prompt-assembly.md` + this plan).
+
+### Tests
+- Command: `uv run pytest`
+- Result: 805 passed, 0 failed (first run halted at 1 stale-test failure; green after the fix above)
+- Log: `.pytest-logs/<timestamp>-review-impl-full.log`
+
+### Behavioral Verification
+- `uv run co --help`: ✓ boots (import + bootstrap + static-prompt assembly graph loads clean)
+- Overlay reaches assembled prompt: ✓ verified via `test_weak_local_overlay_reaches_assembled_prompt` (default ollama→WEAK_LOCAL path composes base + weak overlay) and `--inventory` (28 sections, home column correct)
+- `success_signal` (TASK-1): ✓ BASE sheds the 5 weak reflexes while keeping both re-homed universals (`State mutation`, `Todo completion`); weak_local composition preserves all prior content; frontier (base-only) keeps both gates. (TASK-2): ✓ `Conciseness` adopted, no duplication.
+- LLM-mediated steering (weak model actually obeys the authored reflexes): non-gating — plan basis is peer convergence; behavioral smoke is an optional spot-check, not a gate.
+
+### Overall: PASS
+All relocations applied exactly as recorded in the G1 split; both universal gates re-homed (none lost); Conciseness authored to rubric with peer sourcing; one stale test fixed; suite green; lint clean. Ship gate: stage only this plan's files — six unrelated working-tree files (dream/profile-synthesis + Plan 02 + uv.lock) must be excluded.
+
+**G1 review 2026-06-22 (TL + PO) — CHANGES APPLIED.** The original "no section is split — every relocation verbatim" constraint collided with the plan's own "when in doubt, keep in BASE" test: three relocate-targets embed a universal rule. Resolved by relaxing the constraint to allow splitting where a universal is embedded (whole-relocation stays the default). (A) `05 Intent classification` embeds the state-mutation gate (don't persist until a Directive) — a universal guardrail; split, gate re-homes to `02_safety`. (C) `05 Completeness` embeds the `todo_read` tool-mechanic — core tool mechanics belong in BASE; split, gate re-homes to `04_tool_protocol`. (B) `03 Two kinds of unknowns` embeds universal interaction style (2-4 options, assumption disclosure) but its weak portion is only minor frontier dead weight → kept whole in BASE, no split. Splitting preserves weak parity and only changes frontier (which is the intent). Inventory count for weak_local: 25 → 27. Mechanism verified against source at G1: `build_profile_overlay`/`build_rules_block` (`assembly.py:70-104`), `ModelProfile.WEAK_LOCAL` (`config/llm.py:48`), `--inventory` base→overlay re-home (`eval_rule_compliance.py:158-172`).

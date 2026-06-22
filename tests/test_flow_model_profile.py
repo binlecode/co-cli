@@ -2,8 +2,8 @@
 
 Guards the model-profile-01-seam contract: one ``ModelProfile`` resolved from
 ``config.llm`` supplies the default context budget, the weak-local default stays a
-hard 64k clamp, a user override still wins, and the wired profile-overlay builder is
-a no-op for the default backend (byte-identical assembled prompt).
+hard 64k clamp, a user override still wins, and the wired profile-overlay builder
+injects the shipped weak-local overlay into the default backend's assembled prompt.
 """
 
 from __future__ import annotations
@@ -79,21 +79,27 @@ def test_overlay_provider_immediately_follows_base() -> None:
 
 
 @pytest.mark.asyncio
-async def test_assembled_prompt_byte_identical_to_base() -> None:
-    """The reordered overlay seam contributes nothing while overlays are empty.
+async def test_weak_local_overlay_reaches_assembled_prompt() -> None:
+    """The default (weak-local) path's assembled prompt carries the shipped overlay.
 
-    Assembling the full (reordered) ``ORCHESTRATOR_SPEC`` static prefix equals the
-    prefix with the overlay builder removed entirely — the baseline shape from Plan
-    1a. Unconditional: the overlay file is absent, so this changes no prompt content
-    for the default (weak-local) path regardless of the seam's position.
+    Plan 03 ships ``overlays/weak_local.md``, so for the default (ollama → WEAK_LOCAL)
+    backend the overlay seam contributes the relocated weak scaffolding: assembling the
+    full ``ORCHESTRATOR_SPEC`` static prefix adds the overlay's sections on top of the
+    base-only prefix (overlay builder removed). This guards that the seam is wired
+    through ``create_deps`` and actually injects the overlay into the live prompt.
     """
     deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
     assert resolve_model_profile(deps.config.llm) is ModelProfile.WEAK_LOCAL
-    assert _model_profile_overlay_provider(deps) is None
 
     def assemble(builders: tuple) -> str:
         return "\n\n".join(piece for b in builders if (piece := b(deps)))
 
     reordered = ORCHESTRATOR_SPEC.static_instruction_builders
     baseline = tuple(b for b in reordered if b is not _model_profile_overlay_provider)
-    assert assemble(reordered) == assemble(baseline)
+    full = assemble(reordered)
+    base_only = assemble(baseline)
+
+    assert "## Execution" in full
+    assert "## Conciseness" in full
+    assert "## Execution" not in base_only
+    assert "## Conciseness" not in base_only

@@ -35,16 +35,28 @@ def _config(provider: str) -> Settings:
 def test_base_instructions_are_profile_agnostic() -> None:
     """The assembled base is byte-identical across profiles — overlays carry all divergence.
 
-    With overlays empty (no shipped overlay files) the composed prompt for both
-    profiles reduces to this base, so this equality is the unconditional byte-identity
-    of the shipped default prompt.
+    ``build_base_instructions`` builds the base-only prefix (seed + mindsets + rules);
+    the per-profile overlay is appended later by the orchestrator, not here. So this
+    equality holds regardless of which overlay files ship — the base is the shared,
+    profile-agnostic intersection.
     """
     assert build_base_instructions(_config("ollama")) == build_base_instructions(_config("gemini"))
 
 
-def test_overlays_empty_for_every_profile() -> None:
-    """No overlay files ship, so every profile's overlay is None (nothing appended)."""
-    assert build_profile_overlay(ModelProfile.WEAK_LOCAL) is None
+def test_weak_local_overlay_ships_relocated_reflexes() -> None:
+    """The weak-local overlay carries the relocated weak-scaffold sections.
+
+    Plan 03 relocated weak-specific reflexes (Execution, Error recovery, the intent
+    taxonomy, ...) out of the profile-agnostic base into ``overlays/weak_local.md``,
+    so WEAK_LOCAL's overlay is non-empty and the base no longer carries them. The
+    frontier overlay does not ship yet, so FRONTIER's overlay is still None.
+    """
+    weak_overlay = build_profile_overlay(ModelProfile.WEAK_LOCAL)
+    assert weak_overlay is not None
+    assert "## Execution" in weak_overlay
+    assert "## Error recovery" in weak_overlay
+    assert "## Execution" not in build_rules_block()
+    assert "## Error recovery" not in build_rules_block()
     assert build_profile_overlay(ModelProfile.FRONTIER) is None
 
 

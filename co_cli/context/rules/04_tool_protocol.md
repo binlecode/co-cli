@@ -29,15 +29,7 @@ results, call them concurrently.
 
 Sequential when dependent. If tool B needs tool A's output, call A first.
 
-## Error recovery
-When a tool returns an error, diagnose it and change your approach —
-different arguments, a different tool, or explain the limitation. Never
-repeat the exact same failed call; retrying unchanged is a loop, not recovery.
-
-When a tool returns empty or partial results, retry once with a different
-query — vary keywords, scope, or path; a different angle often surfaces what
-the first missed.
-
-When the same goal fails twice by the same method, switch method — a
-different kind of tool, e.g. shell curl for a page web fetch cannot render —
-not a third same-method variant.
+## Todo completion
+If a todo list is active (todo_write was called this session), call todo_read
+and confirm no `pending` or `in_progress` items remain before responding as
+done.
