@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.436]
+
+Promote a universal conciseness floor to the model-agnostic BASE; slim the weak_local overlay to its delta.
+
+- **`01_interaction.md` gains `## Conciseness`** — the universal density floor (get to the point, few sentences not paragraphs, don't restate a delivered answer, lead with the outcome). Reaches every profile.
+- **`overlays/weak_local.md` `## Conciseness` slimmed** to the weak-specific delta only — the named preamble/postamble anti-patterns ("Okay, I'll now…", "I've finished…") a weak model needs spelled out.
+- **Rationale**: profiles are mutually exclusive at runtime (one overlay per request), so a reflex both profiles need can only reach them from BASE. Revises Plan 03's "conciseness is weak-only" call; validated against hermes/opencode/codex (all site conciseness at base level, with profile-scoped explicit reinforcement). The frontier cost-cliff length-budget delta remains deferred to the frontier-overlay plan.
+- **Spec + eval**: `prompt-assembly.md` §2.1 gains an on-disk rule/overlay layout + per-profile composition table and the partition worked example; `eval_rule_compliance.py` inventory 28 → 29 (base `01 Conciseness`).
+
 ## [0.8.434]
 
 Model-profile 03 — ship `overlays/weak_local.md` and neutralize the BASE rule layer so it is model-wisdom-agnostic (works for a strong or weak model).
