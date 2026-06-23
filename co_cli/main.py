@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import os
+import sys
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -766,6 +767,55 @@ async def _chat_loop(
         await _drain_and_cleanup(deps, stack)
 
 
+def _is_runctx_finalization_error(exc: BaseException | None) -> bool:
+    """True only for the upstream pydantic-ai cross-Context run-context reset ValueError.
+
+    A streaming turn can leave pydantic-ai's separate-Context capability coroutine to be
+    garbage-collected while suspended inside ``set_current_run_context``. Its
+    ``finally: _CURRENT_RUN_CONTEXT.reset(token)`` then runs in a foreign contextvars.Context
+    and raises ``ValueError: <Token ...> was created in a different Context``. The message
+    embeds ``ContextVar name='pydantic_ai.current_run_context'``, so the two-substring match
+    keeps this scoped to exactly that upstream issue rather than any "different Context" error.
+    """
+    return (
+        isinstance(exc, ValueError)
+        and "was created in a different Context" in str(exc)
+        and "current_run_context" in str(exc)
+    )
+
+
+@contextmanager
+def _runctx_finalization_guard():
+    """Suppress the benign upstream run-context GC-finalization ValueError at the REPL boundary.
+
+    The error is functionally harmless (the run already completed/abandoned; only the
+    contextvar GC cleanup fails) but, routed through Python's default unraisable printer,
+    escapes to prompt_toolkit and stalls the REPL with "Press ENTER to continue". This installs
+    a narrow ``sys.unraisablehook`` that debug-logs + swallows exactly that signature and
+    delegates everything else to the prior hook, restoring the prior hook on exit.
+
+    Upstream fix (remove this guard once shipped): pydantic-ai should swallow ValueError on the
+    cross-Context ``_CURRENT_RUN_CONTEXT.reset(token)`` in ``set_current_run_context``.
+    """
+    prior = sys.unraisablehook
+
+    def _hook(unraisable):
+        if _is_runctx_finalization_error(unraisable.exc_value):
+            logging.getLogger(__name__).debug(
+                "suppressed benign pydantic-ai run-context GC finalization "
+                "(upstream: unguarded ContextVar reset): %r",
+                unraisable.exc_value,
+            )
+            return
+        prior(unraisable)
+
+    sys.unraisablehook = _hook
+    try:
+        yield
+    finally:
+        sys.unraisablehook = prior
+
+
 def _start_chat(theme: str | None, verbose: bool, reasoning_display: str | None) -> None:
     """Resolve startup options and enter the interactive chat loop."""
     _setup_observability()
@@ -782,10 +832,12 @@ def _start_chat(theme: str | None, verbose: bool, reasoning_display: str | None)
         effective_mode = REASONING_DISPLAY_FULL
     else:
         effective_mode = settings.reasoning_display
-    try:
-        asyncio.run(_chat_loop(reasoning_display=effective_mode, theme=theme))
-    except KeyboardInterrupt:
-        pass  # Safety net: asyncio.run() may re-raise after task cancellation
+    with _runctx_finalization_guard():
+        try:
+            asyncio.run(_chat_loop(reasoning_display=effective_mode, theme=theme))
+        except KeyboardInterrupt:
+            # Safety net: asyncio.run() may re-raise after task cancellation
+            pass
 
 
 @app.command()

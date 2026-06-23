@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.461]
+
+Stop a rare upstream GC-finalization `ValueError` from crashing the interactive REPL.
+
+- **Run-context finalization guard** — `_start_chat` (`co_cli/main.py`) now wraps `asyncio.run` in a `_runctx_finalization_guard()` contextmanager that installs a narrow `sys.unraisablehook`. A streaming turn can leave one of pydantic-ai's separate-Context capability coroutines to be garbage-collected while suspended inside `set_current_run_context`; its unguarded `_CURRENT_RUN_CONTEXT.reset(token)` then runs in a foreign `contextvars.Context` and raises `ValueError: <Token …> was created in a different Context`. Routed through Python's default unraisable printer, it escaped to prompt_toolkit and stalled the REPL with "Press ENTER to continue".
+- **Narrow suppression, full delegation** — `_is_runctx_finalization_error` matches only that exact signature (two-substring AND: `was created in a different Context` *and* `current_run_context`); the hook debug-logs and swallows it, delegates every other unraisable to the prior hook, and restores the prior hook on exit. The error is benign — the run already completed/abandoned; only the contextvar GC cleanup fails. The root reset is upstream (byte-identical in 1.107.0); the guard is the only co-controlled lever and is self-documenting/removable once upstream ships a fix.
+
 ## [0.8.460]
 
 Teach `capabilities_check` about the slash-command surface so the agent stops confabulating about its own REPL commands.
