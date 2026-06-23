@@ -164,7 +164,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `build_base_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules, joined with `\n\n`; called once at agent construction |
 | `build_toolset_guidance(tool_catalog) -> str` | `co_cli/context/guidance.py` | Returns tool-specific guidance blocks, gated on tool presence (`CAPABILITIES_GUIDANCE`) |
 | `build_deferred_tool_awareness_prompt(tool_catalog) -> str` | `co_cli/tools/deferred_prompt.py` | Returns a per-tool stub list (one `` - `name`: one-line purpose `` per `DEFERRED` tool, name-only when description is empty) grouped by integration family: native primitives render first with no sub-header, then each family under a `` `<label>` (load before use): `` sub-header. Family key = segment before first `_` for native integrations (so all `google_*` cluster), whole string for MCP integrations; deterministic ordering. Empty when no deferred tools exist. Called per-turn via `deferred_tool_awareness_prompt` |
-| `render_skill_manifest(skill_catalog, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders the `<available_skills>` XML block. Called per-turn via `skill_manifest_prompt` |
+| `render_skill_manifest(skill_catalog, skills_dir, user_skills_dir) -> str` | `co_cli/skills/manifest.py` | Renders the `<available_skills>` XML block. Called per-turn via `skill_manifest_prompt` |
 
 ### Personality asset loaders
 
@@ -194,7 +194,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `co_cli/context/rules/NN_*.md` | BASE rule files (model-agnostic), read in filename order by `build_rules_block()` |
 | `co_cli/context/overlays/<profile>.md` | per-profile overlay delta appended by `build_profile_overlay()`; absent/empty → nothing appended |
 | `co_cli/context/guidance.py` | `CAPABILITIES_GUIDANCE` constant; `build_toolset_guidance()` — gated on tool presence |
-| `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — `<available_skills>` XML block; called per-turn from `skill_manifest_prompt` |
+| `co_cli/skills/manifest.py` | `render_skill_manifest()` — `<available_skills>` XML block; called per-turn from `skill_manifest_prompt` |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` — personality asset loaders |
 | `co_cli/personality/prompts/validator.py` | personality discovery and file validation |
 | `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `co_cli/agent/_instructions.py` |

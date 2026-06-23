@@ -239,7 +239,7 @@ for missing mindset files.
 | File | Purpose |
 |---|---|
 | `co_cli/context/assembly.py` | `build_base_instructions()` — static prompt assembly (soul + mindsets + rules + recency advisory) |
-| `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` — `<available_skills>` block; emitted per-turn via `skill_manifest_prompt` |
+| `co_cli/skills/manifest.py` | `render_skill_manifest()` — `<available_skills>` block; emitted per-turn via `skill_manifest_prompt` |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` |
 | `co_cli/personality/prompts/souls/{role}/canon/*.md` | Canon scene files (package-shipped) |
 | `co_cli/bootstrap/core.py:_sync_canon_store` | Bootstrap hook indexing canon under `source='canon'` (personality-load-only path) |

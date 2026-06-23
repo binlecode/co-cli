@@ -323,7 +323,7 @@ Returns a skill's full body, addressed by the skill name (the skill's directory 
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `render_skill_manifest(skill_catalog, skills_dir, user_skills_dir) -> str` | `co_cli/context/manifests/skill_manifest.py` | Renders `<available_skills>` XML block; emitted per-turn via `skill_manifest_prompt` (`co_cli/agent/_instructions.py`) |
+| `render_skill_manifest(skill_catalog, skills_dir, user_skills_dir) -> str` | `co_cli/skills/manifest.py` | Renders `<available_skills>` XML block; emitted per-turn via `skill_manifest_prompt` (`co_cli/agent/_instructions.py`) |
 
 ### Schema
 
@@ -342,7 +342,7 @@ Returns a skill's full body, addressed by the skill name (the skill's directory 
 | `co_cli/skills/index.py` | `set_skill_catalog()`, `get_skill_catalog()` |
 | `co_cli/skills/lifecycle.py` | `refresh_skills`, `discover_skill_files`, `read_skill_meta`, `cleanup_skill_run_state` |
 | `co_cli/config/skills.py` | `SkillsSettings` — Pydantic config model |
-| `co_cli/context/manifests/skill_manifest.py` | `render_skill_manifest()` |
+| `co_cli/skills/manifest.py` | `render_skill_manifest()` |
 | `co_cli/commands/core.py` | `dispatch` and `BUILTIN_COMMANDS` registrations |
 | `co_cli/commands/skills.py` | `/skills` command family (list/check/lint/reload/usage/pin/unpin) |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass |
