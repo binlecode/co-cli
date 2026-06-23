@@ -10,6 +10,8 @@ user-invocable: true
 
 Translate a feature request, bug fix, or refactor goal into a scoped, task-ordered execution plan with acceptance criteria and open questions surfaced before implementation begins.
 
+**Core principle:** A good plan makes implementation obvious. If a task leaves the implementer guessing, it is incomplete — sharpen the `Done when` or split the task.
+
 ---
 
 ## Phase 1 — Scope
@@ -65,6 +67,15 @@ Categories to check:
 - **Unknown behaviour**: is there a code path the author does not understand well enough to plan confidently?
 
 If there are no open questions, write "None — ready to implement." Do not leave this section empty.
+
+## Common Mistakes
+
+Each is a real failure mode for this skill — the contrast is the fix.
+
+- **Vague `Done when`.** Bad: "the feature works." Good: "`pytest tests/test_auth.py::test_login` passes (3 cases)." A condition you cannot confirm by eye or with one command is not a done-when.
+- **Scope leak.** Bad: a task that quietly fixes an adjacent module the request never asked for. Good: list that improvement under out-of-scope in Phase 1 and leave it unplanned.
+- **Oversized task.** Bad: one task editing six files ("wire up the whole pipeline"). Good: split at the seams — one cohesive change per task, ~3 files or fewer each.
+- **Open questions skipped.** Bad: "None" written without checking. Good: walk every Phase 3 category; write "None — ready to implement" only after they all clear.
 
 ## Rules
 
