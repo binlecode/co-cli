@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.456]
+
+Drain post-2026-06-17 rules-conformance residue (behavior-preserving cleanup).
+
+- **Dead code (R10)** — deleted orphaned `snippet_around` from `co_cli/index/search_util.py` (zero callers since `tools/obsidian/` was removed in `6390d73c`).
+- **Naming drift (R9)** — added the `_CHARS` unit suffix to five char-count constants: `_ARG/_CMD/_URL/_QUERY_PREVIEW_MAX` in `co_cli/context/_tool_result_markers.py` and `_PREVIEW_BUDGET` in `co_cli/commands/queue_control.py`.
+- **Durability (R11)** — `_write_consolidated_skill` (`co_cli/daemons/dream/_housekeeping.py`) now writes via the shared `atomic_write_text` primitive instead of a raw `write_text`, matching every sibling write in `daemons/dream/` and crash-protecting curated skill files.
+- **Glyph drift (R11)** — `_tool_result_markers.py` truncation now renders the unicode `…` with a `-1` reserve, matching `/queue`, `/sessions`, and deferred-tool one-liners (was the lone ascii `"..."`/`-3` outlier).
+- Doc/reference updates: prompt-system research notes, `docs/specs/dream.md`, `docs/specs/prompt-assembly.md`.
+
 ## [0.8.455]
 
 Preserve the user's prompt when a turn aborts before its first run completes.

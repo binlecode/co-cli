@@ -15,10 +15,10 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-_ARG_PREVIEW_MAX = 40
-_CMD_PREVIEW_MAX = 80
-_URL_PREVIEW_MAX = 80
-_QUERY_PREVIEW_MAX = 60
+_ARG_PREVIEW_MAX_CHARS = 40
+_CMD_PREVIEW_MAX_CHARS = 80
+_URL_PREVIEW_MAX_CHARS = 80
+_QUERY_PREVIEW_MAX_CHARS = 60
 
 _SHELL_EXIT_RE = re.compile(r"^exit (-?\d+):")
 
@@ -52,7 +52,7 @@ def _truncate(value: str, max_len: int) -> str:
     """Truncate to max_len chars with ellipsis when longer."""
     if len(value) <= max_len:
         return value
-    return value[: max_len - 3] + "..."
+    return value[: max_len - 1] + "…"
 
 
 def _line_count(content: str) -> int:
@@ -63,7 +63,7 @@ def _line_count(content: str) -> int:
 
 
 def _shell_marker(args: dict[str, Any], content: str, _chars: int, lines: int) -> str:
-    cmd = _truncate(str(args.get("cmd", "")), _CMD_PREVIEW_MAX)
+    cmd = _truncate(str(args.get("cmd", "")), _CMD_PREVIEW_MAX_CHARS)
     match = _SHELL_EXIT_RE.match(content)
     if match:
         return f"[shell_exec] ran `{cmd}` → exit {match.group(1)}, {lines} lines"
@@ -91,14 +91,14 @@ def _file_search_marker(args: dict[str, Any], body: str, _chars: int, lines: int
 
 
 def _web_search_marker(args: dict[str, Any], content: str, chars: int, _lines: int) -> str:
-    query = _truncate(str(args.get("query", "")), _QUERY_PREVIEW_MAX)
+    query = _truncate(str(args.get("query", "")), _QUERY_PREVIEW_MAX_CHARS)
     if content.startswith("No results"):
         return f"[web_search] '{query}' → no results"
     return f"[web_search] '{query}' ({chars:,} chars) — re-query on demand"
 
 
 def _web_fetch_marker(args: dict[str, Any], _content: str, chars: int, _lines: int) -> str:
-    url = _truncate(str(args.get("url", "")), _URL_PREVIEW_MAX)
+    url = _truncate(str(args.get("url", "")), _URL_PREVIEW_MAX_CHARS)
     return f"[web_fetch] {url} ({chars:,} chars) — fetch on demand"
 
 
@@ -115,7 +115,8 @@ _TOOL_MARKERS: dict[str, _MarkerFn] = {
 
 def _generic_marker(tool_name: str, args: dict[str, Any], chars: int) -> str:
     arg_preview_parts = [
-        f"{key}={_truncate(str(val), _ARG_PREVIEW_MAX)}" for key, val in list(args.items())[:2]
+        f"{key}={_truncate(str(val), _ARG_PREVIEW_MAX_CHARS)}"
+        for key, val in list(args.items())[:2]
     ]
     arg_preview = " " + " ".join(arg_preview_parts) if arg_preview_parts else ""
     return f"[{tool_name}]{arg_preview} ({chars:,} chars)"

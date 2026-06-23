@@ -1,6 +1,6 @@
 # RESEARCH: Hermes Agent Prompting System
 
-**Source:** `~/workspace_genai/hermes-agent` — pulled to HEAD 2026-06-22 (commit `b1b20270c`)  
+**Source:** `~/workspace_genai/hermes-agent` — refreshed to HEAD (commit `bb7ff7dc3`, Mon Jun 22 2026)  
 **Scope:** System prompt assembly, per-model routing, tool/skill/memory injection, agent loop, caching strategy, platform variation, architectural comparison
 
 ---
@@ -247,7 +247,7 @@ All breakpoints use the same TTL (`5m` or `1h`, configurable via `agent._cache_t
 
 ## 10. Per-Gateway / Per-Platform Variation
 
-`PLATFORM_HINTS` (`agent/prompt_builder.py:614-819`): Large dict mapping 30+ platform keys to multi-paragraph format/behavior instructions, injected into the **stable tier**.
+`PLATFORM_HINTS` (`agent/prompt_builder.py:614-819`): Large dict mapping 20 platform keys to multi-paragraph format/behavior instructions, injected into the **stable tier**.
 
 Built-in platforms include: `whatsapp`, `whatsapp_cloud`, `telegram`, `discord`, `slack`, `signal`, `sms`, `email`, `cron`, `cli`, `webui`, `api_server`, `mattermost`, `matrix`, `feishu`, `weixin`, `wecom`, `qqbot`, `yuanbao`, `bluebubbles`.
 
@@ -289,7 +289,7 @@ Each loaded file is scanned for prompt injection, YAML frontmatter stripped, and
 | `agent/skill_bundles.py` | Skill bundle loading | `get_skill_bundles()`, `build_bundle_invocation_message()` |
 | `agent/skill_preprocessing.py` | Skill content preprocessing | `substitute_template_vars()` (37-60), `run_inline_shell()` (63-80) |
 | `agent/coding_context.py` | Coding-posture detection | `coding_system_blocks()`, `INTERACTIVE_CODING_PLATFORMS` (70) |
-| `gateway/platform_registry.py` | Plugin platform registration | `PlatformEntry` (38-100) |
+| `gateway/platform_registry.py` | Plugin platform registration | `PlatformEntry` (39-161) |
 | `tools/threat_patterns.py` | Injection scanning | `scan_for_threats()` — used by context file scanner |
 
 ---
@@ -301,18 +301,18 @@ Each loaded file is scanned for prompt injection, YAML frontmatter stripped, and
 | **Base prompt** | Single `DEFAULT_AGENT_IDENTITY`; user replaces via `~/.hermes/SOUL.md` | Single model-agnostic BASE; per-profile overlay (additive) |
 | **Per-model variation** | Additive guidance blocks gated by model-name substring matching; no separate files | Additive overlay on top of BASE — same pattern |
 | **Composition formula** | `stable + context + volatile` (three ordered tiers, explicit cache boundary) | `BASE + overlay` — implicit tier separation |
-| **Prompt rebuild frequency** | Once per session; only after context compression | Session-lifetime prompt |
-| **Date in prompt** | Day-only (`%A, %B %d, %Y`) for byte-stability | Not constrained today |
-| **Skills injection** | Full `<available_skills>` index in stable tier; mandatory-load framing; LRU + disk snapshot cache | `<available_skills>` manifest in static prompt; on-demand load |
+| **Prompt rebuild frequency** | Once per session; only after context compression | Static instructions assembled once per session; dynamic instruction suffix (skills, deferred tools, time, safety, wrap-up) recomputed per request |
+| **Date in prompt** | Day-only (`%A, %B %d, %Y`) for byte-stability | Day-only (`Current date: %A, %B %d, %Y`) via `current_time_prompt` dynamic instruction — same byte-stability rationale |
+| **Skills injection** | Full `<available_skills>` index in stable tier; mandatory-load framing; LRU + disk snapshot cache | `<available_skills>` manifest rendered per-turn as the `skill_manifest_prompt` dynamic instruction (outside the cached prefix, re-reads the live skill index); on-demand load |
 | **Built-in memory injection** | Volatile tier: flat `.md` files always-injected; USER.md always-injected | USER.md always-injected; FTS5 BM25 recall for memory items |
 | **Memory recall mechanism** | External provider `prefetch()` → user message injection | `memory_search` tool (model calls it) |
 | **External memory injection point** | User message (not system prompt) — cache-safe | N/A today |
 | **Streaming memory scrubber** | `StreamingContextScrubber` strips `<memory-context>` from output | N/A |
 | **Tool passing** | Structured function-call definitions (not in prompt text) | Same |
-| **Prompt caching** | Explicit `system_and_3` `cache_control`; day-only timestamp; tool-call JSON canonicalized | No explicit cache_control injection today |
+| **Prompt caching** | Explicit `system_and_3` `cache_control`; day-only timestamp; tool-call JSON canonicalized | No manual `cache_control`; relies on pydantic-ai's static/dynamic `InstructionPart` split — the Anthropic provider caches the last static block, Ollama prefix-cache reuses the static prefix; day-only timestamp keeps that prefix byte-stable across same-day turns |
 | **Context compaction** | `ContextCompressor` with aux LLM, structured headings, `REFERENCE ONLY` prefix | Sliding-window history processor + `/compact`; LLM summarizer with structured `##` headings; `[CONTEXT COMPACTION — REFERENCE ONLY]` marker + static-marker fallback |
 | **Platform variation** | `PLATFORM_HINTS` dict (30+ platforms); config-driven overrides; plugin-registerable | No platform-level prompt variation |
-| **Ephemeral system additions** | `ephemeral_system_prompt` appended at API-call time only (not persisted) | No equivalent today |
+| **Ephemeral system additions** | `ephemeral_system_prompt` appended at API-call time only (not persisted) | Dynamic `@agent.instructions` are ephemeral — recomputed per request, never persisted to history (`safety_prompt`, `wrap_up_prompt`, `current_time_prompt`); condition-gated, not an arbitrary runtime injection slot |
 | **Mid-turn steering** | `/steer` appended to last tool result with `[OUT-OF-BAND USER MESSAGE]` fence | No mid-turn steering today |
 | **Skill bundles** | YAML-defined multi-skill aliases; bundles win over same-named skills | No bundles today |
 | **Inline shell in skills** | `` !`cmd` `` executed at load time | No inline shell today |
@@ -327,9 +327,9 @@ Each loaded file is scanned for prompt injection, YAML frontmatter stripped, and
 
 **Directly applicable patterns:**
 
-1. **Three-tier composition with explicit cache boundary.** The `stable/context/volatile` split is more explicit than co-cli's current `BASE+overlay`. The critical rule: volatile content (memory, timestamps) must NOT be inside the cached prefix — Hermes puts it in the volatile tier or injects it into the user message. co-cli's volatile tier content (timestamps, model identity) should be separated from the cache-stable BASE+overlay prefix.
+1. **Three-tier composition with explicit cache boundary. (Now implemented.)** The `stable/context/volatile` split is more explicit than co-cli's `BASE+overlay`. The critical rule: volatile content (memory, timestamps) must NOT be inside the cached prefix. co-cli now realizes this via pydantic-ai's `InstructionPart` static/dynamic flag — the `BASE+overlay` literal is the cached static block; volatile content (timestamp, skill manifest, deferred-tool list, safety/wrap-up) lives in per-turn `@agent.instructions` callbacks (`dynamic=True`), kept outside the cached prefix. See `prompt-assembly.md` §2.3.
 
-2. **Day-only timestamp in the volatile tier.** Minute-precision timestamps invalidate prefix-cache KV on every rebuild. co-cli's `Conversation started:` line should use day-only granularity.
+2. **Day-only timestamp. (Now implemented.)** Minute-precision timestamps invalidate prefix-cache KV on every rebuild. co-cli's `current_time_prompt` emits `Current date: %A, %B %d, %Y` at day-only granularity so the system block stays byte-stable across same-day turns; the Ollama prefix cache then extends through it into history.
 
 3. **External recall context injected into user message, not system prompt.** Hermes' memory prefetch arrives as `<memory-context>...</memory-context>` appended to the current user message. This keeps the system prompt stable (cache-safe) while providing per-turn dynamic grounding. If co-cli ever adds an external memory provider, this is the injection pattern to use.
 

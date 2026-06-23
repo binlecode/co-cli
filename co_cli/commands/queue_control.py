@@ -13,10 +13,10 @@ from collections import deque
 
 from co_cli.display.core import console, make_table
 
-_PREVIEW_BUDGET = 60
+_PREVIEW_BUDGET_CHARS = 60
 
 
-def _truncate(text: str, budget: int = _PREVIEW_BUDGET) -> str:
+def _truncate(text: str, budget: int = _PREVIEW_BUDGET_CHARS) -> str:
     text = text.replace("\n", " ")
     if len(text) <= budget:
         return text

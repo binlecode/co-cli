@@ -92,6 +92,7 @@ Registered in `build_orchestrator()` (`co_cli/agent/build.py`) from `ORCHESTRATO
 | Layer | Condition | Content |
 | --- | --- | --- |
 | `safety_prompt` | doom loop or shell-error streak active | warning text injected into instructions context |
+| `wrap_up_prompt` | `ctx.usage.requests == request_limit - 1` (final permitted step this turn) | instruction to stop calling tools and produce the final answer now from what is already gathered, before the model-request budget cuts off the next call |
 | `current_time_prompt` | always | current date string, day-only granularity (`"Current date: Monday, April 28, 2026"`) — day-only so the system block stays byte-stable across same-day turns and the Ollama prefix cache extends through it into history |
 | `deferred_tool_awareness_prompt` | any `VisibilityPolicyEnum.DEFERRED` tools present | per-tool stub list (one `` - `name`: one-liner `` line per deferred tool) grouped by integration family — native primitives first with no sub-header, then each family under a `` `<label>` (load before use): `` sub-header (e.g. `Google Workspace`) — telling the model to load a tool via `tool_view` (by exact name) before calling it; wraps `build_deferred_tool_awareness_prompt(ctx.deps.tool_catalog)` |
 | `skill_manifest_prompt` | `skill_catalog` non-empty | `<available_skills>` XML manifest of bundled + user-installed skills; wraps `render_skill_manifest(ctx.deps.skill_catalog, ctx.deps.skills_dir, ctx.deps.user_skills_dir)` |

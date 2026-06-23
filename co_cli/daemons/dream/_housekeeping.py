@@ -28,6 +28,7 @@ from co_cli.daemons.dream.state import (
     SessionMarker,
     save_housekeeping_state,
 )
+from co_cli.fileio.atomic import atomic_write_text
 from co_cli.llm.call import llm_call
 from co_cli.memory.archive import archive_artifacts
 from co_cli.memory.frontmatter import parse_frontmatter, split_frontmatter_raw
@@ -331,7 +332,7 @@ def _write_consolidated_skill(deps: CoDeps, anchor: _SkillCandidate, merged_body
     text = anchor.path.read_text(encoding="utf-8")
     meta_raw, _ = split_frontmatter_raw(text)
     new_text = f"{meta_raw}{merged_body.strip()}\n" if meta_raw else f"{merged_body.strip()}\n"
-    anchor.path.write_text(new_text, encoding="utf-8")
+    atomic_write_text(anchor.path, new_text)
     return anchor.path
 
 

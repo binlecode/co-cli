@@ -1,6 +1,6 @@
 # RESEARCH: OpenCode Prompting System
 
-**Source:** `~/workspace_genai/opencode` — pulled to HEAD 2026-06-22 (commit `cf3102935`)  
+**Source:** `~/workspace_genai/opencode` — refreshed to HEAD (commit `fbf889db8`, Mon Jun 22 19:57:21 2026)  
 **Scope:** System prompt assembly, per-model routing, tool/skill/memory injection, agent loop, design patterns
 
 ---
@@ -12,7 +12,7 @@ OpenCode's prompting system is **modular and dynamic**: the system prompt is ass
 **Assembly formula** (`session/prompt.ts:1309-1315`):
 
 ```
-system = [...env, ...instructions, ...(skills ?? [])]
+system = [...env, ...instructions, ...(skills ? [skills] : [])]
 ```
 
 Three concerns compose independently:
@@ -23,18 +23,18 @@ Three concerns compose independently:
 | `instructions` | `instruction.system()` | Yes — reads AGENTS.md/CLAUDE.md off disk |
 | `skills` | `SystemPrompt.skills(agent)` | Yes — recalculated per permission state |
 
-On top of this, a **model-specific base prompt** is selected via `SystemPrompt.provider(model)` and passed to the LLM as the leading system block (`session/system.ts:25-39`).
+On top of this, a **model-specific base prompt** is selected via `SystemPrompt.provider(model)` and passed to the LLM as the leading system block (`session/system.ts:24-38`).
 
 ---
 
 ## 2. Model-Specific Prompt Routing
 
-**Entry point:** `session/system.ts:25-39` — `provider(model)` function.
+**Entry point:** `session/system.ts:24-38` — `provider(model)` function.
 
 Routing is string-match on `model.api.id`:
 
 ```typescript
-if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || ...)
+if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
   return [PROMPT_BEAST]
 if (model.api.id.includes("gpt")) {
   if (model.api.id.includes("codex")) return [PROMPT_CODEX]
@@ -68,24 +68,24 @@ Each file is a **complete, standalone system prompt** for that model family — 
 
 ## 3. Environment Block
 
-`SystemPrompt.environment(model)` (`session/system.ts:55-92`) injects:
+`SystemPrompt.environment(model)` (`session/system.ts:54-90`) injects:
 
 - Model ID and provider ID
 - Working directory and workspace root
-- Git status summary
-- Platform and current date
+- Whether the directory is a git repo (`Is directory a git repo: yes/no` — a boolean, not a status summary)
+- Platform and current date (`new Date().toDateString()`)
 - Available project references (as `<available_references>` XML block, sorted by name)
 
-This is regenerated every turn — the date and git status are always current.
+This is regenerated every turn — the date is always current.
 
 ---
 
 ## 4. Instructions Block (AGENTS.md / CLAUDE.md)
 
-`instruction.system()` (`session/instruction.ts:34-150`) loads user/project instruction files in this order:
+`instruction.system()` (`session/instruction.ts:155-170`; path list assembled at `instruction.ts:60-67`) loads user/project instruction files in this order:
 
-1. Global: `~/.opencode/AGENTS.md`, `~/.claude/CLAUDE.md`
-2. Project: `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md` — searched upward from cwd to worktree root
+1. Global: `<global.config>/AGENTS.md`, `~/.claude/CLAUDE.md` (the CLAUDE.md entry is gated by the `disableClaudeCodePrompt` flag)
+2. Project: `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md` (`CONTEXT.md` is marked deprecated) — searched upward from cwd to worktree root, first project-level match wins
 3. Config-specified files from `config.instructions`
 
 Files are injected as plain text. The search-upward behavior means nested projects can override outer ones.
@@ -94,7 +94,7 @@ Files are injected as plain text. The search-upward behavior means nested projec
 
 ## 5. Skills Block
 
-`SystemPrompt.skills(agent)` (`session/system.ts:94-106`):
+`SystemPrompt.skills(agent)` (`session/system.ts:92-104`):
 
 ```typescript
 if (Permission.disabled(["skill"], agent.permission).has("skill")) return
@@ -108,14 +108,15 @@ Skills are injected as a human-readable list in the system prompt, gated by perm
 
 ## 6. Plan/Build Context Injection (Reminders)
 
-`session/reminders.ts:15-90` injects synthetic message parts for session-level context:
+`session/reminders.ts:15-90` (`SessionReminders.apply`) injects synthetic message parts for session-level context. Only three prompt files are imported and wired (`reminders.ts:11-13`):
 
 - **plan.txt** — injected when `agent.name === "plan"` (READ-ONLY constraints, planning workflow)
-- **plan-mode.txt** — system reminder for experimental plan mode
 - **build-switch.txt** — injected when transitioning from plan agent to build agent
-- **plan-reminder-anthropic.txt** — Anthropic-specific plan reminder
+- **plan-mode.txt** — used only on the experimental plan-mode branch (gated by the `experimentalPlanMode` flag); its `${planInfo}` placeholder is substituted with plan-file existence info
 
-These are injected as synthetic user message parts (not system prompt additions), so they appear in the conversation history at the right moment.
+These are injected as synthetic user message parts (`synthetic: true`, pushed onto the last user message — not system prompt additions), so they appear in the conversation history at the right moment.
+
+> Note: `prompt/plan-reminder-anthropic.txt` exists on disk but is **not imported or referenced anywhere** in the source — it is an orphaned file (see §13).
 
 ---
 
@@ -129,7 +130,7 @@ Tools are **not embedded in the system prompt** — they are passed as structure
 2. Per-provider schema transformation via `ProviderTransform.schema(model, ToolJsonSchema.fromTool(item))` (tools.ts:79)
 3. AI SDK tool wrapping with permission checks and plugin hooks (tools.ts:80-114)
 4. MCP tool integration with the same schema transform + permission gates (tools.ts:117-150)
-5. Tool filtering by `agent.permission + session.permission + user.tools` (llm/request.ts:198-204)
+5. Tool filtering by `agent.permission + session.permission + user.tools` (llm/request.ts:201-203)
 
 Tools passed to `streamText()` as `tools:` (llm.ts:318).
 
@@ -146,13 +147,13 @@ Subagents can carry their own prompt files (`agent/prompt/`):
 | `summary.txt` | summary | Session summarization |
 | `title.txt` | title | Title generation |
 
-Agent's `Agent.Info.prompt` field (agent.ts:52) is optional — if set, it replaces (not appends to) the model-routed base prompt.
+Agent's `Agent.Info.prompt` field (agent.ts:51) is optional — if set, it replaces (not appends to) the model-routed base prompt.
 
 ---
 
 ## 9. Agent Loop Structure
 
-**Main loop** (`session/prompt.ts:1134-1387`, `runLoop(sessionID)`):
+**Main loop** (`session/prompt.ts:1134-1385`, `runLoop(sessionID)`):
 
 ```
 while (true):
@@ -182,16 +183,16 @@ Every turn assembles a fresh system prompt. There is no caching of the assembled
 
 The interesting comparison between OpenCode and co-cli is not who owns the loop (OpenCode hand-rolls `runLoop`; co delegates to pydantic-ai). Ownership is incidental. The loop *logic* — what each iteration decides, what state it carries, what it iterates over — is genuinely different.
 
-**Grounding fact.** OpenCode passes **no** `stopWhen`/`stepCountIs` to `streamText` (`session/llm.ts:280-353`). Under the AI SDK that means each `handle.process` call is **one model request**: it executes the tool calls that request returned, marks `assistantMessage.finish = "tool-calls"` (`prompt.ts:347,379`), and the **outer `runLoop` is itself the tool-feedback loop** — it loops back and sends results to the model (exit condition keys on `finish !== "tool-calls"`, `prompt.ts:1163-1167`). co's tool-feedback loop, by contrast, lives **inside** one `agent.run_stream_events(...)` call (pydantic-ai owns it); co's outer loop iterates per *run*, not per request.
+**Grounding fact.** OpenCode passes **no** `stopWhen`/`stepCountIs` to `streamText` (`session/llm.ts:280-353`). Under the AI SDK that means each `handle.process` call is **one model request**: it executes the tool calls that request returned, marks `assistantMessage.finish = "tool-calls"` (`prompt.ts:347,379`), and the **outer `runLoop` is itself the tool-feedback loop** — it loops back and sends results to the model (exit condition keys on `finish !== "tool-calls"`, `prompt.ts:1164-1168`). co's tool-feedback loop, by contrast, lives **inside** one `agent.run_stream_events(...)` call (pydantic-ai owns it); co's outer loop iterates per *run*, not per request.
 
 ### 1. Reducer over the message log vs continuation over carried state
 
-OpenCode's loop has **no in-memory turn state**. Every iteration re-reads all messages from the DB (`MessageV2.filterCompactedEffect`, `prompt.ts:1144`), derives `{user, assistant, finished, tasks}` (`MessageV2.latest`, 1148), and decides the next action purely by inspecting that state. The "program counter" lives in the message log:
+OpenCode's loop has **no in-memory turn state**. Every iteration re-reads all messages from the DB (`MessageV2.filterCompactedEffect`, `prompt.ts:1145`), derives `{user, assistant, finished, tasks}` (`MessageV2.latest`, 1149), and decides the next action purely by inspecting that state. The "program counter" lives in the message log:
 
-- exit? → `lastAssistant.finish && !["tool-calls"].includes(finish) && !hasToolCalls` (1163-1167)
-- pending subtask in `tasks`? → dispatch (1196)
-- compaction task queued? → run (1203)
-- last message overflowed? → enqueue compaction (1213)
+- exit? → `lastAssistant.finish && !["tool-calls"].includes(finish) && !hasToolCalls` (1164-1168)
+- pending subtask in `tasks`? → dispatch (1197)
+- compaction task queued? → run (1202)
+- last message overflowed? → enqueue compaction (1214)
 - else → generate
 
 It is an event-sourced reducer: `(message log) → next action`. Kill the process mid-loop, restart, re-read the log, resume exactly.
@@ -224,8 +225,8 @@ co decides by **catching exceptions and pattern-matching output types** (`orches
 
 | Concern | OpenCode | co |
 |---|---|---|
-| **Compaction** | First-class loop work: queued `task.type==="compaction"` branch (1203), reactive `isOverflow` enqueue (1213), and a `"compact"` verb returned from the model call (1361) — all re-enter the same loop | Split across two non-loop layers: a history **processor** the SDK runs before each request (`proactive_window_processor`), and an **exception arm** (`_attempt_overflow_recovery`, `orchestrate.py:697-725`). The loop never has a "now compacting" state |
-| **Subtasks/subagents** | A loop branch (`handleSubtask`, 1196) — sub-work is a peer of generation | Pushed **out of the loop** via `fork_deps()`; `run_turn` is single-purpose |
+| **Compaction** | First-class loop work: queued `task.type==="compaction"` branch (1202), reactive `isOverflow` enqueue (1214-1221), and a `"compact"` verb returned from the model call (1365) — all re-enter the same loop | Split across two non-loop layers: a history **processor** the SDK runs before each request (`proactive_window_processor`), and an **exception arm** (`_attempt_overflow_recovery`, `orchestrate.py:697-725`). The loop never has a "now compacting" state |
+| **Subtasks/subagents** | A loop branch (`handleSubtask`, 1197) — sub-work is a peer of generation | Pushed **out of the loop** via `fork_deps()`; `run_turn` is single-purpose |
 | **Approval** | No approval state in the loop — permission checked at tool-execution inside `streamText`'s tool wrapping; a denial is just a tool result | A **dedicated extra loop level** (`_run_approval_loop`, 445-476), forced entirely by pydantic-ai surfacing approval as `DeferredToolRequests` (SDK pauses the run, hands control back, co re-enters with decisions) |
 
 ### One-sentence version
@@ -280,12 +281,12 @@ OpenCode supports `!`cmd`` syntax for dynamic content via shell execution (`bash
 | **Base prompt** | Whole separate file per model family (`anthropic.txt`, `gpt.txt`, etc.) | Single model-agnostic BASE shared by all profiles |
 | **Per-model variation** | Completely separate files — maximum control, zero DRY | Additive overlay on top of BASE (BASE + profile delta) |
 | **Composition** | `env + instructions + skills` assembled per turn | BASE + overlay composed at prompt-assembly time |
-| **Skills injection** | Verbose list in system prompt; skill tool loads full content on demand | Skills manifest injected via static prompt; skill tool loads on demand |
+| **Skills injection** | Verbose list in system prompt; skill tool loads full content on demand | `<available_skills>` manifest rendered per-turn as the `skill_manifest_prompt` dynamic instruction (re-reads the live index, outside the cached prefix); skill tool loads on demand |
 | **Memory injection** | Instructions files (AGENTS.md/CLAUDE.md) injected as plain text | Memory search-driven recall (FTS5 BM25); USER.md always-injected profile |
 | **Session context** | Synthetic message parts (reminders.ts) | No session-level synthetic injection today |
 | **Tool passing** | Structured tool definitions (not in prompt text) | Structured tool definitions (not in prompt text) |
 | **Per-provider schema transform** | `ProviderTransform.schema()` per tool, per model | N/A (single provider today) |
-| **System prompt freshness** | Assembled fresh every turn (no caching) | Assembled fresh per session (not per turn today) |
+| **System prompt freshness** | Assembled fresh every turn (no caching) | Static instructions assembled once per session; dynamic instruction suffix (skills, deferred tools, time, safety, wrap-up) recomputed per request |
 | **Plugin extension** | `experimental.chat.system.transform` hook mutates system array in place | No plugin hook on system prompt |
 | **Agent subprompts** | Per-agent `.txt` files (explore, compaction, title, summary) | No per-agent subprompt files today |
 
@@ -295,7 +296,7 @@ OpenCode supports `!`cmd`` syntax for dynamic content via shell execution (`bash
 
 1. **OpenCode's whole-file-per-model is the maximum-duplication end of the spectrum.** co-cli's BASE+overlay is already more DRY. No reason to abandon the overlay architecture.
 
-2. **Dynamic per-turn system prompt re-assembly** is the peer pattern (OpenCode re-reads AGENTS.md every turn). co-cli could adopt per-turn instruction reload without architectural change.
+2. **Dynamic per-turn system prompt re-assembly** is the peer pattern (OpenCode re-reads AGENTS.md every turn). co-cli already re-evaluates per-turn dynamic instructions (`skill_manifest_prompt`, `deferred_tool_awareness_prompt`, `current_time_prompt`, `safety_prompt`, `wrap_up_prompt`) every request — what it does *not* do is reload project instruction files (AGENTS.md/CLAUDE.md) per turn. Adopting that specific reload would need no architectural change.
 
 3. **Reminders as synthetic message parts** (not system prompt additions) is a useful pattern for injecting session-state context at the right conversation moment — co-cli has no equivalent today.
 
@@ -379,9 +380,9 @@ The hard-cap files (default, kimi) are the most constraining. The channel-based 
 
 | File | Purpose |
 |---|---|
-| `session/system.ts` | `provider()` routing (25-39), `environment()` (55-92), `skills()` (94-106) |
-| `session/prompt.ts` | `runLoop()` (1134-1387), system assembly (1309-1325) |
-| `session/instruction.ts` | AGENTS.md/CLAUDE.md loading (34-150) |
+| `session/system.ts` | `provider()` routing (24-38), `environment()` (54-90), `skills()` (92-104) |
+| `session/prompt.ts` | `runLoop()` (1134-1385), system assembly (1309-1315) |
+| `session/instruction.ts` | `system()` loader (155-170); AGENTS.md/CLAUDE.md path list (60-67) |
 | `session/reminders.ts` | Plan/build synthetic message injection (15-90) |
 | `session/tools.ts` | Tool registry, schema transform, filtering (24-150) |
 | `session/llm.ts` | `streamText()` invocation (280-353) |

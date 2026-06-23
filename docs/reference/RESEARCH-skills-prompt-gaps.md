@@ -1,250 +1,122 @@
 # RESEARCH: Prompt Gaps — Skill Prompts
 
-_Date: 2026-04-21_
+_Original: 2026-04-21 · Refreshed: 2026-06-22 (peers + co source re-verified at HEAD)_
 
-This doc covers gaps in `co-cli`'s **skill system** — how skill bodies are authored, discovered, and surfaced to the agent. Scope is `co-cli`'s own skill implementation (bundled `co_cli/skills/*.md`, user-global `~/.co-cli/skills/*.md`), not the Claude Code harness skill files (`.claude/skills/*`).
+This doc covers `co-cli`'s **skill system** — how skill bodies are authored, discovered, surfaced to the agent, and maintained. Scope is `co-cli`'s own skill implementation (bundled `co_cli/skills/*/SKILL.md`, user-global `~/.co-cli/skills/*/SKILL.md`), not the Claude Code harness skill files.
+
+**Peers (exactly two):** `hermes-agent` and `opencode`. Both ship a first-class skill system with model-side discovery, so both are real comparators on this surface. fork-cc and codex have no comparable skill abstraction and are out of scope.
+
+**Refresh note:** The original (2026-04-21) edition was a forward-looking gap analysis written when `co-cli` shipped exactly one bundled skill (`doctor`) and had no model-side skill channel. **Almost all of those gaps have since shipped.** This refresh re-verifies every claim against current source and re-frames the doc as a three-way comparison of three mature skill systems, with the live deltas that remain. The original gap numbering is preserved in §4 with current status so the history is legible.
 
 **Related work:**
-- `docs/exec-plans/active/2026-04-28-081359-main-flow-prompt-parity.md` — phased plan for main orchestrator agent prompt gaps (skill dispatch flows through this; supersedes the retired `RESEARCH-prompt-gaps-main-flow.md`)
-- `RESEARCH-prompt-gaps-llm-tools.md` — gaps in LLM-calling tools
-
-**Priority note:** This is a forward-looking gap analysis. `co-cli` ships exactly one bundled skill today (`co_cli/skills/doctor.md`), so the immediate surface area is small. The gaps named here become load-bearing when (a) more bundled skills are added, or (b) users start installing skills seriously.
+- `docs/specs/skills.md` — current skill-system spec (authoritative)
+- `co_cli/context/rules/06_skill_protocol.md` — injected discovery/drift/create discipline
 
 ## Scope
 
-Reviewed `co-cli` files:
+Reviewed `co-cli` files (re-verified at HEAD):
 
 - `docs/specs/skills.md` — skill system spec
-- `co_cli/skills/doctor.md` — the only bundled skill
-- `co_cli/commands/_skill_types.py` — `SkillConfig` dataclass
-- `co_cli/commands/_commands.py` — loader, scanner, dispatch, `/skills` commands
-- `co_cli/bootstrap/core.py` — `create_deps()` — skill loading at startup
+- `co_cli/skills/` — 8 bundled skills: `doctor`, `documents`, `office`, `plan`, `refactor`, `review`, `skill-creator`, `triage` (each a `<name>/SKILL.md` folder)
+- `co_cli/skills/skill_types.py` — `SkillInfo` dataclass (was `_skill_types.py`/`SkillConfig` in the original; moved + renamed)
+- `co_cli/skills/manifest.py` — `render_skill_manifest()` → `<available_skills>` XML
+- `co_cli/skills/loader.py`, `lifecycle.py`, `index.py`, `lint.py`, `usage.py` — load, hot-reload, model-facing subset, R1–R4 lint, usage sidecar
+- `co_cli/tools/system/skills.py` — `skill_view` + `skill_create`/`skill_edit`/`skill_patch`/`skill_delete`
+- `co_cli/agent/_instructions.py:75-85` — `skill_manifest_prompt` per-turn instruction callback
+- `co_cli/context/rules/06_skill_protocol.md` — discovery/use/drift/create reflexes
+- `co_cli/commands/core.py:110-156` (`dispatch`) + `co_cli/commands/skills.py` (`/skills` family)
+- `co_cli/bootstrap/core.py` — `create_deps()` skill loading
+- `co_cli/daemons/dream/_reviewer.py` + `_housekeeping.py` — background skill reviewer, merge/decay
 
 Peer files reviewed:
 
-- `hermes-agent/skills/` — 26 top-level categories, 100+ skills (the primary peer for this surface)
-- `hermes-agent/skills/software-development/subagent-driven-development/SKILL.md` (example structured skill)
-- `hermes-agent/agent/prompt_builder.py:583-808` (`build_skills_system_prompt` — skill index assembly)
-- `hermes-agent/agent/skill_utils.py` (frontmatter parsing, platform gating, condition filtering)
-- `hermes-agent/agent/skill_registry.py` (dispatch, lifecycle)
+- `hermes-agent` (HEAD `bb7ff7dc3`): `skills/` (18 top-level categories, 71 skills); `agent/prompt_builder.py:1334-1600` (`build_skills_system_prompt`, mandatory-scan block at 1564-1589) and `:173-180` (`SKILLS_GUIDANCE`); `agent/skill_utils.py` (frontmatter parse, `skill_matches_platform`, condition filtering); `tools/skills_tool.py:1577-1638` (`skill_view`); `tools/skill_manager_tool.py:1099-1233` (`skill_manage`, 6 actions); `tools/env_passthrough.py` (session-scoped env allowlist)
+- `opencode` (HEAD `fbf889db8`): `packages/core/src/skill.ts` (`SkillV2` service + frontmatter schema), `skill/discovery.ts` (local + remote-URL catalogs), `skill/guidance.ts` (`<available_skills>` system context), `tool/skill.ts` (model-callable `skill` loader); `config/command.ts` (separate command construct with `$ARGUMENTS`)
 
-Fork-cc and codex have no comparable user-installable skill system, so hermes is the only real peer here.
+> Note (out of scope, for the spec owner): `docs/specs/skills.md` §4 still cites `co_cli/context/manifests/skill_manifest.py` for `render_skill_manifest()`; the live path is `co_cli/skills/manifest.py`. Fix via `/sync-doc`, not here.
 
-## Architectural Difference: Prompt Overlay vs Loaded Reference
+## Architectural positions
 
-The two systems take very different design positions.
+All three systems now expose skills to the model through an index plus a model-callable load tool. They diverge on three axes: **how discovery is framed**, **whether the model can author skills**, and **how skill bodies reach the turn**.
 
-### `co-cli` — skills as prompt overlays
+### `co-cli` — hybrid: overlay + model-loadable reference + model-writable
 
-From `docs/specs/skills.md:24-38`:
+Three invocation paths (`docs/specs/skills.md:41-54`):
 
-> Skills in `co-cli` are prompt overlays loaded from markdown files and exposed through slash commands. A skill does not register a new tool. Instead, it expands into an agent-body string that is fed back into the main agent for a normal LLM turn.
+1. **User slash-command** — `/doctor` → `dispatch()` (`co_cli/commands/core.py:134-151`) expands the body (with `$ARGUMENTS`/`$N` substitution) and returns `DelegateToAgent`; the REPL runs a fresh `run_turn()` with the body as input. The skill body *is* the prompt for that turn.
+2. **Model inline use** — the model reads the per-turn `<available_skills>` manifest, calls `skill_view(name)`, and the body returns as a tool result inside the current turn. This is the primary agent-initiated path.
+3. **Model write** — `skill_create` / `skill_edit` / `skill_patch` / `skill_delete` (all DEFERRED, approval-gated) write a user skill and `refresh_skills(deps)` makes it live immediately.
 
-Dispatch flow:
-1. user types `/doctor`
-2. `dispatch()` matches the skill in `ctx.deps.skill_registry`
-3. skill body is copied into `delegated_input`
-4. `main.py` runs `run_turn()` with `delegated_input` as the user message
-5. normal agent loop executes
+The manifest is rendered **per-turn** via `skill_manifest_prompt` (`co_cli/agent/_instructions.py:75-85`), post-static, so newly-created skills appear on the very next turn and skill mutations never churn the static prefix. Discovery framing is deliberate and light: "If exactly one skill clearly applies, load it… Skip discovery for trivial single-step replies" (`06_skill_protocol.md:10-20`) — explicitly *not* hermes's mandatory-scan.
 
-The skill body **is** the prompt that drives the turn. There is no separate LLM call, no skill index in the system prompt, no "load this skill first" instruction.
+### Hermes — model-loadable reference, mandatory-scan
 
-### Hermes — skills as indexed loadable references
+The skills index is baked into the system prompt with a hard instruction (`agent/prompt_builder.py:1565-1567`):
 
-From `agent/prompt_builder.py:777-799`, hermes bakes a full skills index into the system prompt with a mandatory-scan instruction:
+> Before replying, scan the skills below. If a skill matches or is even partially relevant to your task, you MUST load it with skill_view(name) and follow its instructions.
 
-> Before replying, scan the skills below. If a skill matches or is even partially relevant to your task, you MUST load it with skill_view(name) and follow its instructions. Err on the side of loading — it is always better to have context you don't need than to miss critical steps, pitfalls, or established workflows.
+The model loads via `skill_view(name)` (optionally a linked `file_path` for multi-file skills) and may revisit across turns. Authoring is a single mode-dispatched tool `skill_manage` with six actions — `create`, `patch`, `edit`, `delete`, `write_file`, `remove_file` (`tools/skill_manager_tool.py:1136`) — paired with a prompt nudge to save/patch skills proactively (`SKILLS_GUIDANCE`, `prompt_builder.py:173-180`).
 
-Dispatch flow:
-1. user sends any message
-2. model sees the skills index in the system prompt (already loaded at session start)
-3. model decides whether a skill is relevant
-4. model calls `skill_view(name)` to load the SKILL.md body into context
-5. model follows the skill's workflow
+### Opencode — read-only knowledge reference, model-loadable, externally authored
 
-The skill body is referenced on demand by the model, not automatically injected.
+`SkillV2` (`packages/core/src/skill.ts`) discovers `*.md`/`**/SKILL.md` from local dirs, embedded definitions, **or remote URL catalogs** (`skill/discovery.ts` — fetches `index.json`, path-traversal-guarded). The model sees them through `skill/guidance.ts`, which renders the same `<available_skills>` XML shape co uses, permission-filtered per agent. The model loads a skill via the built-in `skill` tool (`tool/skill.ts`), which returns the body plus related files. Frontmatter is minimal — `name`, `description`, `slash` (`skill.ts:59-63`). There is **no model authoring path**: skills are discovered and applied, never created or patched by the model (file writes happen out-of-band; next session re-discovers). Templated/argument-bearing prompts live in a *separate* `command` construct (`config/command.ts`), not in skills.
 
-### Consequence: different gap profiles
+### Consequence: convergence and divergence
 
-- `co-cli` skills are **opt-in by user** (user types `/doctor`); the agent cannot proactively reach for a skill it needs
-- Hermes skills are **opt-in by model** (model decides to load based on skills index); the user never needs to know skills exist
-- `co-cli` skill bodies are **prompts executed once**; they drive a single turn
-- Hermes skill bodies are **workflow references loaded into context**; the model may revisit them across multiple turns
+- **Convergence:** co and opencode independently landed on the same `<available_skills>` index and both rejected hermes's "MUST load if even partially relevant" framing in favor of a lighter touch. All three now give the model a load tool — the original doc's headline gap ("model can't reach skills") is closed everywhere.
+- **Divergence on authoring:** co and hermes are *model-writable* (co via four monomorphic tools, hermes via one dispatched tool); opencode is *read-only* to the model.
+- **Divergence on body delivery:** co uniquely keeps the slash-command overlay path (body drives a whole turn) alongside the inline-reference path; hermes and opencode are reference-only.
 
-## Concrete Gaps
+## §4. Original gaps — current status
 
-### Gap 1: No system-prompt skill discovery surface
+| # | Original gap (2026-04-21) | Status now | Evidence |
+|---|---|---|---|
+| 1 | No system-prompt skill discovery surface | **CLOSED** | `<available_skills>` rendered per-turn by `skill_manifest_prompt` (`_instructions.py:75-85`, `skills/manifest.py`); discovery reflex in `06_skill_protocol.md:10-20` |
+| 2 | No skill authoring contract | **CLOSED** | `docs/specs/skills.md:172-238` (minimum shape, length budget, recommended phase structure); R1–R4 lint surfaced on every write (`skills/lint.py`); B1 no-marker gate for bundled set; `skill-creator` bundled meta-skill |
+| 3 | No skill self-improvement loop | **CLOSED — and past parity** | In-session drift/create reflexes (`06_skill_protocol.md:32-62`); model-write tools (`tools/system/skills.py`); **plus** background dream-daemon `skill_reviewer` + `merge_skills`/`decay_skills` + usage sidecar (`daemons/dream/_reviewer.py`, `_housekeeping.py`, `skills/usage.py`) — neither peer has background curation |
+| 4 | Sparse bundled library (1 skill) | **SUBSTANTIALLY CLOSED** | 8 bundled skills (`doctor`, `documents`, `office`, `plan`, `refactor`, `review`, `skill-creator`, `triage`); two ship executable assets (`co-extract-pdf`, `co-extract-office`) |
+| 5 | No authoring-vs-installation quality tiering | **CLOSED** | Bundled skills gated by `tests/test_flow_skill_bundled_library.py` (load + R1–R4 + B1 + manifest count); user skills get startup/reload security scan (`scan_skill_content`) + integrity validation (`_validate_skill_content`) on every write |
 
-Evidence:
+The original recommended ordering (contract → library → discovery → self-improvement) was effectively followed, and all four landed.
 
-- `co_cli/prompts/_assembly.py:87-160` assembles the static prompt without any skill index
-- `co_cli/agent/_instructions.py` has no `add_skill_awareness_prompt` equivalent
-- `deps.skill_registry` and `get_skill_registry()` (from `docs/specs/skills.md:131-138`) exist but the agent never sees them through a prompt channel
-- The `disable_model_invocation` frontmatter flag implies model-invocation was considered, but no path to the model exists today
+## Where `co-cli` is now distinctive
 
-Why it matters:
+### 1. Turn-scoped skill-env injection with rollback (still unique)
 
-- Even with user-installed skills, the agent cannot proactively suggest or invoke them
-- The full-bodied skill prompts are invisible until the user happens to type the right slash command
-- This makes skills a discoverable-only-by-documentation feature — users who haven't read `/skills list` get no value
+`skill-env` frontmatter injects env vars only for the dispatched turn, restored in a `finally` block (`docs/specs/skills.md:145-156`), filtered through `_SKILL_ENV_BLOCKED` (blocks `PATH`/`PYTHONPATH`/`HOME`/shell-loaders). Hermes's `env_passthrough.py` is an allowlist scoped to the **session** (ContextVar-backed), not the turn, and does not inject — it gates which host vars reach sandboxes. Opencode has no skill env mechanism. co is the only one with true per-turn injection + rollback.
 
-Peer comparison: Hermes's `build_skills_system_prompt()` in `agent/prompt_builder.py:583-808` is the exact mechanism `co-cli` lacks. It builds a compact category-grouped index from all SKILL.md files, applies platform / tools / toolsets filters, and injects with mandatory-scan instruction.
+### 2. Self-improvement is a full loop, not just a prompt nudge
 
-### Gap 2: No skill authoring contract
+co pairs in-session reflexes (`06_skill_protocol.md`) and model-write tools with a **background** layer no peer has: the dream daemon's `skill_reviewer` scans transcripts for drift/new procedures and patches/creates skills autonomously (`requires_approval=False`), and scheduled `merge_skills`/`decay_skills` consolidate similar user skills and archive stale ones (recall-protected, pin-exempt). Usage sidecars (`skills/usage.py`) track recall days to drive decay protection. Hermes has the prompt nudge + `skill_manage` but no background reviewer or decay; opencode has neither half.
 
-Evidence:
+### 3. Authoring contract is codified *and* enforced
 
-- `docs/specs/skills.md` documents the frontmatter schema and load semantics but not what a good skill *body* should contain
-- The only bundled skill (`co_cli/skills/doctor.md`) is 23 lines with ad-hoc structure: preamble + "Respond with this exact structure" block
-- No template, no required sections, no style guide for skill body authoring
-- No documented examples of skill body patterns (workflow skill, diagnostic skill, multi-step skill, etc.)
+Beyond a documented shape (`skills.md:172-238`), R1–R4 advisory lint attaches to every `skill_create`/`skill_edit`/`skill_patch` result as `lint_warnings`, integrity checks (`description` ≤1024, total ≤50k) hard-block the write, and the bundled library has its own B1 gate in CI. The `skill-creator` skill turns the contract into a guided workflow. Hermes has a strong de-facto structure but no lint/gate; opencode's frontmatter is minimal with no contract.
 
-Why it matters:
+### 4. Monomorphic write tools (deliberate small-model trade)
 
-- User-installed skills arrive with unpredictable shape
-- There is no quality bar for third-party skills
-- The `/skills install <url>` path in `docs/specs/skills.md:190-200` does a security scan but not a structural-quality scan
+co exposes four single-purpose tools (`skill_create`/`skill_edit`/`skill_patch`/`skill_delete`) where hermes uses one action-dispatched `skill_manage`. This is the same monomorphic-vs-dispatched trade co makes elsewhere — easier for a small model to call correctly. Not a consolidation candidate.
 
-Peer comparison: Hermes's bundled skills demonstrate a consistent structure. `hermes-agent/skills/software-development/subagent-driven-development/SKILL.md` uses:
+## Genuine remaining deltas (peer features co lacks)
 
-- rich frontmatter: `name`, `description`, `version`, `author`, `license`, `metadata.hermes.tags`, `metadata.hermes.related_skills`
-- standardized sections: `## Overview`, `## When to Use`, `## The Process`, numbered steps
-- concrete code examples inline (as `python` fenced blocks showing `read_file`, `todo`, `delegate_task` calls)
-- explicit "vs. manual execution" comparisons
-- related-skills cross-references
+These are small and optional — co's skill system is at or beyond parity overall.
 
-This is a de-facto authoring contract that `co-cli` has not documented or enforced.
+1. **Remote skill catalogs.** Opencode discovers skills from a remote URL (`index.json` fetch, path-traversal-guarded — `skill/discovery.ts`). co loads only bundled + local user-global dirs; the `/skills` family is `list/check/lint/reload/usage/pin/unpin` — there is **no `install`/`install <url>`** path today (the original doc referenced one; it is not in the current command set). If skill sharing becomes a goal, a vetted-source install path is the missing piece. Gate any such path on the existing `scan_skill_content` + integrity validation.
 
-### Gap 3: No skill self-improvement loop
+2. **Multi-file skills.** Hermes `skill_view(name, file_path)` loads a specific linked file within a skill, and `skill_manage` has `write_file`/`remove_file` actions; opencode's `skill` tool returns related files. co's loader globs only `*/SKILL.md` and ignores sibling files for *discovery* (a `scripts/` asset is driven at runtime via `shell_exec`, not loaded into context). For most procedural skills the single-body model is sufficient; revisit only if a skill needs the model to read multiple reference files.
 
-Evidence:
+3. **Per-skill permission gating.** Opencode gates each skill load by agent permission (`tool/skill.ts` `permission.assert`). co gates skill *writes* (approval) but skill *reads* (`skill_view`) are ungated. Low priority — reads are non-mutating.
 
-- `co_cli/prompts/rules/` contains no guidance about updating stale or inaccurate skills
-- `docs/specs/skills.md` documents the `/skills upgrade <name>` CLI command but has no prompt-level pressure for the model to notice and patch skill issues
-- The `/skills` command family supports `install`, `reload`, `upgrade` but not `patch` — there is no model-invokable path to edit a skill in place
+## Peer weaknesses (unchanged or worse)
 
-Why it matters:
+1. **Hermes mandatory-scan is still over-aggressive.** "You MUST load any even partially relevant skill" (`prompt_builder.py:1565-1567`) drives tool churn and devotes prompt mass to an index many tasks don't need. co's "load exactly one clearly-applicable skill, skip for trivial replies" is the better-calibrated framing — keep it.
 
-- Skills drift out of sync with the codebase they describe
-- A stale skill becomes a liability: the model follows outdated steps or references removed tools
-- Without a self-improvement loop, skill quality degrades over time
+2. **Hermes skill bodies are heavy.** The `plan` SKILL.md is 338 lines; loading it via `skill_view` consumes real context for a short task. co's R4 lint (body ≤8000 chars, warn) and umbrella-merge curation actively push the other way.
 
-Peer comparison: Hermes's `SKILLS_GUIDANCE` in `agent/prompt_builder.py:164-171`:
+3. **Opencode has no self-improvement.** Skills are static read-only knowledge with minimal frontmatter; the model cannot fix a stale skill or promote a discovered procedure — that work is fully out-of-band. This is the axis where co is furthest ahead.
 
-> After completing a complex task (5+ tool calls), fixing a tricky error, or discovering a non-trivial workflow, save the approach as a skill with skill_manage.
->
-> When using a skill and finding it outdated, incomplete, or wrong, patch it immediately with skill_manage(action='patch') — don't wait to be asked. Skills that aren't maintained become liabilities.
+## Bottom line
 
-This pairs a model-invokable `skill_manage` tool with a prompt-level "keep skills maintained" invariant. `co-cli` has neither half of this mechanism.
+The 2026-04-21 edition called co's skill system "architecturally lean but under-used" with four load-bearing gaps. As of 2026-06-22 those gaps are closed: a per-turn `<available_skills>` manifest, model-callable read + write tools, an injected discovery/drift/create discipline, an enforced authoring contract with lint, 8 bundled skills, and a background curation loop. Against the two peers co is at or beyond parity — it is the only one of the three with turn-scoped env rollback and autonomous background skill curation, and it avoids both hermes's mandatory-scan churn and opencode's read-only static skills.
 
-### Gap 4: Sparse bundled skill library
-
-Evidence:
-
-- `co_cli/skills/` contains exactly one file: `doctor.md`
-- `docs/specs/skills.md:23` describes skills as "prompt overlays" but there are essentially zero bundled examples of common workflows (plan, review, refactor, triage, etc.)
-
-Why it matters:
-
-- Users see "Skills" in the docs and `/skills list` shows one item — the feature looks undercooked
-- Skills that would be obvious wins (structured code review, plan drafting, investigation templates) are absent
-- The `co-cli` slash-command surface is artificially thin compared to what the skill system supports
-
-Peer comparison: Hermes ships 26 top-level skill categories. While that may be over-aggressive (see Peer Weaknesses below), the delta from 26 → 1 is large, and `co-cli` has room to add 3–5 high-value bundled skills without approaching hermes-scale bloat.
-
-### Gap 5: No authoring-vs-installation quality tiering
-
-Evidence:
-
-- `docs/specs/skills.md:112-127` — security scan behavior differs by path (startup warning-only vs `/skills install` explicit-confirmation) but there is no separate *quality* tier
-- Bundled skills are version-controlled so they bypass the security scan, but there is no lint, no schema validation, no template conformance check
-
-Why it matters:
-
-- A bundled skill shipped with `co-cli` should meet higher quality bar than a user-installed one
-- Without a tiering / quality contract, there is no clean way to enforce "bundled skills are reference-quality"
-
-## Where `co-cli` Is Better
-
-Despite the gaps, two aspects of the skills architecture are genuinely better than hermes:
-
-### 1. Ephemeral turn-scoped env injection
-
-`docs/specs/skills.md:172-184` — `skill-env` frontmatter injects env vars only for the duration of the dispatched turn, with rollback on success/failure/interrupt. Filtered through `_SKILL_ENV_BLOCKED` to prevent overriding critical process variables (`PATH`, `PYTHONPATH`, `HOME`).
-
-Hermes has no equivalent — skill-managed env vars leak into the rest of the session.
-
-### 2. Single-tier dispatch, not prompt-bloat
-
-Because `co-cli` skills are prompt overlays driving one turn, they do not inflate every system prompt the way hermes's mandatory skills index does. The cost of adding a new skill to `co-cli` is zero ongoing prompt overhead; the cost of adding one to hermes is +1 line in every session's system prompt (and attention contention).
-
-This means if `co-cli` does add a skill-discovery surface (Gap 1), it should be **optional / lazy**, not mandatory-scan like hermes.
-
-## Peer Weaknesses
-
-### 1. Hermes's skills index is over-aggressive
-
-`hermes-agent/agent/prompt_builder.py:777-799` — "If a skill matches or is even partially relevant to your task, you MUST load it with skill_view(name)."
-
-This creates:
-- unnecessary tool churn — model calls `skill_view` for marginally relevant skills
-- prompt mass devoted to the skills index that many tasks do not need
-- over-eager loading when a quick answer would be better
-
-### 2. Hermes skill bodies are heavy
-
-The example `subagent-driven-development/SKILL.md` is hundreds of lines with detailed per-step code examples. Once loaded via `skill_view()`, this consumes significant context. For a short task, this is pure overhead.
-
-### 3. Hermes's first-match-wins platform gating is coarse
-
-`skill_matches_platform()` filters skills by declared platform. A skill that declares multiple platforms is fine, but a skill with no platform declaration is always loaded. This can surface incompatible skills silently.
-
-## Recommended Direction
-
-### P3 (forward-looking — defer until skills library grows)
-
-1. **Define a skill authoring contract.** Add `docs/specs/skill-authoring.md` (or a section in `docs/specs/skills.md`) specifying:
-   - required sections: `## When to use`, `## Steps`, `## Output contract` (or similar)
-   - recommended frontmatter: `argument-hint`, `requires.bins`, `user-invocable`, `disable-model-invocation`
-   - style conventions (tense, imperative mood, concrete tool examples)
-   - length budget (e.g. <150 lines for bundled skills)
-   - closes Gap 2
-
-2. **Add 3–5 high-value bundled skills.** Candidates:
-   - `plan` — draft an implementation plan for a task
-   - `review` — structured self-review of pending changes
-   - `triage` — diagnose a failing test or error
-   - `refactor` — apply a named refactor pattern
-   - closes Gap 4
-
-3. **Add an opt-in skill-awareness prompt layer.** Similar to `add_category_awareness_prompt` in `co_cli/agent/_instructions.py:21-24`:
-   - Lists loaded, model-invocable skills (filtering out `disable_model_invocation=True`)
-   - Short, compact format (~1 line per skill: `name — description`)
-   - Injected as a runtime `@agent.instructions` callback, not baked into the static prompt
-   - Instruction should be aspirational, not mandatory: "The following skills are available — invoke them with `skill_run(name)` when directly relevant"
-   - Addresses Gap 1 without adopting hermes's over-aggressive framing
-   - Requires new `skill_run` tool for model-side dispatch
-
-4. **Add a skill-update prompt rule.** Add to `co_cli/prompts/rules/04_tool_protocol.md`:
-   - "When you invoke a skill and find its steps outdated or wrong for the current task, note the drift and suggest a patch."
-   - Pair with an optional `skill_patch` tool (deferred-approval) for model-invokable edits
-   - Closes Gap 3
-
-### Not recommended
-
-1. **Do not adopt hermes's mandatory-scan skill index.** The "you MUST load any even partially relevant skill" framing is too aggressive and would nullify `co-cli`'s prompt-mass advantage.
-
-2. **Do not bake skill bodies into the system prompt.** Keep co's current "skill body drives a single turn" model; skills should remain prompt overlays, not reference documents loaded into context.
-
-## Bottom Line
-
-`co-cli`'s skill system is architecturally lean but under-used. The four concrete gaps are:
-
-1. skill discovery (no prompt surface for the agent to know skills exist)
-2. authoring contract (no quality standard for skill bodies)
-3. self-improvement loop (no model-invokable skill maintenance)
-4. sparse bundled library (exactly one shipped skill)
-
-Closing these is not urgent. The skills system works as designed for the single bundled skill. But as `co-cli` matures, the authoring contract and model-side discovery become load-bearing — and they are easier to design now than to retrofit after a library of user-installed skills accumulates with inconsistent shape.
-
-The ordering should be: author contract first (Gap 2), then bundled library fill-in (Gap 4), then model-side discovery (Gap 1), then self-improvement (Gap 3). Gap-1 work depends on authoring conventions being settled, so inverting this order creates rework.
+The remaining deltas are optional and small: a vetted remote-install path (opencode has one, co does not), multi-file skill bodies (hermes/opencode have them), and per-skill read gating (opencode). None is urgent; the first is the only one worth a plan if skill sharing becomes a product goal.
