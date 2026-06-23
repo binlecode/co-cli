@@ -280,7 +280,7 @@ Five functions are registered via `agent.instructions()` and run before every mo
 
 - `safety_prompt` — doom-loop detection + shell reflection cap; active warnings returned as plain text
 - `wrap_up_prompt` — returns the `WRAP_UP_TEXT` nudge on the last request before the model-request cap (see §1); empty on all other requests
-- `current_time_prompt` — current date/time string at the tail position; ephemeral grounding
+- `current_time_prompt` — current date string at day-only granularity; ephemeral grounding kept cache-stable within a session-day
 - `deferred_tool_awareness_prompt` — names the deferred-tool surface so the model knows what it can fetch
 - `skill_manifest_prompt` — injects the `<available_skills>` manifest
 

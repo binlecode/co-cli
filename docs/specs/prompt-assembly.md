@@ -92,7 +92,7 @@ Registered in `build_orchestrator()` (`co_cli/agent/build.py`) from `ORCHESTRATO
 | Layer | Condition | Content |
 | --- | --- | --- |
 | `safety_prompt` | doom loop or shell-error streak active | warning text injected into instructions context |
-| `current_time_prompt` | always | current date and time string (`"Current time: Monday, April 28, 2026 08:13 AM"`) |
+| `current_time_prompt` | always | current date string, day-only granularity (`"Current date: Monday, April 28, 2026"`) — day-only so the system block stays byte-stable across same-day turns and the Ollama prefix cache extends through it into history |
 | `deferred_tool_awareness_prompt` | any `VisibilityPolicyEnum.DEFERRED` tools present | per-tool stub list (one `` - `name`: one-liner `` line per deferred tool) grouped by integration family — native primitives first with no sub-header, then each family under a `` `<label>` (load before use): `` sub-header (e.g. `Google Workspace`) — telling the model to load a tool via `tool_view` (by exact name) before calling it; wraps `build_deferred_tool_awareness_prompt(ctx.deps.tool_catalog)` |
 | `skill_manifest_prompt` | `skill_catalog` non-empty | `<available_skills>` XML manifest of bundled + user-installed skills; wraps `render_skill_manifest(ctx.deps.skill_catalog, ctx.deps.skills_dir, ctx.deps.user_skills_dir)` |
 
@@ -130,7 +130,7 @@ Four dynamic instruction functions are registered via `agent.instructions()` and
 | Dynamic instruction | Behavior |
 | --- | --- |
 | `safety_prompt` | detects identical-tool-call streaks and shell-error streaks; returns warning text injected into the instructions context |
-| `current_time_prompt` | returns current date/time string — ephemeral grounding kept out of the static Block 0 (it is a dynamic instruction), so the changing timestamp never freezes into the cached prefix |
+| `current_time_prompt` | returns the current date string at day-only granularity — a dynamic instruction kept out of the static literal, and coarsened to day precision so it does not change within a session-day; minute precision here previously broke the Ollama prefix cache for the whole history that follows the system block |
 | `deferred_tool_awareness_prompt` | re-reads `ctx.deps.tool_catalog` each turn — newly registered deferred tools surface immediately without restart |
 | `skill_manifest_prompt` | re-reads `ctx.deps.skill_catalog` each turn — newly created skills become visible to the model on the very next turn |
 

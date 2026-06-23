@@ -8,8 +8,17 @@ from co_cli.deps import CoDeps
 
 
 def current_time_prompt(ctx: RunContext[CoDeps]) -> str:
-    """Per-turn: inject current date and time for accuracy without freezing it in cached Block 0."""
-    return datetime.now().strftime("Current time: %A, %B %d, %Y %I:%M %p")
+    """Per-turn: inject the current date (day-only) for grounding.
+
+    Day-only granularity is deliberate. This block sits in the system prompt ahead
+    of all message history; on the Ollama/llama.cpp path the prefix cache breaks at
+    the first differing token, so a minute-precision clock here changed nearly every
+    turn and forced the entire growing history to be re-prefilled. Day precision keeps
+    the system block byte-stable across same-day turns, extending the cached prefix
+    through the system block into history. Time-of-day, if ever needed, is a tool call,
+    not a prompt fact.
+    """
+    return datetime.now().strftime("Current date: %A, %B %d, %Y")
 
 
 def safety_prompt(ctx: RunContext[CoDeps]) -> str:
