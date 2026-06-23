@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.462]
+
+Sharpen the `plan` skill with two prompt-design devices borrowed from hermes's `plan` skill, re-authored for co's scoping philosophy.
+
+- **Core principle + Common Mistakes** — `co_cli/skills/plan/SKILL.md` gains a one-line core principle ("a good plan makes implementation obvious; if a task leaves the implementer guessing, it is incomplete") and a Common Mistakes block of bad→good contrasts targeting co's real failure modes: vague `Done when`, scope leak, oversized task, skipped open-questions. The block's content is co-specific — hermes's complete-code mistakes were *not* copied (one contradicts co's "no implementation code in plans" rule; the others are already structurally enforced).
+- **Full adoption rejected by design** — hermes's plan style (complete copy-pasteable code at plan time) was evaluated and declined: the default `WEAK_LOCAL` backend (`qwen3.6:35b-a3b-agentic`) is unreliable at plan-time code generation, and freezing code into a trusted plan artifact removes the test/lint feedback loop that catches its errors. An A/B over real planning turns (judged) showed no regression (mean judge 9.67→9.67, structural conformance 5.0→5.0).
+
 ## [0.8.461]
 
 Stop a rare upstream GC-finalization `ValueError` from crashing the interactive REPL.
