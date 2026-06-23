@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.455]
+
+Preserve the user's prompt when a turn aborts before its first run completes.
+
+- **Error-path prompt loss fixed** — `_build_error_turn_result` (`co_cli/agent/orchestrate.py`) fell back to the bare entry history when `latest_result` was still `None` (no run completed), silently dropping the turn's user prompt from the transcript. It now falls back to `_history_with_pending_user_input(turn_state)`, materializing the pending prompt. Covers the request-cap abort (`UsageLimitExceeded`) and every other terminal error path (HTTP/API/malformed) that can fire before the first run finishes, restoring the peer invariant that the user turn always survives the turn.
+
 ## [0.8.453]
 
 Correct an inaccurate coupling claim in the pydantic-ai integration spec §7.

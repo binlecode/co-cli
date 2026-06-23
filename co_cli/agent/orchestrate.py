@@ -601,7 +601,7 @@ def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
     msgs = (
         turn_state.latest_result.all_messages()
         if turn_state.latest_result
-        else turn_state.current_history
+        else _history_with_pending_user_input(turn_state)
     )
     return TurnResult(
         messages=msgs,
