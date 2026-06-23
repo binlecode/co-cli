@@ -38,15 +38,10 @@ def _count_consecutive_same_calls(messages: list[ModelMessage]) -> int:
     for msg in reversed(messages):
         if not isinstance(msg, ModelResponse):
             continue
-        for part in msg.parts:
+        for part in reversed(msg.parts):
             if not isinstance(part, ToolCallPart):
                 continue
-            args_str = json.dumps(
-                part.args.args_dict()  # type: ignore[union-attr]  # part.args is str|dict|None at type level; hasattr guard is correct at runtime
-                if hasattr(part.args, "args_dict")
-                else str(part.args),
-                sort_keys=True,
-            )
+            args_str = json.dumps(part.args_as_dict(), sort_keys=True)
             hashed = hashlib.md5(f"{part.tool_name}:{args_str}".encode()).hexdigest()
             if last_hash is None:
                 consecutive_same = 1
@@ -84,7 +79,7 @@ def _count_consecutive_shell_errors(messages: list[ModelMessage]) -> int:
     for msg in reversed(messages):
         if not isinstance(msg, ModelRequest):
             continue
-        for part in msg.parts:
+        for part in reversed(msg.parts):
             if not isinstance(part, ToolReturnPart):
                 continue
             if _is_shell_error_return(part) and part.tool_name == "shell_exec":

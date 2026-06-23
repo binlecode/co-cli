@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.447]
+
+Fix the safety-prompt streak counters mis-ordering parallel tool batches, which produced spurious doom-loop / shell-reflection warnings.
+
+- **Parts scanned newest-first to match the message scan** — `_count_consecutive_same_calls` and `_count_consecutive_shell_errors` (`co_cli/context/prompt_text.py`) scan message history newest-first but iterated each message's `.parts` oldest-first. When the tail message held a parallel batch — e.g. a return batch `[err, err, err, ok]` with `ok` chronologically most recent — the forward part scan read the stale errors first and reported a streak of 3 instead of 0, firing a false warning (and symmetrically could miss a real streak). Both loops now iterate `reversed(msg.parts)`, so the scan is strictly newest-first end-to-end. pydantic-ai orders `.parts` chronologically (Anthropic provider appends in API arrival order), so the reversal is correct.
+- **Tests**: new `tests/test_flow_safety_prompt.py` — four cases through the public `safety_prompt_text`: a success-terminated shell batch and a different-call-terminated doom batch must not warn (the regressions; fail on pre-fix code), plus error-terminated and repeated-call positive controls that must warn (guard against the fix over-correcting to always-zero).
+
 ## [0.8.445]
 
 Fix a frame mismatch in the spill tier that made it under-spill and defer to the LLM summarizer when a nonzero static floor was present.
