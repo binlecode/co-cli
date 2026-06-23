@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.452]
+
+Make the per-call MCP tool timeout explicit and configurable, and drop dead agent-loop surface found by an anti-pattern scan.
+
+- **Configurable per-call MCP timeout** — MCP tool calls inherited pydantic-ai's silent 300s `read_timeout` default (2.5× the 120s `LLM_RUN_TIMEOUT_SECS` stall window, and unconfigurable). Because `_StallTimer` (`co_cli/agent/orchestrate.py`) disarms during tool execution, that default was the only liveness bound on a blocked MCP call. `MCPServerSettings` (`co_cli/config/mcp.py`) now splits the knob into `connect_timeout_seconds` (connection/discovery → pydantic-ai `timeout`) and `call_timeout_seconds` (per-call response → pydantic-ai `read_timeout`, default 120 mirroring the stall window, cap 1–600). `_build_mcp_toolsets` (`co_cli/agent/mcp.py`) plumbs both to all three server constructors; the stdio env handling collapses to `env=cfg.env or None`. Specs `config.md` + `pydantic-ai-integration.md` updated. Tests: `tests/test_flow_mcp_timeout.py`.
+- **Drop dead agent-loop surface** — grep-verified write-only fields and never-passed params removed (pure subtraction): `TaskAgentSpec.error_message` (zero readers; the in-turn `ModelRetry` path its docstring described does not exist), `OrchestratorSpec.name` (`build_orchestrator` never reads it), and `run_standalone`'s `budget`/`model_settings` params + discarded return tuple (now `-> None`, dropping `copy`/`Any`/`RunUsage` imports). `_make_prepare` (`co_cli/agent/toolset.py`) gained its missing return annotation. Spec fixtures updated; the budget regression test (sole consumer of the removed param) removed — `run_standalone` stays covered end-to-end by the dream daemon tests.
+
 ## [0.8.451]
 
 Close the consecutive tool-call cap gracefully — it never returns an empty error result, salvaging the model's last visible answer instead of discarding it.
