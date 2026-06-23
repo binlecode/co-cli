@@ -41,3 +41,19 @@ async def test_capabilities_surfaces_deps_degradations() -> None:
     display = result.return_value
     assert "knowledge: hybrid → fts5 (embedder unavailable)" in display
     assert result.metadata["degradations"]["knowledge"] == "hybrid → fts5 (embedder unavailable)"
+
+
+@pytest.mark.asyncio
+async def test_capabilities_surfaces_slash_commands() -> None:
+    """The user-typed slash-command surface must appear in the display so the
+    model can answer command questions instead of confabulating."""
+    import co_cli.commands.core  # noqa: F401 — populates BUILTIN_COMMANDS as bootstrap does
+
+    deps = _make_deps()
+    ctx = _make_ctx(deps)
+    async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):
+        result = await capabilities_check(ctx)
+    display = result.return_value
+    assert "Slash commands (the user types these in the REPL" in display
+    assert "/queue" in display
+    assert "/help" in display

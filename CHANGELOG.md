@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.460]
+
+Teach `capabilities_check` about the slash-command surface so the agent stops confabulating about its own REPL commands.
+
+- **Slash-command awareness** — `capabilities_check` (`co_cli/tools/system/capabilities.py`) now renders the `BUILTIN_COMMANDS` registry under a "Slash commands (the user types these…)" section, labeled as user-typed/not-model-invocable. The canonical runtime self-knowledge tool previously enumerated only the model-facing surface (tools, approval-gated, MCP) and was blind to the user-facing command surface — so asked "do you support /queue?" the model fell back on generic priors and answered wrong.
+- **Lean by design** — the command list lives in the tool's return value (paid only when the model calls the tool), not in a static prompt manifest; net base-prompt cost is ~6 words added to the tool docstring. `/doctor` inherits the new section for free since it reads the tool's display text.
+
 ## [0.8.458]
 
 Test-suite maintenance: prune redundant tests and backfill the SSRF security gap (test-only; no production change).

@@ -59,6 +59,19 @@ def _build_tool_surface_lines(deps: CoDeps) -> list[str]:
     ]
 
 
+def _build_command_surface_lines() -> list[str]:
+    from co_cli.commands.registry import BUILTIN_COMMANDS
+
+    lines = [
+        "",
+        "Slash commands (the user types these in the REPL; you can explain or "
+        "suggest them, but cannot invoke them yourself):",
+    ]
+    for name in sorted(BUILTIN_COMMANDS):
+        lines.append(f"  /{name} — {BUILTIN_COMMANDS[name].description}")
+    return lines
+
+
 def _build_component_lines(result: RuntimeCheckResult) -> list[str]:
     unavailable = [
         cs
@@ -137,10 +150,10 @@ def _build_mcp_lines(
 
 @agent_tool(visibility=VisibilityPolicyEnum.ALWAYS, is_concurrent_safe=True)
 async def capabilities_check(ctx: RunContext[CoDeps]) -> ToolReturn:
-    """Report the current runtime capability surface: available tools, approval-gated actions, degraded integrations, active fallbacks.
+    """Report the current runtime capability surface: available tools, slash commands, approval-gated actions, degraded integrations, active fallbacks.
 
     Call this when the user asks what you can do, whether a specific capability
-    is available, or why something is unavailable or degraded.
+    or slash command is available, or why something is unavailable or degraded.
     Also use for runtime health checks and system check questions: is X up, why is Y degraded, can I do Z right now.
     """
     progress = ctx.deps.runtime.tool_progress_callback
@@ -160,6 +173,7 @@ async def capabilities_check(ctx: RunContext[CoDeps]) -> ToolReturn:
 
     lines: list[str] = []
     lines.extend(_build_tool_surface_lines(ctx.deps))
+    lines.extend(_build_command_surface_lines())
     lines.extend(_build_component_lines(result))
     lines.extend(_build_runtime_lines(ctx.deps, result, reranker))
     lines.extend(_build_mcp_lines(ctx.deps, result, mcp_tool_count))
