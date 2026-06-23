@@ -225,24 +225,6 @@ def _seed_png(path: Path) -> Path:
     return path
 
 
-@pytest.mark.asyncio
-async def test_image_view_and_core_produce_identical_pixels(tmp_path: Path) -> None:
-    """TASK-1 parity: image_view's attached BinaryContent equals read_image's directly.
-
-    Both read the same fixture; the tool path adds the boundary check but the pixels and
-    media_type must be byte-identical to the shared core's output.
-    """
-    deps = _make_deps(tmp_path, agent_vision_capable=True)
-    ctx = _make_ctx(deps, tool_name="image_view")
-    result = await image_view(ctx, path=str(_FIXTURE), prompt="x")
-    tool_pixels = next(c for c in (result.content or []) if isinstance(c, BinaryContent))
-
-    core = read_image(_FIXTURE)
-    assert isinstance(core, BinaryContent)
-    assert core.data == tool_pixels.data
-    assert core.media_type == tool_pixels.media_type == "image/png"
-
-
 def test_read_image_rejects_missing_dir_and_unsupported(tmp_path: Path) -> None:
     """The shared core rejects missing / directory / unsupported with ImageRejection."""
     missing = read_image(tmp_path / "nope.png")

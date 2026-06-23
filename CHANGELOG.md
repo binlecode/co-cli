@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.458]
+
+Test-suite maintenance: prune redundant tests and backfill the SSRF security gap (test-only; no production change).
+
+- **clean-tests pass** — removed 10 Low-criticality tests across 9 files that guarded no unique failure mode: structural/no-op assertions (`test_overlay_provider_immediately_follows_base` list-index check; `test_deep_copy_no_mutation` stdlib contract; `test_estimate_message_tokens_empty_list` degenerate boundary), cross-layer subsumption (`test_save_default_source_type.py` whole file — subsumed by the stronger tool-layer `memory_create` test; `test_image_view_and_core_produce_identical_pixels` byte-parity), and same-file/thin-forwarder wiring dups (`test_idempotent`, plus `memory_replace`/`skill_patch`/`skill_edit`/`skill_delete` wiring tests whose behavior is proven by the unit bump/`_handle_mutate` tests). Trimmed a tautological second assertion in `test_sync_canon_store_indexes_real_tars_memories`. Audited 679 tests across 9 domain groups; the suite was found lean — most flagged candidates were over-flags rescued by same-branch source verification (accumulation, inclusion-half, computed-relationship, glob-disambiguation guards).
+- **SSRF coverage backfill** — `tests/test_flow_ssrf.py` previously covered only `is_url_safe` (2 tests). Added 10 functional tests for the untested Critical security surfaces in `co_cli/tools/web/_ssrf.py`: `ssrf_redirect_guard` (absolute-blocked raise, protocol-relative `//host/` urljoin bypass, public no-raise, non-redirect and no-Location no-ops), `SSRFSafeNetworkBackend.connect_tcp` (blocked-IP rejection — the DNS-rebind TOCTOU close — and fail-closed on resolution failure), `make_ssrf_safe_transport` (end-to-end injection proof: a real `httpx.AsyncClient` to the metadata IP is refused at connect time), and the two uncovered `_is_blocked_ip` branches (IPv4-mapped IPv6 loopback, CGNAT `100.64.0.0/10`). All real objects, no mocks, offline and deterministic.
+
 ## [0.8.456]
 
 Drain post-2026-06-17 rules-conformance residue (behavior-preserving cleanup).

@@ -1,4 +1,4 @@
-"""Unit tests: memory_create/append/replace reset turns_since_memory_review to 0.
+"""Unit tests: memory_create/append reset turns_since_memory_review to 0.
 
 No LLM. No index_store. Real filesystem writes via real service layer.
 Verifies that each mutating tool resets the session counter to 0.
@@ -19,7 +19,6 @@ from co_cli.tools.memory.manage import (
     memory_append,
     memory_create,
     memory_delete,
-    memory_replace,
 )
 from co_cli.tools.shell_backend import ShellBackend
 
@@ -92,36 +91,6 @@ async def test_append_resets_turns_since_memory_review(tmp_path: Path) -> None:
         ctx,
         filename_stem=saved.filename_stem,
         content="Appended content.",
-    )
-
-    assert not _is_error(result), f"Expected success, got error: {result}"
-    assert deps.session.turns_since_memory_review == 0
-
-
-# ---------------------------------------------------------------------------
-# replace
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_replace_resets_turns_since_memory_review(tmp_path: Path) -> None:
-    """memory_replace resets turns_since_memory_review to 0 on success."""
-    deps = _make_deps(tmp_path, initial_turns=3)
-    memory_dir = deps.memory_dir
-
-    saved = save_memory_item(
-        memory_dir,
-        content="Old content here.",
-        memory_kind="note",
-        title="Replace Target",
-    )
-    ctx = _make_ctx(deps)
-
-    result = await memory_replace(
-        ctx,
-        filename_stem=saved.filename_stem,
-        section="Old content here.",
-        content="New content here.",
     )
 
     assert not _is_error(result), f"Expected success, got error: {result}"

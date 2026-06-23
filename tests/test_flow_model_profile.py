@@ -12,7 +12,6 @@ import pytest
 
 from co_cli.agent.orchestrator import (
     ORCHESTRATOR_SPEC,
-    _base_instructions_provider,
     _model_profile_overlay_provider,
 )
 from co_cli.bootstrap.core import create_deps
@@ -67,15 +66,6 @@ def test_gemini_pro_inherits_frontier_budget_and_skips_ollama_probe() -> None:
     llm = LlmSettings(provider="gemini", model="gemini-3.1-pro-preview", api_key="x")
     assert llm.max_context_tokens == FRONTIER_MAX_CONTEXT_TOKENS == 524_288
     assert llm.ollama_num_ctx() is None
-
-
-def test_overlay_provider_immediately_follows_base() -> None:
-    """The overlay seam sits directly after the base builder, so overlay is adjacent to base."""
-    builders = ORCHESTRATOR_SPEC.static_instruction_builders
-    assert (
-        builders.index(_model_profile_overlay_provider)
-        == builders.index(_base_instructions_provider) + 1
-    )
 
 
 @pytest.mark.asyncio

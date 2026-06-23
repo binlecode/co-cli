@@ -198,11 +198,6 @@ def test_estimate_message_tokens_grows_with_content():
     assert estimate_message_tokens(long) > estimate_message_tokens(short)
 
 
-def test_estimate_message_tokens_empty_list():
-    """Token estimate for an empty message list must be zero."""
-    assert estimate_message_tokens([]) == 0
-
-
 def test_estimate_message_tokens_handles_binary_content():
     """A UserPromptPart carrying [text, BinaryContent] must estimate without raising,
     and the image must contribute a small bounded amount — never its byte length.

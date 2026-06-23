@@ -32,14 +32,6 @@ def test_sync_canon_store_indexes_real_tars_memories(tmp_path: Path) -> None:
         assert len(results) >= 1, (
             "expected at least 1 canon result for 'humor deadpan' after _sync_canon_store"
         )
-        # explicit kinds filter returns same paths as no filter — proves kind='canon' is indexed
-        all_hits, _ = store.search("humor deadpan", sources=["canon"])
-        paths_all = {r.path for r in all_hits}
-        canon_hits, _ = store.search("humor deadpan", sources=["canon"], kinds=["canon"])
-        paths_canon = {r.path for r in canon_hits}
-        assert paths_all == paths_canon, (
-            "search with kinds=['canon'] should return same paths as search without kinds filter"
-        )
     finally:
         store.close()
 

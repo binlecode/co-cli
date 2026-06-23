@@ -16,9 +16,6 @@ from co_cli.skills.loader import load_skills
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.system.skills import (
     skill_create,
-    skill_delete,
-    skill_edit,
-    skill_patch,
     skill_view,
 )
 
@@ -289,7 +286,7 @@ def test_bump_view_swallows_write_failures(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# integration via skill_create / skill_edit / skill_patch / skill_delete / skill_view tools
+# integration via skill_create / skill_view tools (fan-out wiring smoke)
 # ---------------------------------------------------------------------------
 
 
@@ -310,47 +307,6 @@ async def test_skill_create_then_view_produces_sidecar_entry(tmp_path: Path) -> 
     assert record["use_count"] == 1
     assert record["last_viewed_at"] is not None
     assert record["last_used_at"] is not None
-
-
-@pytest.mark.asyncio
-async def test_skill_patch_bumps_patch_count(tmp_path: Path) -> None:
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-    await skill_create(ctx, name="my-skill", content=_VALID_CONTENT)
-    await skill_patch(
-        ctx,
-        name="my-skill",
-        old_string="Do the test task.",
-        new_string="Do the patched task.",
-    )
-    record = skill_usage.read_record(deps, "my-skill")
-    assert record is not None
-    assert record["patch_count"] == 1
-    assert record["last_patched_at"] is not None
-
-
-@pytest.mark.asyncio
-async def test_skill_edit_bumps_patch_count(tmp_path: Path) -> None:
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-    await skill_create(ctx, name="my-skill", content=_VALID_CONTENT)
-    new_content = "---\ndescription: Edited skill\n---\n\nEdited body.\n"
-    await skill_edit(ctx, name="my-skill", content=new_content)
-    record = skill_usage.read_record(deps, "my-skill")
-    assert record is not None
-    assert record["patch_count"] == 1
-
-
-@pytest.mark.asyncio
-async def test_skill_delete_removes_sidecar_entry(tmp_path: Path) -> None:
-    deps = _make_deps(tmp_path)
-    ctx = _make_ctx(deps)
-    await skill_create(ctx, name="my-skill", content=_VALID_CONTENT)
-    assert skill_usage.read_record(deps, "my-skill") is not None
-
-    await skill_delete(ctx, name="my-skill")
-    assert skill_usage.read_record(deps, "my-skill") is None
-    assert not (tmp_path / "my-skill" / "SKILL.usage.json").exists()
 
 
 # ---------------------------------------------------------------------------

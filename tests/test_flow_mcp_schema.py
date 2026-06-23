@@ -59,21 +59,3 @@ def test_recursive_nested() -> None:
     result = sanitize_mcp_schema(schema)
     assert result["properties"]["count"]["type"] == "integer"
     assert result["properties"]["count"].get("type") != ["integer", "null"]
-
-
-def test_deep_copy_no_mutation() -> None:
-    original = {"type": ["string", "null"], "description": "x"}
-    original_copy = dict(original)
-    sanitize_mcp_schema(original)
-    assert original == original_copy
-
-
-def test_idempotent() -> None:
-    schema = {
-        "type": ["string", "null"],
-        "properties": {"a": {"anyOf": [{"type": "integer"}, {"type": "null"}]}},
-        "required": ["a", "missing"],
-    }
-    once = sanitize_mcp_schema(schema)
-    twice = sanitize_mcp_schema(once)
-    assert once == twice
