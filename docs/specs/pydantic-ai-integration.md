@@ -389,9 +389,9 @@ Load-bearing, intentional, or rejected couplings — recorded so they are not re
 
 **Coding practices to preserve under any future refactor:**
 - Non-mutating history processors (never mutate the input list/objects); the single `_rewrite_tool_returns` contract; identity-preserving `replace(...)`. All registered processors are rewrite-only — there is no additive processor. The final-request wrap-up nudge (§2.13) is a dynamic instruction (`wrap_up_prompt`), not a history processor, so it requires no strip step.
+- Intra-call `id(part)` locality in `evict_old_tool_results` and `spill_largest_tool_results` (`history_processors.py`): each builds and consumes its id-set entirely within a single processor invocation, over the same `messages` list the processor receives (list slicing preserves element identity by Python guarantee). The id-set never crosses a processor boundary, so SDK message-copying between processors cannot affect it — each processor rebuilds from its own input. Preserve this build-and-consume-within-one-call locality under refactor. (`dedup_tool_results` keys on `tool_call_id` strings, not `id()`, and is unaffected either way.)
 - Frozen registration metadata (`ToolInfo`, `AlwaysSchemaBudget`, `MCPToolsetEntry`).
 - Thin proxies over deep subclassing (`_SanitizingMCPServer`, `_RepairingStreamedResponse` delegate via `__getattr__`, override one method).
 
 **Latent risks (recorded, not addressed):**
-- `id(part)` identity tracking across processor passes (`history_processors.py`) assumes the SDK passes the same part objects to each processor within a request — true today; would break silently if the SDK deep-copies messages between processors.
 - String-based part fallbacks (`getattr(part, "part_kind", part.__class__.__name__)` in `serialize.py`) duck-type instead of `isinstance` — defensive, but signals the part taxonomy isn't fully trusted.

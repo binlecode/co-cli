@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.453]
+
+Correct an inaccurate coupling claim in the pydantic-ai integration spec §7.
+
+- **Spec §7 `id(part)` claim corrected** — the "latent risks" entry claimed `id(part)` tracking spans "processor passes" and "would break silently if the SDK deep-copies messages between processors." Source-verified false: `evict_old_tool_results` and `spill_largest_tool_results` (`co_cli/context/history_processors.py`) each build *and* consume their id-set within a single processor invocation over the same `messages` list they receive, so the id-set never crosses a processor boundary and SDK message-copying between processors cannot affect it. Moved to "coding practices to preserve" as an accurate description of the intra-call locality; scoped to the two `id()`-based processors (`dedup_tool_results` keys on `tool_call_id` strings, unaffected). Docs-only; no code change.
+
 ## [0.8.452]
 
 Make the per-call MCP tool timeout explicit and configurable, and drop dead agent-loop surface found by an anti-pattern scan.
