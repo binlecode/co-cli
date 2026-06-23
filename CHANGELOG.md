@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.466]
+
+Theme-aware TUI glyph set, a calmer welcome banner, single-source theme resolution, and `-t` on the bare `co` command.
+
+- **Curated glyph set** — `co_cli/display/core.py` gains `Glyphs` (frozen dataclass) + theme-keyed `_GLYPHS` + the `glyphs()` accessor, swapped by `set_theme` like the color `_THEMES`. Glyphs are geometrically upright/symmetric and thin-on-light / thick-on-dark where a Unicode twin exists: prompt `›`/`❯`, bullet `•`/`●`, success `✧`/`✦`, error `✕`/`✖`, info `◇`/`◆` (`warning ⚠` has no heavy twin, identical across themes). ~23 scattered inline `✓`/`✗`/`⚠` literals across the banner and slash commands now route through `glyphs()` — one source of truth. The failure mark uses the upright multiplication-X family, not the slanted ballot-X.
+- **Calm welcome banner** — value-aligned rows (dim labels, plain values), the logo as the sole accent, ` · ` as the single intra-row separator, one blank line under the logo. Dropped the standalone "Ready" line; a `⚠ degraded: …` row appears only when degraded.
+- **Single-source theme resolution** — removed the `theme_override` plumbing threaded through `_chat_loop`/`create_deps` (and its config mutation). The active theme now lives only in the display module (`active_theme_name()`); banner logo, palette, and glyphs all derive from it. Fixes a latent dual-source-of-truth between `set_theme` and `config.theme`.
+- **`-t` on bare `co`** — `--theme`/`-t`, `--verbose`/`-v`, and `--reasoning-display` are now accepted by bare `co` (the default chat session), not just `co chat`. Option specs are shared via `Annotated` aliases so there is no duplication between the callback and the `chat` command.
+
 ## [0.8.465]
 
 Fix the welcome banner reporting `Dream: disabled` while a daemon is actually running, and rename the config flag to match its true meaning.

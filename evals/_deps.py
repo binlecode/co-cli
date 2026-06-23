@@ -78,9 +78,7 @@ class EvalFrontend(TerminalFrontend):
 
 
 @asynccontextmanager
-async def eval_deps(
-    theme_override: str | None = None,
-) -> AsyncIterator[tuple[CoDeps, Agent[CoDeps, Any], EvalFrontend]]:
+async def eval_deps() -> AsyncIterator[tuple[CoDeps, Agent[CoDeps, Any], EvalFrontend]]:
     """Yield a fully-bootstrapped ``(deps, agent, frontend)`` for the eval lifetime.
 
     Mirrors ``main.py:_chat_loop``'s bootstrap exactly: ``create_deps`` on a
@@ -90,9 +88,7 @@ async def eval_deps(
     """
     frontend = EvalFrontend()
     async with AsyncExitStack() as stack:
-        deps = await create_deps(
-            on_status=frontend.on_status, stack=stack, theme_override=theme_override
-        )
+        deps = await create_deps(on_status=frontend.on_status, stack=stack)
         apply_eval_workspace(deps)
         agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
         print(f"[eval_deps] agent backend: {deps.config.llm.provider}/{deps.config.llm.model}")
@@ -111,7 +107,7 @@ async def make_eval_deps() -> tuple[CoDeps, Agent[CoDeps, Any], EvalFrontend, As
     frontend = EvalFrontend()
     stack = AsyncExitStack()
     await stack.__aenter__()
-    deps = await create_deps(on_status=frontend.on_status, stack=stack, theme_override=None)
+    deps = await create_deps(on_status=frontend.on_status, stack=stack)
     apply_eval_workspace(deps)
     agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
     print(f"[eval_deps] agent backend: {deps.config.llm.provider}/{deps.config.llm.model}")

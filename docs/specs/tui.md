@@ -274,13 +274,48 @@ The `--verbose` / `-v` CLI flag is an alias for `--reasoning-display full`.
 | `TerminalFrontend` | `co_cli/display/core.py` | Single-owner terminal implementation: drives one `prompt_toolkit.Application` via `bind_app(app)`; streaming surfaces share one in-flight ANSI buffer; committed output prints to scrollback. Rich is used only as the `render_to_ansi` bridge |
 | `HeadlessFrontend` | `co_cli/display/headless.py` | No-op frontend for evals and tests; stores `last_status_snapshot` for inspection; mirrors the async prompt signatures |
 | `render_to_ansi(renderable, *, width) -> str` | `co_cli/display/core.py` | The sole Rich renderable→ANSI-string primitive; stateless, width supplied by the caller |
-| `console`, `set_theme(name)`, `PROMPT_CHAR` | `co_cli/display/core.py` | Shared console instance, theme switcher, prompt glyph |
+| `console`, `set_theme(name)`, `glyphs() -> Glyphs` | `co_cli/display/core.py` | Shared console instance; `set_theme` swaps both the color theme and the glyph set; `glyphs()` returns the active curated glyph set (see Glyph set below) |
 | `build_repl_app(...)`, `build_key_bindings(...)`, `ReplRuntime` | `co_cli/display/app.py` | Inline-REPL Application factory, Esc/Ctrl+C/Ctrl+D key bindings, and the single turn-state holder — holds the turn-task reference and the input `queue` |
 | `StreamRenderer(frontend, reasoning_display)` | `co_cli/display/stream_renderer.py` | Per-run text/thinking buffering and flush policy |
 | `QuestionPrompt(question, options, multiple)` | `co_cli/display/core.py` | Clarify-path prompt for tool-issued questions |
 | `StatusSnapshot(session_label, mode, context_pct, background_task_count, approval_count, queue_depth=0, queue_head_preview=None)` | `co_cli/display/core.py` | Typed contract for bottom-toolbar footer content; pushed via `update_status` (which repaints via `_invalidate`); when `queue_depth > 0`, renders `{n} queued: "<preview>"` between `mode` and `ctx`; omitted at 0 |
 | `TerminalFrontend.render_footer_toolbar()` | `co_cli/display/core.py` | Plain-text footer string consumed by the toolbar `Window` in the Application layout |
 | `_build_status_snapshot(deps, mode, queue)` | `co_cli/main.py` | Assembles a `StatusSnapshot` from `CoDeps` at lifecycle push points; callers pass `runtime.queue` (or an empty `deque()` at startup) — both depth and head-item preview are derived inside |
+
+### Glyph set
+
+The TUI's symbolic characters are curated in one place — `Glyphs` (frozen dataclass) +
+`_GLYPHS` (theme-keyed) + the `glyphs()` accessor in `co_cli/display/core.py`, swapped by
+`set_theme` exactly like the color `_THEMES`. All themed surfaces (banner, `display_status`/
+`display_error`/`display_info`, the input prompt, and console-printing slash commands) read
+glyphs through `glyphs()` — no inline literals. (Model-facing `tool_output(...)` text and the
+`co google` CLI are a different layer and deliberately do **not** use it.)
+
+**Design principle — geometrically upright/symmetric, never slanted; thin on light,
+thick/filled on dark wherever a Unicode twin exists.** Roles sit in distinct shape
+families so no two collide within a theme.
+
+| Field | Light (thin) | Dark (thick) | Notes |
+|---|---|---|---|
+| `prompt` | `›` | `❯` | Thin vs heavy right-pointing chevron; visible on every input line |
+| `bullet` | `•` | `●` | Small vs large dot |
+| `success` | `✧` | `✦` | Hollow vs filled four-point star; a circle/diamond would collide with `bullet`/`info`, and a checkmark (`✓`/`✔`) is intrinsically slanted |
+| `error` | `✕` | `✖` | Regular vs heavy **multiplication-X** (symmetric); the slanted **ballot-X** (`✗`/`✘`) is avoided |
+| `info` | `◇` | `◆` | Hollow vs filled diamond |
+| `warning` | `⚠` | `⚠` | Symmetric triangle; no heavy twin exists, so identical across themes |
+
+Theme weighting mirrors the welcome-banner logo (`bootstrap/banner.py` `_ASCII_ART`): heavier on
+dark, lighter on light. **Five of six glyphs switch with the theme** — only `warning` lacks a
+heavy Unicode twin. The `_THEMES` colors carry the rest of the signal, and `·` (the status-line
+separator) stays reserved. Glyphs are standard Unicode (no nerd-font dependence), following
+cross-peer TUI convention.
+
+**Welcome banner.** `display_welcome_banner` renders a calm, value-aligned panel: the logo is the
+sole accent, labels recede (dim) padded to a shared column, values stay plain, and ` · ` is the
+single intra-row separator (matching the status-line convention). Rows: version+tagline, `Model`,
+`Memory` (`build_memory_line`), `Dream` (`build_dream_line`, live runtime state), `Tools`
+(counts), `Dir`, then the `/help` hint. A `⚠ degraded: …` row appears only when `deps.degradations`
+is non-empty; there is no standalone "Ready" line.
 
 ### Slash command reference
 
@@ -318,7 +353,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 | `co_cli/commands/status.py` | `/status` handler — consolidated current-state snapshot assembled from `deps` + cheap local reads |
 | `co_cli/commands/registry.py` | `BUILTIN_COMMANDS` dict, `SlashCommand` dataclass, `filter_namespace_conflicts`, completer helpers |
 | `co_cli/commands/types.py` | `CommandContext`, `SlashOutcome`, `LocalOnly`, `ReplaceTranscript`, `DelegateToAgent`, `_confirm` |
-| `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `render_to_ansi`, `StatusSnapshot`, `QuestionPrompt`, `console`, `set_theme`, `PROMPT_CHAR` |
+| `co_cli/display/core.py` | `Frontend` protocol, `TerminalFrontend`, `render_to_ansi`, `StatusSnapshot`, `QuestionPrompt`, `console`, `set_theme`, `Glyphs` / `glyphs()` |
 | `co_cli/display/app.py` | `build_repl_app`, `build_key_bindings`, `ReplRuntime` — the single-owner inline-REPL Application factory |
 | `co_cli/display/headless.py` | `HeadlessFrontend` — full `Frontend` protocol implementation for evals and tests |
 | `co_cli/display/stream_renderer.py` | `StreamRenderer` — text/thinking buffering and flush policy per run |

@@ -23,7 +23,7 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style, default_ui_style, merge_styles
 from prompt_toolkit.widgets import TextArea
 
-from co_cli.display.core import PROMPT_CHAR, TerminalFrontend
+from co_cli.display.core import TerminalFrontend, glyphs
 
 if TYPE_CHECKING:
     from prompt_toolkit.buffer import Buffer
@@ -167,7 +167,7 @@ def build_repl_app(
     above the app via ``print_formatted_text`` (under ``patch_stdout``).
     """
     input_area = TextArea(
-        prompt=f"{PROMPT_CHAR} ",
+        prompt=f"{glyphs().prompt} ",
         multiline=False,
         completer=completer,
         complete_while_typing=True,

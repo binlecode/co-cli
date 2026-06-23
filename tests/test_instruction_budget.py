@@ -66,7 +66,7 @@ async def test_instruction_floor_within_budget() -> None:
     accommodate growth of the same surface).
     """
     async with AsyncExitStack() as stack:
-        deps = await create_deps(on_status=lambda _s: None, stack=stack, theme_override=None)
+        deps = await create_deps(on_status=lambda _s: None, stack=stack)
         floor = build_base_instructions(deps.config)
         floor += build_profile_overlay(ModelProfile.WEAK_LOCAL) or ""
         floor += build_toolset_guidance(deps.tool_catalog)

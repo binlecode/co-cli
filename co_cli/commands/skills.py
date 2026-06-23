@@ -8,7 +8,7 @@ from co_cli.commands.registry import (
     refresh_completer,
 )
 from co_cli.commands.types import CommandContext
-from co_cli.display.core import console, make_table
+from co_cli.display.core import console, glyphs, make_table
 from co_cli.skills import usage as skill_usage
 from co_cli.skills.index import set_skill_catalog
 from co_cli.skills.lifecycle import discover_skill_files, read_skill_meta
@@ -20,11 +20,13 @@ def _cmd_skills_list(ctx: CommandContext) -> None:
     if not ctx.deps.skill_catalog:
         console.print("[dim]No skills loaded.[/dim]")
         return
-    console.print("[dim]✓ user-invocable   ✗ model-only[/dim]")
+    console.print(f"[dim]{glyphs().success} user-invocable   {glyphs().error} model-only[/dim]")
     table = make_table("Invocable", "Index", "Name", "Description")
     for i, skill in enumerate(ctx.deps.skill_catalog.values()):
         table.add_row(
-            "[success]✓[/success]" if skill.user_invocable else "[dim]✗[/dim]",
+            f"[success]{glyphs().success}[/success]"
+            if skill.user_invocable
+            else f"[dim]{glyphs().error}[/dim]",
             f"[accent]{i + 1}.[/accent]",
             skill.name,
             skill.description or "",
@@ -44,15 +46,17 @@ def _cmd_skills_check(ctx: CommandContext) -> None:
     for path in all_paths:
         name = path.parent.name
         if name in ctx.deps.skill_catalog:
-            table.add_row(name, "[success]✓ Loaded[/success]", "")
+            table.add_row(name, f"[success]{glyphs().success} Loaded[/success]", "")
         else:
             try:
                 read_skill_meta(path)
                 table.add_row(
-                    name, "[bold red]✗ Skipped[/bold red]", "name conflict with built-in"
+                    name,
+                    f"[bold red]{glyphs().error} Skipped[/bold red]",
+                    "name conflict with built-in",
                 )
             except Exception as e:
-                table.add_row(name, "[bold red]✗ Error[/bold red]", str(e))
+                table.add_row(name, f"[bold red]{glyphs().error} Error[/bold red]", str(e))
 
     console.print(table)
 
@@ -89,7 +93,9 @@ def _cmd_skills_reload(ctx: CommandContext) -> None:
             console.print(f"[dim]- Removed: {len(removed)} skill(s)[/dim]")
     if not added and not removed:
         console.print("[dim]No skill changes.[/dim]")
-    console.print(f"[success]✓ Reloaded {len(ctx.deps.skill_catalog)} skill(s)[/success]")
+    console.print(
+        f"[success]{glyphs().success} Reloaded {len(ctx.deps.skill_catalog)} skill(s)[/success]"
+    )
 
 
 def _cmd_skills_lint(ctx: CommandContext, args: str) -> None:
@@ -210,7 +216,7 @@ def _cmd_skills_usage(ctx: CommandContext, args: str) -> None:
             str(rec["patch_count"]),
             str(rec["last_used_at"] or "-"),
             str(rec["state"]),
-            "✓" if rec["pinned"] else "",
+            glyphs().success if rec["pinned"] else "",
         )
     console.print(table)
 
@@ -246,4 +252,4 @@ def _cmd_skills_pin(ctx: CommandContext, args: str, *, pinned: bool) -> None:
 
     skill_usage.set_pinned(ctx.deps, name, pinned)
     state = "pinned" if pinned else "unpinned"
-    console.print(f"[success]✓ Skill '{name}' {state}.[/success]")
+    console.print(f"[success]{glyphs().success} Skill '{name}' {state}.[/success]")

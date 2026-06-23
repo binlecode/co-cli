@@ -68,7 +68,7 @@ async def test_always_bucket_within_budget() -> None:
     # stack=None: headless deps, no MCP connection. The guard measures only the
     # native FunctionToolset, so skipping MCP keeps the count deterministic across
     # environments and avoids the Context7 stdio teardown race.
-    deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
+    deps = await create_deps(on_status=lambda _s: None, stack=None)
 
     native_toolset, _ = build_native_toolset()
     budget = await measure_always_schema_budget(deps, native_toolset)
@@ -102,7 +102,7 @@ async def test_static_floor_tokens_measured_at_bootstrap() -> None:
     guidance + personality critique (the three static builders the orchestrator joins)
     — per instruction-floor-audit TASK-4, not base instructions alone.
     """
-    deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
+    deps = await create_deps(on_status=lambda _s: None, stack=None)
 
     native_toolset, _ = build_native_toolset()
     budget = await measure_always_schema_budget(deps, native_toolset)

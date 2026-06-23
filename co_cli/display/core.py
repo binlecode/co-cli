@@ -63,19 +63,63 @@ _active_theme: Theme = Theme(_THEMES["light"])
 _TOOL_TICK_INTERVAL = 1.0  # wall-clock repaint cadence for the live tool-exec counter
 _WAITING_TICK_INTERVAL = 1.0  # wall-clock repaint cadence for the pre-response waiting counter
 
-PROMPT_CHAR = "❯"
-BULLET = "▸"
-SUCCESS = "✦"
-ERROR = "✖"
-INFO = "◈"
+
+@dataclass(frozen=True)
+class Glyphs:
+    """Curated symbolic chars for the TUI — thin on light, thick/filled on dark.
+
+    Design principle: glyphs are geometrically **upright/symmetric, never slanted**,
+    and each role uses a thin (light) / bold (dark) twin where one exists. The roles
+    sit in distinct shape families so no two collide within a theme:
+      - `prompt`  — thin vs heavy right-pointing chevron.
+      - `bullet`  — small vs large dot (• / ●).
+      - `success` — hollow vs filled four-point star (✧ / ✦); a circle or diamond
+        would collide with `bullet`/`info`, and a checkmark is intrinsically slanted.
+      - `error`   — regular vs heavy multiplication-X (✕ / ✖); the slanted
+        ballot-X (✗/✘) is deliberately avoided.
+      - `info`    — hollow vs filled diamond (◇ / ◆).
+      - `warning` — ⚠ has no heavy twin, so it is identical across themes.
+
+    Theme weighting mirrors the welcome-banner logo (`bootstrap/banner.py`
+    `_ASCII_ART`): heavier on dark, lighter on light. The `_THEMES` colors carry the
+    rest of the signal. Selected by `set_theme`; read via `glyphs()`.
+    """
+
+    prompt: str
+    bullet: str
+    success: str
+    error: str
+    warning: str
+    info: str
+
+
+_GLYPHS: dict[str, Glyphs] = {
+    "light": Glyphs(prompt="›", bullet="•", success="✧", error="✕", warning="⚠", info="◇"),
+    "dark": Glyphs(prompt="❯", bullet="●", success="✦", error="✖", warning="⚠", info="◆"),
+}
+
+_active_theme_name: str = "light"
+
+
+def glyphs() -> Glyphs:
+    """Return the curated glyph set for the active theme (selected by `set_theme`)."""
+    return _GLYPHS[_active_theme_name]
+
+
+def active_theme_name() -> str:
+    """Name of the active theme — the single runtime source of truth, honoring
+    `--theme`/`CO_THEME`. The banner logo, colors, and glyphs all derive from it."""
+    return _active_theme_name
+
 
 # -- Theme switching -------------------------------------------------------
 
 
 def set_theme(name: str) -> None:
-    """Switch the console theme at runtime (e.g. from --theme flag)."""
-    global _active_theme
-    _active_theme = Theme(_THEMES.get(name, _THEMES["light"]))
+    """Switch the console theme and glyph set at runtime (e.g. from --theme flag)."""
+    global _active_theme, _active_theme_name
+    _active_theme_name = name if name in _THEMES else "light"
+    _active_theme = Theme(_THEMES[_active_theme_name])
     console.push_theme(_active_theme)
 
 
@@ -110,12 +154,12 @@ def render_to_ansi(renderable: RenderableType, *, width: int) -> str:
 def display_status(message: str, style: str | None = None) -> None:
     """Themed bullet + message."""
     s = style or "status"
-    console.print(f"[{s}]{BULLET} {message}[/{s}]")
+    console.print(f"[{s}]{glyphs().bullet} {message}[/{s}]")
 
 
 def display_error(message: str, hint: str | None = None) -> None:
     """Red-bordered panel with optional recovery hint."""
-    body = f"[bold red]{ERROR} {message}[/bold red]"
+    body = f"[bold red]{glyphs().error} {message}[/bold red]"
     if hint:
         body += f"\n[dim]{hint}[/dim]"
     console.print(Panel(body, border_style="red", title="Error", title_align="left"))
@@ -123,7 +167,7 @@ def display_error(message: str, hint: str | None = None) -> None:
 
 def display_info(message: str) -> None:
     """Themed info message."""
-    console.print(f"[info]{INFO} {message}[/info]")
+    console.print(f"[info]{glyphs().info} {message}[/info]")
 
 
 def make_table(*columns: str) -> Table:

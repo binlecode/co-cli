@@ -32,7 +32,7 @@ async def test_no_deferred_tool_signature_on_floor() -> None:
     """No deferred tool's call signature appears in the assembled instruction floor (F5)."""
     # stack=None: headless deps, no MCP connection — keeps the registry deterministic
     # across environments. on_status is keyword-only and required.
-    deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
+    deps = await create_deps(on_status=lambda _s: None, stack=None)
 
     deferred_names = [
         name

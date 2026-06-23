@@ -38,12 +38,15 @@ async def test_status_echoes_input_and_renders_clean_ansi(tmp_path: Path) -> Non
         out = await drive_repl(deps, "/status", sentinel="Capabilities")
 
     # (a) The submitted input is echoed to scrollback. The echo source is
-    # `[dim]{PROMPT_CHAR}[/dim] {user_input}` — `[dim]` renders as SGR 2, so the
+    # `[dim]{glyphs().prompt}[/dim] {user_input}` — `[dim]` renders as SGR 2, so the
     # dim-wrapped prompt marker is specific to the echo line (the TextArea's own
-    # prompt char is not rich-dim-styled). Do NOT assert literal `/status`: rich
-    # highlight splits the leading `/` into its own SGR run, so `/status` is never
-    # a contiguous substring once SGR is on. Pair the dim marker with the word.
-    assert "\x1b[2m❯" in out
+    # prompt char is not rich-dim-styled). The prompt glyph is theme-dependent, so
+    # derive it from `glyphs()` rather than hardcoding. Do NOT assert literal
+    # `/status`: rich highlight splits the leading `/` into its own SGR run, so
+    # `/status` is never a contiguous substring once SGR is on. Pair marker + word.
+    from co_cli.display.core import glyphs
+
+    assert f"\x1b[2m{glyphs().prompt}" in out
     assert "status" in out
 
     # (b) No ESC-sanitization garble anywhere (the raw=False symptom).

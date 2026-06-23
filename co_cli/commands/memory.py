@@ -6,7 +6,7 @@ from typing import Any
 
 from co_cli.commands._utils import _confirm
 from co_cli.commands.types import CommandContext
-from co_cli.display.core import console
+from co_cli.display.core import console, glyphs
 from co_cli.memory.item import filter_memory_items, format_memory_item_row, load_memory_items
 from co_cli.tools.memory.recall import grep_recall
 
@@ -124,7 +124,7 @@ async def _subcmd_memory_forget(
         if ctx.deps.memory_store is not None:
             ctx.deps.memory_store.remove(m.path)
 
-    console.print(f"[success]✓ Deleted {len(entries)} memories.[/success]")
+    console.print(f"[success]{glyphs().success} Deleted {len(entries)} memories.[/success]")
     return None
 
 
@@ -158,7 +158,7 @@ async def _subcmd_knowledge_restore(ctx: CommandContext, rest: str) -> None:
 
     restored = restore_artifact(slug, ctx.deps.memory_dir, ctx.deps.memory_store)
     if restored:
-        console.print(f"[success]✓ Restored {slug}[/success]")
+        console.print(f"[success]{glyphs().success} Restored {slug}[/success]")
     else:
         console.print(
             f"[bold red]Restore failed:[/bold red] no unambiguous archive match for {slug!r}"
@@ -201,7 +201,7 @@ async def _subcmd_knowledge_stats(ctx: CommandContext) -> None:
     console.print(f"  decay-protected: {protected}")
     if total > MEMORY_ITEM_COUNT_WARN:
         console.print(
-            f"[warning]⚠ {total} active items exceeds the warn threshold "
+            f"[warning]{glyphs().warning} {total} active items exceeds the warn threshold "
             f"({MEMORY_ITEM_COUNT_WARN}) — investigate a possible write loop or "
             f"pollution; nothing is auto-archived.[/warning]"
         )

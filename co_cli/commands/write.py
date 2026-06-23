@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from co_cli.commands.types import CommandContext
-from co_cli.display.core import console
+from co_cli.display.core import console, glyphs
 from co_cli.tools.background import TaskInputError, write_to_task
 
 
@@ -30,6 +30,6 @@ async def _cmd_write(ctx: CommandContext, args: str) -> None:
     except TaskInputError as e:
         console.print(f"[bold red]Write failed:[/bold red] {e}")
         return None
-    console.print(f"[success]✓ Wrote to task {task_id}[/success]")
+    console.print(f"[success]{glyphs().success} Wrote to task {task_id}[/success]")
     console.print(f"[dim]Use /tasks {task_id} to read the response.[/dim]")
     return None

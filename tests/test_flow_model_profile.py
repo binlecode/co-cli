@@ -78,7 +78,7 @@ async def test_weak_local_overlay_reaches_assembled_prompt() -> None:
     base-only prefix (overlay builder removed). This guards that the seam is wired
     through ``create_deps`` and actually injects the overlay into the live prompt.
     """
-    deps = await create_deps(on_status=lambda _s: None, stack=None, theme_override=None)
+    deps = await create_deps(on_status=lambda _s: None, stack=None)
     assert resolve_model_profile(deps.config.llm) is ModelProfile.WEAK_LOCAL
 
     def assemble(builders: tuple) -> str:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from co_cli.commands.types import CommandContext
 from co_cli.deps import ApprovalKindEnum
-from co_cli.display.core import console, make_table
+from co_cli.display.core import console, glyphs, make_table
 
 
 def _rule_label(kind: ApprovalKindEnum, value: str) -> tuple[str, str]:
@@ -45,13 +45,15 @@ async def _cmd_approvals(ctx: CommandContext, args: str) -> None:
             try:
                 idx = int(subargs)
                 rules.pop(idx)
-                console.print(f"[success]✓ Removed approval rule {idx}[/success]")
+                console.print(f"[success]{glyphs().success} Removed approval rule {idx}[/success]")
             except (ValueError, IndexError):
                 console.print(f"[bold red]No rule at index:[/bold red] {subargs}")
         else:
             count = len(rules)
             rules.clear()
-            console.print(f"[success]✓ Cleared {count} approval rule(s)[/success]")
+            console.print(
+                f"[success]{glyphs().success} Cleared {count} approval rule(s)[/success]"
+            )
 
     else:
         console.print(f"[bold red]Unknown /approvals subcommand:[/bold red] {subcmd}")

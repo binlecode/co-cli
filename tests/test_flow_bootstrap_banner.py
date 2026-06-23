@@ -24,9 +24,10 @@ def test_hybrid_backend_with_degradation_and_counts() -> None:
         memory_count=10,
         session_count=3,
     )
-    assert f"[accent]{backend_label}[/accent]" in result
+    assert backend_label in result
     assert "[yellow](hybrid → fts5)[/yellow]" in result
-    assert "memory: 10  sessions: 3" in result
+    assert "10 mem" in result
+    assert "3 sess" in result
 
 
 def test_grep_backend_omits_counts() -> None:
@@ -38,9 +39,9 @@ def test_grep_backend_omits_counts() -> None:
         memory_count=99,
         session_count=5,
     )
-    assert result == "    Memory: [accent]grep (no index)[/accent]"
-    assert "memory:" not in result
-    assert "sessions:" not in result
+    assert "grep (no index)" in result
+    assert " mem" not in result
+    assert " sess" not in result
 
 
 def test_memory_count_over_tripwire_renders_yellow_warning() -> None:
@@ -54,10 +55,8 @@ def test_memory_count_over_tripwire_renders_yellow_warning() -> None:
         memory_count=MEMORY_ITEM_COUNT_WARN + 1,
         session_count=3,
     )
-    assert (
-        f"[yellow]⚠ memory: {MEMORY_ITEM_COUNT_WARN + 1} (over count tripwire)[/yellow]" in result
-    )
-    assert "sessions: 3" in result
+    assert f"[yellow]⚠ {MEMORY_ITEM_COUNT_WARN + 1} mem (over count tripwire)[/yellow]" in result
+    assert "3 sess" in result
 
 
 def _render(deps: CoDeps) -> str:
@@ -90,10 +89,12 @@ def test_banner_dir_line_uses_full_path_when_workspace_configured(
     text = _render(deps)
 
     counts = build_status_counts(deps)
-    assert f"Tools: {counts.tools} Skills: {counts.skills} MCP: {counts.mcp}" in text
-    assert f"Commands: {counts.commands}" in text
+    assert (
+        f"Tools {counts.tools} · {counts.skills} skills · "
+        f"{counts.mcp} mcp · {counts.commands} cmds" in text
+    )
     # workspace_path set -> full path, plus the fixed branch.
-    assert f"Dir: {workspace} (test-branch)" in text
+    assert f"Dir {workspace} · test-branch" in text
 
 
 def test_banner_dir_line_uses_bare_name_when_workspace_unconfigured(
@@ -109,7 +110,7 @@ def test_banner_dir_line_uses_bare_name_when_workspace_unconfigured(
     text = _render(deps)
 
     # workspace_path unset -> bare name only, not the full path.
-    assert "Dir: bare-name (test-branch)" in text
+    assert "Dir bare-name · test-branch" in text
     assert str(workspace) not in text
 
 

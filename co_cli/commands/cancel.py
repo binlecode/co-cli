@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from co_cli.commands.types import CommandContext
-from co_cli.display.core import console
+from co_cli.display.core import console, glyphs
 from co_cli.tools.background import BackgroundCleanupError, kill_task
 
 
@@ -28,5 +28,5 @@ async def _cmd_cancel(ctx: CommandContext, args: str) -> None:
     except BackgroundCleanupError as e:
         console.print(f"[bold red]Cancel cleanup failed:[/bold red] {e}")
         return None
-    console.print(f"[success]✓ Cancelled task {task_id}[/success]")
+    console.print(f"[success]{glyphs().success} Cancelled task {task_id}[/success]")
     return None

@@ -340,7 +340,6 @@ async def create_deps(
     *,
     on_status: Callable[[str], None],
     stack: AsyncExitStack | None = None,
-    theme_override: str | None = None,
 ) -> CoDeps:
     """Assemble CoDeps from settings: config, registries, MCP, memory, skills.
 
@@ -360,8 +359,6 @@ async def create_deps(
     from co_cli.llm.factory import build_judge_model, build_model
 
     config = copy.deepcopy(get_settings())
-    if theme_override:
-        config.theme = theme_override
     paths = resolve_workspace_paths(config)
 
     error = config.llm.validate_config()

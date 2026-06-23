@@ -9,7 +9,7 @@ from contextlib import AsyncExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import typer
 from prompt_toolkit.buffer import Buffer
@@ -45,11 +45,11 @@ from co_cli.context.summarization import estimate_message_tokens
 from co_cli.deps import CoDeps
 from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
 from co_cli.display.core import (
-    PROMPT_CHAR,
     Frontend,
     StatusSnapshot,
     TerminalFrontend,
     console,
+    glyphs,
     set_theme,
 )
 from co_cli.dream_queue import write_review_kick
@@ -88,11 +88,33 @@ app.add_typer(dream_app, name="dream")
 app.add_typer(google_app, name="google")
 
 
+# Shared chat-session option specs — defined once so bare `co` (the default chat,
+# via _default) and the explicit `co chat` command accept the identical flags.
+_ThemeOption = Annotated[
+    str | None, typer.Option("--theme", "-t", help="Color theme: dark or light")
+]
+_VerboseOption = Annotated[
+    bool, typer.Option("--verbose", "-v", help="Alias for --reasoning-display full")
+]
+_ReasoningDisplayOption = Annotated[
+    str | None,
+    typer.Option("--reasoning-display", help="Reasoning display mode: off, collapsed, full"),
+]
+
+
 @app.callback()
-def _default(ctx: typer.Context):
-    """Start an interactive chat session (default when no subcommand is given)."""
+def _default(
+    ctx: typer.Context,
+    theme: _ThemeOption = None,
+    verbose: _VerboseOption = False,
+    reasoning_display: _ReasoningDisplayOption = None,
+) -> None:
+    """Start an interactive chat session (default when no subcommand is given).
+
+    Bare `co` is the default chat, so it accepts the same flags as `co chat`.
+    """
     if ctx.invoked_subcommand is None:
-        _start_chat(theme=None, verbose=False, reasoning_display=None)
+        _start_chat(theme=theme, verbose=verbose, reasoning_display=reasoning_display)
 
 
 def _flush_turn_usage(deps: CoDeps) -> None:
@@ -419,7 +441,7 @@ async def _handle_one_input(
     # does not commit accepted input (unlike PromptSession.prompt), so without this
     # neither slash commands nor turns leave a record of what the user typed. One
     # place covers both idle-armed and queue-drained inputs.
-    console.print(f"[dim]{PROMPT_CHAR}[/dim] {user_input}")
+    console.print(f"[dim]{glyphs().prompt}[/dim] {user_input}")
 
     # A lone image path the user dragged in is a "look at this" gesture, not a command —
     # detect it BEFORE slash dispatch so a bare absolute path (which starts with "/") is
@@ -650,7 +672,6 @@ def _build_accept_handler(
 
 async def _chat_loop(
     reasoning_display: str = DEFAULT_REASONING_DISPLAY,
-    theme: str | None = None,
 ):
     frontend = TerminalFrontend()
     completer = SlashCommandCompleter()
@@ -662,7 +683,6 @@ async def _chat_loop(
             deps = await create_deps(
                 on_status=frontend.on_status,
                 stack=stack,
-                theme_override=theme,
             )
         except ValueError as e:
             console.print(f"[bold red]Startup error:[/bold red] {e}")
@@ -834,7 +854,7 @@ def _start_chat(theme: str | None, verbose: bool, reasoning_display: str | None)
         effective_mode = settings.reasoning_display
     with _runctx_finalization_guard():
         try:
-            asyncio.run(_chat_loop(reasoning_display=effective_mode, theme=theme))
+            asyncio.run(_chat_loop(reasoning_display=effective_mode))
         except KeyboardInterrupt:
             # Safety net: asyncio.run() may re-raise after task cancellation
             pass
@@ -842,15 +862,11 @@ def _start_chat(theme: str | None, verbose: bool, reasoning_display: str | None)
 
 @app.command()
 def chat(
-    theme: str = typer.Option(None, "--theme", "-t", help="Color theme: dark or light"),
-    verbose: bool = typer.Option(
-        False, "--verbose", "-v", help="Alias for --reasoning-display full"
-    ),
-    reasoning_display: str = typer.Option(
-        None, "--reasoning-display", help="Reasoning display mode: off, collapsed, full"
-    ),
+    theme: _ThemeOption = None,
+    verbose: _VerboseOption = False,
+    reasoning_display: _ReasoningDisplayOption = None,
 ):
-    """Start an interactive chat session with Co."""
+    """Start an interactive chat session with Co (explicit form of bare `co`)."""
     _start_chat(theme=theme, verbose=verbose, reasoning_display=reasoning_display)
 
 
