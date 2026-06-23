@@ -72,6 +72,17 @@ _LENGTH_RETRY_BOOST = 2
 
 assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for retry to terminate"
 
+# pydantic-ai raises UnexpectedModelBehavior with this clause when finish_reason
+# is 'length' and the response is empty or thinking-only — i.e. reasoning consumed
+# the whole output budget before any answer token (see pydantic-ai
+# _agent_graph.py:1012). Match is tied to that message; re-verify on pydantic-ai upgrade.
+_REASONING_OVERFLOW_SIGNATURE = "exceeded before any response was generated"
+
+_REASONING_OVERFLOW_MESSAGE = (
+    "Reasoning used the entire output budget before answering — "
+    "simplify your request, or raise max_tokens for this model."
+)
+
 from co_cli.config.llm import cap_output_tokens, resolve_request_limit
 from co_cli.config.tuning import (
     MAX_TOOL_CALLS_PER_MODEL_REQUEST,
@@ -1037,15 +1048,25 @@ async def run_turn(
                 return _build_error_turn_result(turn_state)
 
             except UnexpectedModelBehavior as e:
-                frontend.on_status(f"Model returned malformed output: {e}")
                 turn_state.outcome = "error"
-                span.add_event(
-                    "malformed_output",
-                    {
-                        "error.type": type(e).__name__,
-                        "error.msg": str(e)[:500],
-                    },
-                )
+                if _REASONING_OVERFLOW_SIGNATURE in str(e):
+                    frontend.on_status(_REASONING_OVERFLOW_MESSAGE)
+                    span.add_event(
+                        "reasoning_overflow",
+                        {
+                            "error.type": type(e).__name__,
+                            "error.msg": str(e)[:500],
+                        },
+                    )
+                else:
+                    frontend.on_status(f"Model returned malformed output: {e}")
+                    span.add_event(
+                        "malformed_output",
+                        {
+                            "error.type": type(e).__name__,
+                            "error.msg": str(e)[:500],
+                        },
+                    )
                 return _build_error_turn_result(turn_state)
 
             except (KeyboardInterrupt, asyncio.CancelledError):

@@ -86,8 +86,11 @@ _LLM_SETTINGS: dict[str, Any] = {
             # temperature=0.6, top_p=0.95, top_k=20: Modelfile values made explicit
             #   so behavior is deterministic regardless of Modelfile changes.
             # think=True: explicit API override (Modelfile default, but stated clearly).
-            # max_tokens=4096 caps each agentic turn; num_ctx must match Modelfile
-            #   exactly (65536) to avoid triggering a model reload.
+            # max_tokens=8192 caps each agentic turn (matches noreason): thinking and
+            #   answer share one pool on Ollama, so 4096 could be fully consumed by
+            #   reasoning before any answer token, raising "token limit exceeded before
+            #   any response". 8192 gives the answer headroom after thinking. num_ctx
+            #   must match Modelfile exactly (65536) to avoid triggering a model reload.
             # extra_body.max_tokens MUST mirror the scalar: pydantic-ai maps the
             #   scalar max_tokens to OpenAI's max_completion_tokens which Ollama
             #   ignores. Only max_tokens at the request root (merged from
@@ -95,10 +98,10 @@ _LLM_SETTINGS: dict[str, Any] = {
             "reasoning": {
                 "temperature": 0.6,
                 "top_p": 0.95,
-                "max_tokens": 4096,
+                "max_tokens": 8192,
                 "extra_body": {
                     "think": True,
-                    "max_tokens": 4096,
+                    "max_tokens": 8192,
                     "options": {
                         "num_ctx": 65_536,
                         "top_k": 20,

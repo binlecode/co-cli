@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.463]
+
+Recover gracefully when a reasoning turn spends its whole output budget on thinking and produces no answer.
+
+- **Reasoning headroom** — qwen3.6's `reasoning` mode `max_tokens` is raised 4096 → 8192 (`co_cli/config/llm.py`, both the scalar and the `extra_body` mirror per the Ollama lockstep rule), matching `noreason`. On Ollama, thinking and answer tokens share one pool, so the old 4096 cap could be fully consumed by reasoning before any answer token — surfacing pydantic-ai's "token limit exceeded before any response was generated" as a raw error.
+- **Named, actionable overflow message** — the `UnexpectedModelBehavior` handler in `run_turn` (`co_cli/agent/orchestrate.py`) now detects this specific overflow and emits "Reasoning used the entire output budget before answering — simplify your request, or raise max_tokens for this model." instead of the generic "malformed output", with a distinct `reasoning_overflow` span event. The turn stays terminal (no auto-retry — aligned with hermes/openclaw/codex/opencode and pydantic-ai's own "don't retry during thinking" design); the thinking-only turn is never persisted to history.
+
 ## [0.8.462]
 
 Sharpen the `plan` skill with two prompt-design devices borrowed from hermes's `plan` skill, re-authored for co's scoping philosophy.
