@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.470]
+
+Clarify `/doctor`'s MCP reporting so server and tool counts stay distinct.
+
+- **`doctor/SKILL.md` "What still works"** — the report now instructs stating MCP servers and tools as separate counts (one server exposes many tools, e.g. "2 MCP tools from 1 server (context7)"), preventing the model from collapsing them into one ambiguous number. Skill-prose only; `capabilities_check` already renders both axes correctly.
+
 ## [0.8.468]
 
 Coding-cluster realign: removed the `review`/`triage` skills and regeneralized `plan` into a general knowledge-work planner, matching co's knowledge-work / WEAK_LOCAL positioning.

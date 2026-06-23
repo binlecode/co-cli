@@ -33,7 +33,7 @@ Respond with this exact structure:
 
 **Likely issue:** What is wrong or degraded — be specific (e.g. "Gemini API key not set", "knowledge index offline — grep fallback active", "MCP server `notes` binary not found").
 
-**What still works:** List capabilities that are functioning normally and relevant to the user's context.
+**What still works:** List capabilities that are functioning normally and relevant to the user's context. When reporting MCP, state servers and tools as distinct counts — one server exposes many tools (e.g. "2 MCP tools from 1 server (context7)"), never collapse them into one ambiguous number.
 
 **Active fallback:** Any degraded-mode operation currently in effect (from the `fallbacks` list). If none, say "none".
 
