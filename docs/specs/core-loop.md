@@ -18,7 +18,7 @@ This doc describes one complete foreground turn, from prompt input to post-turn 
 
 There is no separate open run-level ceiling: the turn cap *is* the run limit, because the `RunUsage` it is checked against is turn-scoped (carried across approval-resume and length-continuation retries). Enforcement is **before-request** (the request that *would* exceed the cap is blocked), not boundary-inclusive — a turn that legitimately runs exactly `max_model_requests_per_turn` requests and stops completes successfully; only a run continuing past the cap is interrupted.
 
-**Graceful wrap-up before the cumulative cap.** Because the request that *would* exceed the cap is hard-blocked mid-stream (no chance to answer), the `wrap_up_on_final_request` history processor (see §2.4) softens the landing: it reads `resolve_request_limit` and, on the one request where `ctx.usage.requests == limit - 1` (the last request the SDK will still permit), appends a synthetic `WRAP_UP_TEXT` user message telling the model to produce its final answer now and call no more tools. If the model complies, the run completes normally on that request and the cap never fires — a turn that would have aborted to `error` returns `outcome="continue"` with an answer. The nudge fires at most once (after the request, `usage.requests == limit`, so the guard no longer holds) and is stripped from persisted history by `drop_wrap_up_messages` (applied in `_history_after_successful_run` and `_build_error_turn_result`), so it never leaks into the saved transcript or the next turn. When `max_model_requests_per_turn = 0` the cap is disabled and no nudge is injected.
+**Graceful wrap-up before the cumulative cap.** Because the request that *would* exceed the cap is hard-blocked mid-stream (no chance to answer), the `wrap_up_prompt` dynamic instruction (`co_cli/agent/_instructions.py`, registered via `agent.instructions()`) softens the landing: it reads `resolve_request_limit` and, on the one request where `ctx.usage.requests == limit - 1` (the last request the SDK will still permit), returns the `WRAP_UP_TEXT` instruction telling the model to produce its final answer now and call no more tools. If the model complies, the run completes normally on that request and the cap never fires — a turn that would have aborted to `error` returns `outcome="continue"` with an answer. The nudge fires at most once (after the request, `usage.requests == limit`, so the guard no longer holds). As a dynamic instruction it needs no strip step: the SDK recomputes `instruction_parts` fresh every request and ignores historical `ModelRequest.instructions` in the agent flow, so the nudge lands in the request's instructions (never as a `UserPromptPart`) and is never replayed to the next turn. When `max_model_requests_per_turn = 0` the cap is disabled and no nudge is injected.
 
 **Why the turn cap is 40 — circuit breaker, not work limit.** `max_model_requests_per_turn` is the guard against an in-cap doom-loop: a model that re-issues 1–3 tool calls per request indefinitely never trips the consecutive-over-cap hard-stop (the streak resets on any ≤3-call request) and, being mid-run, was historically invisible to a boundary-only check — the SDK before-request enforcement is what stops it. The value is sized between two opposing bounds. Floor: observed legitimate usage maxes at ~7 model requests per single pass, but requests sum across approval-resume *and* length-continuation retries within one turn, so a recon-heavy multi-gate turn can realistically stack to ~20–25 — the cap must clear that to never bite real work. Ceiling: the prior value of 90 let such a loop burn ~90 multi-second local-model requests (minutes of a wedged-looking session) before firing. 40 sits ≈5–6× over typical real usage with >2× margin over the multi-resume worst case, yet ~2.5× tighter than 90. It is deliberately set *above* peer single-loop caps (e.g. opencode's 25) because co's approval-split turns span more cumulative requests than a single activity loop, so 25 would risk false trips. Within the defensible 35–40 band the high end is chosen: a too-low cap falsely kills legitimate user work (user-visible, erodes trust), whereas a too-high cap only lets a doom-loop run a handful of extra cheap requests (invisible) — an asymmetry that favors headroom.
 
@@ -268,18 +268,18 @@ Shell approval remains split correctly:
 
 ### 2.4 History Processors, Preflight, And Inline Compaction
 
-The main agent is built with six registered history processors in this exact order (see `co_cli/agent/orchestrator.py` `history_processors=(...)`). The first five are pure transformers; the last is additive (it splices a one-shot nudge and is stripped on the way out — see §1):
+The main agent is built with five registered history processors in this exact order (see `co_cli/agent/orchestrator.py` `history_processors=(...)`), all pure transformers:
 
 1. `elide_old_multimodal_prompts`
 2. `dedup_tool_results`
 3. `evict_old_tool_results`
 4. `spill_largest_tool_results`
 5. `proactive_window_processor`
-6. `wrap_up_on_final_request` — appends the `WRAP_UP_TEXT` nudge on the last request before the model-request cap; stripped from persisted history by `drop_wrap_up_messages`
 
-Four functions are registered via `agent.instructions()` and run before every model request as dynamic instructions:
+Five functions are registered via `agent.instructions()` and run before every model request as dynamic instructions:
 
 - `safety_prompt` — doom-loop detection + shell reflection cap; active warnings returned as plain text
+- `wrap_up_prompt` — returns the `WRAP_UP_TEXT` nudge on the last request before the model-request cap (see §1); empty on all other requests
 - `current_time_prompt` — current date/time string at the tail position; ephemeral grounding
 - `deferred_tool_awareness_prompt` — names the deferred-tool surface so the model knows what it can fetch
 - `skill_manifest_prompt` — injects the `<available_skills>` manifest
@@ -418,10 +418,9 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | --- | --- | --- |
 | `proactive_window_processor(ctx, messages)` | `co_cli/context/compaction.py` | History processor — L3 LLM compaction with anti-thrash gate |
 | `recover_overflow_history(ctx, messages, budget, tail_fraction)` | `co_cli/context/compaction.py` | Async — strip-then-summarize overflow recovery on HTTP 400/413 |
-| `dedup_tool_results`, `evict_old_tool_results`, `spill_largest_tool_results`, `wrap_up_on_final_request` | `co_cli/context/history_processors.py` | Registered history processors run in order before every model request; `wrap_up_on_final_request` appends the final-request cap nudge (see §1) |
+| `dedup_tool_results`, `evict_old_tool_results`, `spill_largest_tool_results` | `co_cli/context/history_processors.py` | Registered history processors run in order before every model request |
 | `strip_all_tool_returns(messages)` | `co_cli/context/history_processors.py` | Replaces every `ToolReturnPart` content with a per-tool semantic marker; idempotent |
-| `drop_wrap_up_messages(messages)` | `co_cli/context/history_processors.py` | Recovery helper — strips the `wrap_up_on_final_request` nudge before history is persisted as turn result |
-| `safety_prompt(ctx)`, `current_time_prompt(ctx)` | `co_cli/agent/_instructions.py` | Dynamic `@agent.instructions` callbacks evaluated per request |
+| `safety_prompt(ctx)`, `wrap_up_prompt(ctx)`, `current_time_prompt(ctx)` | `co_cli/agent/_instructions.py` | Dynamic `@agent.instructions` callbacks evaluated per request; `wrap_up_prompt` returns the final-request cap nudge (see §1) |
 
 ### Approval flow
 
@@ -436,7 +435,7 @@ These settings most directly shape one-turn orchestration behavior. Instruction 
 | `co_cli/main.py` | REPL loop, slash routing, skill-env lifecycle, foreground-turn wrapper, and teardown |
 | `co_cli/agent/orchestrate.py` | `TurnResult`, `_TurnState`, stream execution, approval loop, error handling, output checks, and interrupt/error builders |
 | `co_cli/context/compaction.py` | public entry points (`proactive_window_processor` for L3; overflow-recovery entry point `recover_overflow_history` — single-tier strip-then-summarize); backed by private submodules `_compaction_boundaries.py` (planner) and `_compaction_markers.py` (marker builders and enrichment) |
-| `co_cli/context/history_processors.py` | registered history processors (`dedup_tool_results`, `evict_old_tool_results`, `spill_largest_tool_results`, `wrap_up_on_final_request`) plus the `strip_all_tool_returns` and `drop_wrap_up_messages` recovery helpers |
+| `co_cli/context/history_processors.py` | registered history processors (`dedup_tool_results`, `evict_old_tool_results`, `spill_largest_tool_results`) plus the `strip_all_tool_returns` recovery helper |
 | `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `_instructions.py` |
 | `co_cli/context/summarization.py` | `summarize_messages`, `resolve_compaction_budget`, and token-estimation helpers — shared by history processor and `/compact` |
 | `co_cli/agent/core.py` | main agent factory |

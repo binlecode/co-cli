@@ -264,7 +264,7 @@ def resolve_request_limit(llm: LlmSettings) -> int | None:
 
     max_model_requests_per_turn=0 disables the cap. Single source for both the SDK
     request_limit (orchestrate._execute_run) and the final-request wrap-up nudge
-    trigger (history_processors.wrap_up_on_final_request).
+    trigger (_instructions.wrap_up_prompt).
     """
     cap = llm.max_model_requests_per_turn
     return cap if cap > 0 else None

@@ -6,7 +6,7 @@ Production path: co_cli/agent/orchestrate.py:run_turn() — finish_reason='lengt
 import asyncio
 
 import pytest
-from pydantic_ai.messages import ModelResponse
+from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import (
@@ -58,7 +58,9 @@ async def test_length_retry_completes_truncated_noreason_response() -> None:
     so the first run is reliably truncated regardless of model verbosity. The retry
     doubles max_tokens each pass (80→160→320→…) until the model completes.
 
-    Asserts the turn succeeds and history shows ≥2 ModelResponse entries.
+    Asserts the turn succeeds, ≥2 LLM calls fired (the retry), the prompt appears
+    exactly once in the persisted history (no duplication), and the history ends on
+    the complete ModelResponse (the truncated partial was discarded, not persisted).
     """
     noreason = SETTINGS_NO_MCP.llm.noreason_model_settings()
     # Ollama ignores max_completion_tokens (pydantic-ai's mapping of max_tokens).
@@ -86,10 +88,28 @@ async def test_length_retry_completes_truncated_noreason_response() -> None:
         )
 
     assert turn.outcome == "continue"
-    model_responses = [m for m in turn.messages if isinstance(m, ModelResponse)]
-    assert len(model_responses) >= 2, (
-        f"expected at least one length-retry run; "
-        f"got {len(model_responses)} ModelResponse(s) in history"
+    # The retry fired: ≥2 LLM calls this turn. The truncated partial is discarded
+    # (clean re-ask), so the count lives in model_requests, not in persisted history.
+    assert turn.model_requests >= 2, (
+        f"expected at least one length-retry run; got {turn.model_requests} model request(s)"
+    )
+    # No duplicated user prompt: the originating prompt appears exactly once.
+    essay_prompt = "Write a 5-paragraph essay about why Python is popular. "
+    prompt_occurrences = sum(
+        1
+        for m in turn.messages
+        if isinstance(m, ModelRequest)
+        for p in m.parts
+        if isinstance(p, UserPromptPart)
+        and isinstance(p.content, str)
+        and essay_prompt in p.content
+    )
+    assert prompt_occurrences == 1, (
+        f"user prompt must appear exactly once; found {prompt_occurrences} copies"
+    )
+    # History ends on the complete answer, not a dangling truncated/assistant artifact.
+    assert isinstance(turn.messages[-1], ModelResponse), (
+        f"history must end on a ModelResponse; ended on {type(turn.messages[-1]).__name__}"
     )
 
 

@@ -162,7 +162,7 @@ disable-guard helper, the once-per-turn latch, and ephemerality-via-processor.
     contract is the nudge reaching the request input.
   - `prerequisites:` none
 
-- **TASK-1b** — Move the nudge from the history-processor seam to a dynamic
+- ✓ DONE **TASK-1b** — Move the nudge from the history-processor seam to a dynamic
   instruction callback (refactor; supersedes TASK-1's mechanism, keeps its behavior).
   - **Why** (verified against `pydantic-ai==1.92.0` source): TASK-1's processor is
     *additive* — it splices a message that the SDK persists (`ctx.state.message_history[:] = messages`),
@@ -181,15 +181,21 @@ disable-guard helper, the once-per-turn latch, and ephemerality-via-processor.
     `co_cli/context/history_processors.py` (delete `wrap_up_on_final_request`,
     `drop_wrap_up_messages`, `WRAP_UP_TEXT` and the docstring entries),
     `co_cli/agent/orchestrate.py` (remove both `drop_wrap_up_messages` call sites +
-    the import), `tests/test_flow_model_request_cap.py` (assert the nudge via the
-    request's instruction text, not a message part)
+    the import), `co_cli/config/llm.py` (repoint the `resolve_request_limit`
+    docstring from `history_processors.wrap_up_on_final_request` to
+    `_instructions.wrap_up_prompt`), `tests/test_flow_model_request_cap.py` (assert
+    the nudge via the request's instruction text, not a message part)
   - `done_when:` a test drives the cumulative-cap runaway and asserts the request at
     `ctx.usage.requests == limit - 1` carries `WRAP_UP_TEXT` in its **instructions**
     (not as a `UserPromptPart`); cap disabled (`= 0`) → no nudge; `WRAP_UP_TEXT`
-    never appears as a message part in `TurnResult.messages` **with no strip step**;
-    a **repo-wide grep** finds zero references to `drop_wrap_up_messages` /
-    `wrap_up_on_final_request` (per `review.md` — drop/rename done only when grep is
-    clean AND tests pass); full suite passes.
+    never appears as a `UserPromptPart`/text part in `TurnResult.messages` **with no
+    strip step** (it MAY persist on `ModelRequest.instructions` — that is expected and
+    harmless, same as `safety_prompt`/`current_time_prompt`; the SDK recomputes
+    instructions fresh each request via `_get_instruction_parts` and ignores historical
+    `ModelRequest.instructions`, so the nudge is never replayed — do NOT assert
+    `WRAP_UP_TEXT not in str(messages)`); a **repo-wide grep** finds zero references to
+    `drop_wrap_up_messages` / `wrap_up_on_final_request` (per `review.md` — drop/rename
+    done only when grep is clean AND tests pass); full suite passes.
   - `success_signal:` the cumulative-cap turn still flips `error` → `continue` with a
     synthesized answer when the model honors the instruction-framed nudge — verified
     by an eval/representative run that the model obeys the instruction-block framing
@@ -199,14 +205,20 @@ disable-guard helper, the once-per-turn latch, and ephemerality-via-processor.
     so the consecutive-cap trigger rides the same instruction callback (its
     `wrap_up_fired` latch still applies).
 
-- **TASK-2** — Consecutive-cap trigger via the same processor + once-per-turn latch.
-  - `files:` `co_cli/agent/toolset.py`, `co_cli/context/history_processors.py`,
+- **TASK-2** — Consecutive-cap trigger via the same instruction callback + once-per-turn latch.
+  - **Note (post-1b):** after TASK-1b the wrap-up seam is the `wrap_up_prompt(ctx)`
+    instruction callback in `_instructions.py`, NOT `history_processors.py`. TASK-2's
+    consecutive trigger reads its `RuntimeState`/streak flag inside that callback and
+    appends the same `WRAP_UP_TEXT`; the `files:`/`done_when:` below are written against
+    the instruction-callback seam.
+  - `files:` `co_cli/agent/toolset.py`, `co_cli/agent/_instructions.py`,
     `co_cli/deps.py`
   - `done_when:` a test drives a single-run runaway to
     `TOOL_CAP_HARD_STOP_CONSECUTIVE - 1` consecutive over-cap requests and asserts
     the next in-loop request carries the wrap-up instruction; a length-retry
     re-entry test asserts the nudge fires **at most once** per turn (the
-    `wrap_up_fired` latch, reset in `reset_for_turn`); full suite passes.
+    `wrap_up_fired` latch, reset in `reset_for_turn`); the nudge appears in the
+    request's **instructions** (not as a `UserPromptPart`); full suite passes.
   - `success_signal:` approaching the consecutive cap, the model's final allowed
     step receives "final answer now," raising the rate it returns a synthesized
     answer rather than tool-calls-only.
@@ -252,6 +264,9 @@ names are deferred to orchestrate-dev as implementation choices, not product dec
 | PO-M-3 | adopt | TASK-3 defined no new behavior and its done_when used a forbidden structural grep. | TASK-3 deleted; guards folded into TASK-1 (disable) and TASK-2 (once-per-turn); functional ephemerality test kept. |
 | PO-m-1 | reject | No-action convergence documentation is in-scope and survived scrutiny. | — |
 | PO-m-2 | adopt | Failure cost lumped both caps. | Failure cost split per-cap. |
+| G1-1b-1 | adopt | TASK-1b's files list missed `co_cli/config/llm.py:267`, whose `resolve_request_limit` docstring references `history_processors.wrap_up_on_final_request`; the done_when's zero-reference grep would fail. | Added `co_cli/config/llm.py` (docstring repoint) to TASK-1b `files:`. |
+| G1-1b-2 | adopt | "Absent from `TurnResult.messages`" was imprecise: `_prepare_request` (`_agent_graph.py:839`) persists instructions onto `ModelRequest.instructions`, same as `safety_prompt`/`current_time_prompt`. Non-replay (via `_get_instruction_parts`) is the real ephemerality guarantee, not total absence. | TASK-1b done_when tightened: assert absent as a `UserPromptPart`/text part; `.instructions` persistence is expected; forbid `WRAP_UP_TEXT not in str(messages)`. |
+| G1-1b-3 | adopt | TASK-2's seam (`history_processors.py`) goes stale once 1b retires the processor; TASK-2 must ride the `wrap_up_prompt` instruction callback. | TASK-2 retitled + note added; `files:` repointed to `_instructions.py`; instruction-block assertion added. |
 
 ## Final — Team Lead
 
@@ -260,3 +275,45 @@ Plan approved.
 > Gate 1 — PO review required before proceeding.
 > Review this plan: right problem? correct scope?
 > Once approved, run: `/orchestrate-dev prompting-loop-convergence`
+
+## Delivery Summary — TASK-1b — 2026-06-22
+
+| Task | done_when | Status |
+|------|-----------|--------|
+| TASK-1b | Cumulative-cap runaway carries `WRAP_UP_TEXT` in **instructions** at `usage.requests == limit-1`; cap disabled (`=0`) → no nudge; never a `UserPromptPart` in `TurnResult.messages` with no strip step; repo-wide grep finds zero `drop_wrap_up_messages`/`wrap_up_on_final_request`; full suite passes | ✓ pass |
+
+**What shipped:** relocated the wrap-up nudge from the `wrap_up_on_final_request` history processor (+ `drop_wrap_up_messages` strip) to a dynamic `wrap_up_prompt(ctx)` instruction callback in `co_cli/agent/_instructions.py` (with `WRAP_UP_TEXT`), registered in `orchestrator.py` `per_turn_instructions`. Deleted `wrap_up_on_final_request`, `drop_wrap_up_messages`, `WRAP_UP_TEXT` and the now-unused `resolve_request_limit` import from `history_processors.py`; removed both `drop_wrap_up_messages` call sites + import from `orchestrate.py`; repointed the `resolve_request_limit` docstring in `config/llm.py`. Tests rewritten to assert the nudge via `ModelRequest.instructions` (not a message part), registered via `Agent(instructions=wrap_up_prompt)`.
+
+**Files:** `co_cli/agent/_instructions.py`, `co_cli/agent/orchestrator.py`, `co_cli/context/history_processors.py`, `co_cli/agent/orchestrate.py`, `co_cli/config/llm.py`, `tests/test_flow_model_request_cap.py`
+
+**Tests:** scoped — `tests/test_flow_model_request_cap.py` 13 passed, 0 failed.
+**Doc Sync:** fixed — `core-loop.md` (§1 wrap-up paragraph, processor list 6→5, symbol/Files tables) and `pydantic-ai-integration.md` (§2.8, §2.13, Files table, refactor-practices note) updated to the instruction-callback mechanism.
+
+**Overall: DELIVERED**
+TASK-1b refactor complete; mechanism moved to the instruction seam with no strip step, behavior preserved, code grep clean, scoped tests green, specs synced.
+
+## Implementation Review — TASK-1b — 2026-06-22
+
+### Evidence
+| Task | done_when | Spec Fidelity | Key Evidence |
+|------|-----------|---------------|-------------|
+| TASK-1b | nudge in **instructions** at `usage.requests == limit-1`; cap disabled → no nudge; never a `UserPromptPart` (no strip); grep zero retired symbols; suite green | ✓ pass | `_instructions.py:31-49` — `wrap_up_prompt` gated by `resolve_request_limit` (disable) + `ctx.usage.requests != limit-1`, returns `""`/`WRAP_UP_TEXT`; registered `orchestrator.py:90` `per_turn_instructions`; processor + strip removed (`orchestrate.py:565`, `:780-782` de-wrapped, 400-reformulation splice intact); `config/llm.py` docstring repointed; grep `wrap_up_on_final_request`/`drop_wrap_up_messages` over `co_cli/`+`tests/` → exit 1 (zero refs); `test_flow_model_request_cap.py` asserts via `ModelRequest.instructions` |
+
+### Issues Found & Fixed
+| Finding | File:Line | Severity | Resolution |
+|---------|-----------|----------|------------|
+| Scope-creep: unrelated working-tree change (length-retry assertions) not in any task's `files:` | tests/test_flow_orchestrate_length_retry.py | minor | Excluded from this review; left untouched for the user to triage/stage separately. Not introduced by TASK-1b. |
+
+_No blocking issues. The wrap-up text persisting on one `ModelRequest.instructions` field is expected (G1-1b-2) — identical to `safety_prompt`/`current_time_prompt`; the SDK recomputes instructions per request and ignores historical `ModelRequest.instructions`, so it is never replayed (no strip needed)._
+
+### Tests
+- Command: `uv run pytest -q`
+- Result: 822 passed, 0 failed (224s) — includes the cap tests and the real-LLM length-retry test
+- Log: `.pytest-logs/20260622-204557-review-impl.log`
+
+### Behavioral Verification
+- `uv run co --help`: ✓ boots (import + bootstrap graph loads with `wrap_up_prompt` registered)
+- `success_signal` verified: cumulative-cap turn flips `error` → `continue` with a synthesized answer when the model honors the instruction-framed nudge — proven deterministically by `test_wrap_up_nudge_reaches_model_and_yields_answer` (FunctionModel stub; `outcome=="continue"`, `output=="done"`). Live chat interaction non-gating.
+
+### Overall: PASS
+TASK-1b refactor verified: nudge moved to the `wrap_up_prompt` instruction seam, no strip step, behavior preserved, code grep clean, full suite green, boot smoke clean.

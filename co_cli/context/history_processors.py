@@ -10,19 +10,12 @@ Registered processors:
     evict_old_tool_results      — content-clears compactable tool results by recency
     spill_largest_tool_results  — force-spills largest unspilled tool returns when full
                                   request exceeds spill_threshold_tokens
-    wrap_up_on_final_request    — appends a one-shot wrap-up nudge on the last request
-                                  before the cumulative model-request cap. Unlike the
-                                  others this is additive (splices a message), so it
-                                  persists into run history and is stripped on the way
-                                  out by drop_wrap_up_messages.
 
 Recovery helpers (not registered as processors):
     strip_all_tool_returns      — collapses every tool return to a semantic marker;
                                   used by overflow recovery to cut tokens before retry.
                                   Differs from evict_old_tool_results: no recency cap,
                                   no boundary protection.
-    drop_wrap_up_messages       — strips the wrap_up_on_final_request nudge from a
-                                  message list before it is persisted as turn history.
 """
 
 from __future__ import annotations
@@ -46,7 +39,6 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.config.llm import resolve_request_limit
 from co_cli.config.tuning import (
     ESTIMATE_CHARS_PER_TOKEN,
     EVICT_KEEP_RECENT,
@@ -595,61 +587,4 @@ def elide_old_multimodal_prompts(
                     continue
             new_parts.append(part)
         result.append(replace(msg, parts=new_parts) if modified else msg)
-    return result
-
-
-WRAP_UP_TEXT = (
-    "This is your last allowed step this turn — the model-request budget is about to "
-    "run out, so any further tool calls will be cut off before you can answer. Do not "
-    "call any more tools. Produce your final answer now from what you already have."
-)
-"""Synthetic final-request wrap-up nudge. Distinctive enough that an exact-content
-match identifies it for stripping without a separate marker; the model sees this
-clean text on its final allowed request only (see wrap_up_on_final_request)."""
-
-
-def wrap_up_on_final_request(
-    ctx: RunContext[CoDeps],
-    messages: list[ModelMessage],
-) -> list[ModelMessage]:
-    """Append a one-shot wrap-up nudge on the final request before the cumulative cap.
-
-    The SDK enforces ``max_model_requests_per_turn`` via ``UsageLimits`` and aborts
-    mid-run once ``usage.requests`` reaches the cap. ``ctx.usage.requests`` counts
-    completed requests, so it reads ``limit - 1`` right before the last allowed
-    request. On that request only, splice a synthetic user message telling the model
-    to produce its final answer instead of spending the last step on tool calls
-    (which would be cold-truncated to an error result). The nudge is stripped from
-    persisted history by ``drop_wrap_up_messages``. Fires at most once: once the
-    request is made ``usage.requests`` becomes ``limit`` and the guard no longer holds.
-    """
-    limit = resolve_request_limit(ctx.deps.config.llm)
-    if limit is None or ctx.usage.requests != limit - 1:
-        return messages
-    return [
-        *messages,
-        ModelRequest(parts=[UserPromptPart(content=WRAP_UP_TEXT)]),
-    ]
-
-
-def drop_wrap_up_messages(messages: list[ModelMessage]) -> list[ModelMessage]:
-    """Remove the synthetic wrap-up nudge (see ``wrap_up_on_final_request``) from history.
-
-    Drops any ``UserPromptPart`` whose content is exactly ``WRAP_UP_TEXT`` and drops a
-    ``ModelRequest`` entirely when that leaves it with no parts. Keeps the persisted
-    transcript free of the ephemeral nudge on every turn-result return path.
-    """
-    result: list[ModelMessage] = []
-    for msg in messages:
-        if not isinstance(msg, ModelRequest):
-            result.append(msg)
-            continue
-        kept = [
-            part
-            for part in msg.parts
-            if not (isinstance(part, UserPromptPart) and part.content == WRAP_UP_TEXT)
-        ]
-        if not kept:
-            continue
-        result.append(replace(msg, parts=kept) if len(kept) != len(msg.parts) else msg)
     return result

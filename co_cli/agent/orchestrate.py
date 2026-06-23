@@ -78,7 +78,6 @@ from co_cli.config.tuning import (
     TOOL_CAP_HARD_STOP_CONSECUTIVE,
 )
 from co_cli.context.compaction import is_context_overflow, recover_overflow_history
-from co_cli.context.history_processors import drop_wrap_up_messages
 from co_cli.context.timeouts import LLM_RUN_TIMEOUT_SECS
 from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt
@@ -563,7 +562,7 @@ def _check_turn_caps(
 
 
 def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
-    msgs = drop_wrap_up_messages(
+    msgs = (
         turn_state.latest_result.all_messages()
         if turn_state.latest_result
         else turn_state.current_history
@@ -778,10 +777,8 @@ def _history_after_successful_run(
     nudges drop out structurally.
     """
     if turn_state.reformulation_clean_history is None:
-        return drop_wrap_up_messages(latest_result.all_messages())
-    return drop_wrap_up_messages(
-        [*turn_state.reformulation_clean_history, *latest_result.new_messages()]
-    )
+        return latest_result.all_messages()
+    return [*turn_state.reformulation_clean_history, *latest_result.new_messages()]
 
 
 async def _attempt_overflow_recovery(
@@ -887,11 +884,18 @@ def _finalize_run(
 
     boosted_settings = _length_retry_settings(latest_result, active_settings)
     if boosted_settings is not None:
-        # Do NOT set current_input=None here. Keeping the original user prompt
-        # ensures the retry sends a proper user turn instead of a bare continuation
-        # request (conversation ending with an assistant message). qwen3.6 enters
-        # thinking mode on bare continuations regardless of think=False, exhausting
-        # any token budget before producing text.
+        # Length-continuation retry: discard the truncated partial response and re-run
+        # from the originating user turn with a larger token budget. Dropping the partial
+        # (instead of re-appending current_input) keeps the prompt from appearing twice
+        # and guarantees the history ends on a request, never on a bare assistant turn —
+        # qwen3.6 enters thinking mode on assistant-ending continuations regardless of
+        # think=False, exhausting the budget before producing any text. This converges
+        # every entry path (plain, 400-reformulation, approval-resume) to one shape.
+        if turn_state.current_history and isinstance(
+            turn_state.current_history[-1], ModelResponse
+        ):
+            turn_state.current_history = turn_state.current_history[:-1]
+        turn_state.current_input = None
         frontend.on_status(
             f"Response truncated — retrying with {boosted_settings['max_tokens']:,} output tokens…"
         )

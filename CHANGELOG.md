@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.450]
+
+Move the final-request wrap-up nudge from a spliced history message to a dynamic instruction, and fix the length-continuation retry duplicating the user prompt.
+
+- **Wrap-up nudge is now a per-request instruction** — `wrap_up_prompt` (`co_cli/agent/_instructions.py`, registered in `orchestrator.py`'s `per_turn_instructions`) emits `WRAP_UP_TEXT` only on the last allowed request (`ctx.usage.requests == limit - 1`). Because the SDK recomputes instructions per request and ignores historical `ModelRequest.instructions`, the nudge is never replayed next turn — so the old `wrap_up_on_final_request` history processor and its companion `drop_wrap_up_messages` strip step (called on every turn-result return path) are deleted from `history_processors.py`. No synthetic message ever enters persisted history, removing the splice/strip round-trip entirely. `resolve_request_limit` stays the single source for both the SDK `UsageLimits` and the nudge trigger.
+- **Length-continuation retry no longer duplicates the prompt** — `_finalize_run` (`co_cli/agent/orchestrate.py`) previously kept `current_input` set on a `finish_reason == "length"` retry and re-sent the user prompt, persisting `[…user:X, assistant:<truncated>, user:X]` into the transcript; the safeguard also failed for the 400-reformulation and approval-resume paths (where `current_input` was already `None`), sending a bare assistant-ending continuation that triggers qwen3.6's thinking-mode trap. The retry now discards the truncated partial `ModelResponse` and clears `current_input`, so every entry path re-runs from the originating user turn with a larger budget — no duplicated prompt, history always ending on a request.
+- **Tests**: `tests/test_flow_orchestrate_length_retry.py` asserts the retry fired (`model_requests >= 2`), the prompt appears exactly once, and history ends on a `ModelResponse`; `tests/test_flow_model_request_cap.py` updated for the instruction-based nudge.
+
 ## [0.8.448]
 
 Add a final-request wrap-up nudge so a turn that hits the model-request cap ends with a real answer instead of a cold-truncated tool call, and centralize the post-compaction size write-back.

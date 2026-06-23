@@ -13,6 +13,7 @@ from co_cli.agent._instructions import (
     deferred_tool_awareness_prompt,
     safety_prompt,
     skill_manifest_prompt,
+    wrap_up_prompt,
 )
 from co_cli.agent.spec import OrchestratorSpec
 from co_cli.context.compaction import proactive_window_processor
@@ -21,7 +22,6 @@ from co_cli.context.history_processors import (
     elide_old_multimodal_prompts,
     evict_old_tool_results,
     spill_largest_tool_results,
-    wrap_up_on_final_request,
 )
 
 if TYPE_CHECKING:
@@ -87,6 +87,7 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
     ),
     per_turn_instructions=(
         safety_prompt,
+        wrap_up_prompt,
         current_time_prompt,
         deferred_tool_awareness_prompt,
         skill_manifest_prompt,
@@ -97,6 +98,5 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
         evict_old_tool_results,
         spill_largest_tool_results,
         proactive_window_processor,
-        wrap_up_on_final_request,
     ),
 )

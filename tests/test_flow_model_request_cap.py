@@ -3,7 +3,7 @@
 Production paths:
   co_cli/config/llm.py              — LlmSettings.max_model_requests_per_turn, resolve_request_limit
   co_cli/agent/orchestrate.py       — _check_turn_caps, run_turn
-  co_cli/context/history_processors.py — wrap_up_on_final_request, drop_wrap_up_messages
+  co_cli/agent/_instructions.py     — wrap_up_prompt (final-request wrap-up nudge)
 """
 
 from __future__ import annotations
@@ -18,12 +18,12 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from pydantic_ai.toolsets import FunctionToolset
 from tests._settings import SETTINGS_NO_MCP
 
+from co_cli.agent._instructions import WRAP_UP_TEXT, wrap_up_prompt
 from co_cli.agent.orchestrate import run_turn
 from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.config.core import load_config
 from co_cli.config.llm import MAX_MODEL_REQUESTS_PER_TURN, LlmSettings
 from co_cli.config.tuning import MAX_TOOL_CALLS_PER_MODEL_REQUEST
-from co_cli.context.history_processors import WRAP_UP_TEXT, wrap_up_on_final_request
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.tools.shell_backend import ShellBackend
@@ -618,17 +618,29 @@ async def test_request_cap_interrupts_within_cap_single_run_loop() -> None:
 
 # ---------------------------------------------------------------------------
 # Integration (g): graceful wrap-up nudge on the final allowed request before
-# the cumulative model-request cap (history_processors.wrap_up_on_final_request).
+# the cumulative model-request cap (_instructions.wrap_up_prompt).
 #
-# The nudge must (1) reach the model on the request issued when
-# usage.requests == limit-1, (2) be suppressed when the cap is disabled, and
-# (3) never persist into the returned turn history (stripped on both the
-# answer-on-time success path and the ignored-nudge UsageLimitExceeded path).
+# The nudge is a dynamic instruction (not a history message), so it must
+# (1) reach the model on the request issued when usage.requests == limit-1,
+# (2) be suppressed when the cap is disabled, and (3) never appear as a
+# UserPromptPart/text part in the returned turn history — without any strip
+# step. The SDK recomputes instructions per request and ignores historical
+# ModelRequest.instructions, so the nudge is never replayed.
 # ---------------------------------------------------------------------------
 
 
-def _messages_carry_wrap_up(messages: list[ModelMessage]) -> bool:
-    """True if any ModelRequest in *messages* carries the wrap-up UserPromptPart."""
+def _request_instructions_carry_wrap_up(messages: list[ModelMessage]) -> bool:
+    """True if any ModelRequest in *messages* carries the wrap-up text in its instructions."""
+    return any(
+        isinstance(msg, ModelRequest)
+        and msg.instructions is not None
+        and WRAP_UP_TEXT in msg.instructions
+        for msg in messages
+    )
+
+
+def _messages_carry_wrap_up_part(messages: list[ModelMessage]) -> bool:
+    """True if any ModelRequest carries the wrap-up text as a UserPromptPart (must never happen)."""
     return any(
         isinstance(part, UserPromptPart) and part.content == WRAP_UP_TEXT
         for msg in messages
@@ -640,12 +652,13 @@ def _messages_carry_wrap_up(messages: list[ModelMessage]) -> bool:
 def _make_wrap_up_agent(
     *, honor_nudge: bool, done_at_call: int | None, saw_nudge: list[bool]
 ) -> Agent:
-    """Agent with wrap_up_on_final_request registered, recording per-request nudge sightings.
+    """Agent with wrap_up_prompt registered as a dynamic instruction.
 
-    Each model call records whether the request it received carried the wrap-up text.
-    When ``honor_nudge`` and the nudge is seen, it answers "done"; when ``done_at_call``
-    is set it answers "done" on that call unconditionally; otherwise it emits one
-    within-cap noop tool call (so the loop stays in a single run_stream_events call).
+    Each model call records whether the request it received carried the wrap-up text
+    in its instructions. When ``honor_nudge`` and the nudge is seen, it answers "done";
+    when ``done_at_call`` is set it answers "done" on that call unconditionally;
+    otherwise it emits one within-cap noop tool call (so the loop stays in a single
+    run_stream_events call).
     """
     call_count = {"n": 0}
 
@@ -654,7 +667,7 @@ def _make_wrap_up_agent(
     ) -> AsyncIterator[str | DeltaToolCalls]:
         call_count["n"] += 1
         n = call_count["n"]
-        seen = _messages_carry_wrap_up(messages)
+        seen = _request_instructions_carry_wrap_up(messages)
         saw_nudge.append(seen)
         if (done_at_call is not None and n >= done_at_call) or (honor_nudge and seen):
             yield "done"
@@ -673,7 +686,7 @@ def _make_wrap_up_agent(
         deps_type=CoDeps,
         output_type=[str, DeferredToolRequests],
         toolsets=[_CallSeamToolset(toolset)],
-        history_processors=[wrap_up_on_final_request],
+        instructions=wrap_up_prompt,
     )
 
 
@@ -696,8 +709,8 @@ async def test_wrap_up_nudge_reaches_model_and_yields_answer() -> None:
     assert any(saw_nudge), f"wrap-up nudge never reached the model; saw_nudge={saw_nudge}"
     assert turn.outcome == "continue", f"expected surfaced answer; got {turn.outcome!r}"
     assert turn.output == "done"
-    assert not _messages_carry_wrap_up(turn.messages), (
-        "wrap-up nudge must be stripped from persisted turn history"
+    assert not _messages_carry_wrap_up_part(turn.messages), (
+        "wrap-up nudge must never appear as a UserPromptPart in persisted turn history"
     )
 
 
@@ -723,8 +736,8 @@ async def test_wrap_up_nudge_suppressed_when_cap_disabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wrap_up_nudge_ignored_still_strips_from_history() -> None:
-    """If the model ignores the nudge and hits the cap, the nudge is still stripped."""
+async def test_wrap_up_nudge_ignored_never_persists_as_part() -> None:
+    """If the model ignores the nudge and hits the cap, the nudge never persists as a part."""
     saw_nudge: list[bool] = []
     deps = _make_capped_deps(max_model_requests=3)
     agent = _make_wrap_up_agent(honor_nudge=False, done_at_call=None, saw_nudge=saw_nudge)
@@ -740,6 +753,6 @@ async def test_wrap_up_nudge_ignored_still_strips_from_history() -> None:
 
     assert any(saw_nudge), f"wrap-up nudge never reached the model; saw_nudge={saw_nudge}"
     assert turn.outcome == "error", f"expected cap error; got {turn.outcome!r}"
-    assert not _messages_carry_wrap_up(turn.messages), (
-        "wrap-up nudge must be stripped from persisted turn history on the error path"
+    assert not _messages_carry_wrap_up_part(turn.messages), (
+        "wrap-up nudge must never appear as a UserPromptPart, even on the error path"
     )

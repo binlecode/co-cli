@@ -19,6 +19,36 @@ def safety_prompt(ctx: RunContext[CoDeps]) -> str:
     return safety_prompt_text(ctx)
 
 
+WRAP_UP_TEXT = (
+    "This is your last allowed step this turn — the model-request budget is about to "
+    "run out, so any further tool calls will be cut off before you can answer. Do not "
+    "call any more tools. Produce your final answer now from what you already have."
+)
+"""Final-request wrap-up nudge. Injected as a dynamic instruction (not a history
+message), so the SDK recomputes it fresh each request and never replays it next turn."""
+
+
+def wrap_up_prompt(ctx: RunContext[CoDeps]) -> str:
+    """Per-turn: nudge the model to finish on its last allowed request before the cap.
+
+    The SDK enforces ``max_model_requests_per_turn`` via ``UsageLimits`` and aborts
+    mid-run once ``usage.requests`` reaches the cap. ``ctx.usage.requests`` counts
+    completed requests, so it reads ``limit - 1`` right before the last allowed
+    request. On that request only, emit the wrap-up text so the model returns a final
+    answer instead of spending its last step on tool calls (which would be
+    cold-truncated to an error result). Instructions are recomputed per request and
+    historical ``ModelRequest.instructions`` are ignored in the agent flow, so the
+    nudge is never replayed — no strip step is needed. Inert when the cap is disabled
+    (``resolve_request_limit`` → ``None``).
+    """
+    from co_cli.config.llm import resolve_request_limit
+
+    limit = resolve_request_limit(ctx.deps.config.llm)
+    if limit is None or ctx.usage.requests != limit - 1:
+        return ""
+    return WRAP_UP_TEXT
+
+
 def deferred_tool_awareness_prompt(ctx: RunContext[CoDeps]) -> str:
     """Per-turn: emit a per-tool stub (name + one-liner) for every deferred tool.
 

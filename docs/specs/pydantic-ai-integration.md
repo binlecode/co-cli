@@ -224,22 +224,22 @@ Approval decisions carry **no** tool execution — execution and `ToolReturnPart
 
 ### 2.8 Message/part type system — `context/`, `observability/serialize.py`, `session/persistence.py`
 
-The breadth here (~22 part types) is intrinsic to **client-side compaction**, not a smell. co pattern-matches `ModelRequest`/`ModelResponse` for turn grouping (`_compaction_boundaries.py`), dedups/evicts `ToolReturnPart` (`history_processors.py`, `_dedup_tool_results.py`), estimates tokens from parts (`summarization.py`), and serializes parts to span attributes (`serialize.py`). History processors never mutate their input — each returns a new list; `_rewrite_tool_returns` rebuilds a `ModelRequest` via `replace(...)` only when a part changed, else preserves the original object by identity. Most are **rewrite-only** (subtractive: dedup/evict/spill/elide); the lone **additive** processor is `wrap_up_on_final_request` (§2.13). Persistence round-trips through `ModelMessagesTypeAdapter` (`dump_json`/`parse_json`) into per-session JSONL.
+The breadth here (~22 part types) is intrinsic to **client-side compaction**, not a smell. co pattern-matches `ModelRequest`/`ModelResponse` for turn grouping (`_compaction_boundaries.py`), dedups/evicts `ToolReturnPart` (`history_processors.py`, `_dedup_tool_results.py`), estimates tokens from parts (`summarization.py`), and serializes parts to span attributes (`serialize.py`). History processors never mutate their input — each returns a new list; `_rewrite_tool_returns` rebuilds a `ModelRequest` via `replace(...)` only when a part changed, else preserves the original object by identity. All are **rewrite-only** (subtractive: dedup/evict/spill/elide) — there is no additive processor. Persistence round-trips through `ModelMessagesTypeAdapter` (`dump_json`/`parse_json`) into per-session JSONL.
 
-### 2.13 Final-request wrap-up nudge — `context/history_processors.py`
+### 2.13 Final-request wrap-up nudge — `agent/_instructions.py`
 
-A registered history processor that softens the cumulative model-request cap (§2.5, [core-loop.md](core-loop.md) §1). Because `UsageLimits(request_limit)` hard-blocks the request that *would* exceed the cap mid-stream — no chance for the model to answer — `wrap_up_on_final_request` injects a one-shot instruction on the last allowed request instead:
+A dynamic instruction callback (registered via `agent.instructions()`) that softens the cumulative model-request cap (§2.5, [core-loop.md](core-loop.md) §1). Because `UsageLimits(request_limit)` hard-blocks the request that *would* exceed the cap mid-stream — no chance for the model to answer — `wrap_up_prompt` emits a one-shot instruction on the last allowed request instead:
 
 ```
-wrap_up_on_final_request(ctx, messages):
+wrap_up_prompt(ctx):
     limit = resolve_request_limit(ctx.deps.config.llm)        # None when cap disabled
-    if limit is None or ctx.usage.requests != limit - 1: return messages   # not the final request
-    return [*messages, ModelRequest([UserPromptPart(WRAP_UP_TEXT)])]       # append the nudge
+    if limit is None or ctx.usage.requests != limit - 1: return ""   # not the final request
+    return WRAP_UP_TEXT                                              # emit the nudge as an instruction
 ```
 
 Two SDK behaviors this relies on (both documented, stable in 1.92.0):
-- **`ctx.usage.requests` is the live turn-cumulative count at processor time.** The SDK increments it *after* each request, so inside the processor it reads `limit - 1` exactly on the last request the SDK will still permit — fires at most once (next request makes it `limit`).
-- **Processor output is persisted, then the trailing `ModelRequest` is merged.** The SDK writes the processor's returned list back to run history (so the nudge would survive into `AgentRunResult.new_messages()`) and merges consecutive trailing `ModelRequest`s before sending, so the model sees the nudge folded into the real request. Because it persists, `drop_wrap_up_messages` strips it (exact-content match on `WRAP_UP_TEXT`) at every `run_turn` return path (`_history_after_successful_run`, `_build_error_turn_result`) — the nudge never reaches the saved transcript or the next turn. This is the one additive processor, so the "rewrite-only" purity of the others (§2.8) does not extend to it.
+- **`ctx.usage.requests` is the live turn-cumulative count at callback time.** The SDK increments it *after* each request, so inside the callback (run in `_prepare_request` before the request is sent) it reads `limit - 1` exactly on the last request the SDK will still permit — fires at most once (next request makes it `limit`).
+- **Instructions are recomputed fresh every request and historical instructions are ignored.** The agent flow rebuilds `instruction_parts` per request (`_get_instruction_parts`) and never replays a past `ModelRequest.instructions`. So the nudge lands in the request's `instructions` (not as a `UserPromptPart`) and never reaches the next turn — **no strip step is needed**. It persists harmlessly on that one `ModelRequest.instructions` field, exactly as `safety_prompt` / `current_time_prompt` already do.
 
 ### 2.9 Schema-budget measurement — `bootstrap/schema_budget.py`
 
@@ -340,7 +340,8 @@ Package-private (not callable cross-package, listed for the map): `_CallSeamTool
 | `co_cli/agent/run.py` | `run_standalone` task-agent runner with real `UsageLimits` |
 | `co_cli/bootstrap/schema_budget.py` | `measure_always_schema_budget` (synthetic `RunContext` + `prepare_tool_def`) |
 | `co_cli/agent/orchestrate.py` | `run_turn`, stream-event loop, deferred-tool approval loop, error taxonomy |
-| `co_cli/context/history_processors.py` | Part-rewriting processors (`_rewrite_tool_returns`); additive `wrap_up_on_final_request` + `drop_wrap_up_messages` strip helper |
+| `co_cli/context/history_processors.py` | Part-rewriting processors (`_rewrite_tool_returns`) |
+| `co_cli/agent/_instructions.py` | Dynamic `agent.instructions()` callbacks; `wrap_up_prompt` (§2.13) emits the final-request cap nudge |
 | `co_cli/observability/serialize.py` | Part/message → span-attribute serialization |
 | `co_cli/session/persistence.py` | `ModelMessagesTypeAdapter` JSONL round-trip |
 | `co_cli/deps.py` | `ToolInfo`, `VisibilityPolicyEnum`, `ToolSourceEnum`, runtime cap counters |
@@ -387,7 +388,7 @@ Load-bearing, intentional, or rejected couplings — recorded so they are not re
 - The **deferred-tool / approval protocol types** (`DeferredToolRequests`/`Results`, `ApprovalRequired`, `ToolApproved`/`Denied`) are thin data carriers. co drives the entire approval loop (§2.7); whether co ever re-implements pause/resume around its own dispatch is a separate design decision, not a mechanical cleanup.
 
 **Coding practices to preserve under any future refactor:**
-- Non-mutating history processors (never mutate the input list/objects); the single `_rewrite_tool_returns` contract; identity-preserving `replace(...)`. The lone additive processor `wrap_up_on_final_request` (§2.13) still obeys this — it appends to a new list rather than mutating — but its persisted output **must** be stripped on the way out (`drop_wrap_up_messages`); do not drop the strip when refactoring.
+- Non-mutating history processors (never mutate the input list/objects); the single `_rewrite_tool_returns` contract; identity-preserving `replace(...)`. All registered processors are rewrite-only — there is no additive processor. The final-request wrap-up nudge (§2.13) is a dynamic instruction (`wrap_up_prompt`), not a history processor, so it requires no strip step.
 - Frozen registration metadata (`ToolInfo`, `AlwaysSchemaBudget`, `MCPToolsetEntry`).
 - Thin proxies over deep subclassing (`_SanitizingMCPServer`, `_RepairingStreamedResponse` delegate via `__getattr__`, override one method).
 
