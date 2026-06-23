@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.465]
+
+Fix the welcome banner reporting `Dream: disabled` while a daemon is actually running, and rename the config flag to match its true meaning.
+
+- **Banner / `/status` lied about the daemon** — `dream_status` short-circuited on the config flag and returned `running=False` without probing the live pidfile, so the banner and `/status` showed `disabled` while `/dream` correctly reported a running daemon (pid alive, started via `/dream start` from any session on the shared `CO_HOME`). Both surfaces now read the live pidfile and report runtime state only: `✓ running` / `not running` (`co_cli/commands/status_report.py`, `co_cli/bootstrap/banner.py`, `co_cli/commands/status.py`).
+- **`dream.enabled` → `dream.autostart`** — the flag only ever gated REPL auto-spawn on launch; it never enabled/disabled the daemon (`/dream start` and the per-`CO_HOME` shared daemon run regardless). Renamed for honesty, including env var `CO_DREAM_ENABLED` → `CO_DREAM_AUTOSTART` (`co_cli/config/dream.py`, `co_cli/bootstrap/core.py`, `co_cli/commands/dream.py`).
+- **Status decoupled from config** — `DreamStatus` dropped its config field and is now pure runtime; `dream_status()` / `build_dream_line()` no longer take `deps`. `/status` config no longer leaks into the daemon-state wording.
+- **Spec corrections** — `docs/specs/config.md` had claimed the flag also gated "KICK dispatch"; it does not (KICK is gated by `memory.review_enabled` / `skills.review_enabled`, per the queue-decoupling invariant). Fixed alongside the rename in `config.md` and `dream.md`.
+
 ## [0.8.463]
 
 Recover gracefully when a reasoning turn spends its whole output budget on thinking and produces no answer.

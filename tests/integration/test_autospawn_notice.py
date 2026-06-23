@@ -1,6 +1,6 @@
 """Integration test: maybe_autospawn_dream emits first-spawn notice and creates PID file.
 
-Verifies that when dream.enabled=True and no daemon is running, maybe_autospawn_dream:
+Verifies that when dream.autostart=True and no daemon is running, maybe_autospawn_dream:
   1. Calls frontend.on_status with the first-spawn notice text.
   2. Forks a real daemon process (PID file appears within timeout).
 
@@ -86,7 +86,7 @@ def _is_pid_live(pid: int) -> bool:
 
 
 def test_autospawn_emits_notice_and_creates_pid_file() -> None:
-    """maybe_autospawn_dream with dream.enabled=True emits first-spawn notice and PID file."""
+    """maybe_autospawn_dream with dream.autostart=True emits first-spawn notice and PID file."""
     co_home = _short_co_home()
     os.environ["CO_HOME"] = str(co_home)
     # Ensure autospawn opt-out is not set
@@ -103,7 +103,7 @@ def test_autospawn_emits_notice_and_creates_pid_file() -> None:
     from co_cli.tools.shell_backend import ShellBackend
 
     config = SETTINGS_NO_MCP.model_copy(
-        update={"dream": SETTINGS_NO_MCP.dream.model_copy(update={"enabled": True})}
+        update={"dream": SETTINGS_NO_MCP.dream.model_copy(update={"autostart": True})}
     )
     deps = CoDeps(shell=ShellBackend(), config=config)
     session_file = co_home / "sessions" / "autospawn-session.jsonl"
@@ -136,7 +136,7 @@ def test_autospawn_emits_notice_and_creates_pid_file() -> None:
 
 
 def test_autospawn_no_op_when_disabled(tmp_path: Path) -> None:
-    """maybe_autospawn_dream with dream.enabled=False emits no notice and no PID file."""
+    """maybe_autospawn_dream with dream.autostart=False emits no notice and no PID file."""
     os.environ["CO_HOME"] = str(tmp_path)
     os.environ.pop("CO_DREAM_NO_AUTOSPAWN", None)
 
@@ -151,7 +151,7 @@ def test_autospawn_no_op_when_disabled(tmp_path: Path) -> None:
     from co_cli.tools.shell_backend import ShellBackend
 
     config = SETTINGS_NO_MCP.model_copy(
-        update={"dream": SETTINGS_NO_MCP.dream.model_copy(update={"enabled": False})}
+        update={"dream": SETTINGS_NO_MCP.dream.model_copy(update={"autostart": False})}
     )
     deps = CoDeps(shell=ShellBackend(), config=config)
     session_file = tmp_path / "sessions" / "disabled-session.jsonl"
@@ -161,9 +161,9 @@ def test_autospawn_no_op_when_disabled(tmp_path: Path) -> None:
     frontend = _CaptureFrontend()
     maybe_autospawn_dream(deps, frontend)
 
-    assert frontend.statuses == [], "No notice expected when dream.enabled=False"
+    assert frontend.statuses == [], "No notice expected when dream.autostart=False"
     pid_file = core_mod.DREAM_PID_FILE
-    assert not pid_file.exists(), "No PID file expected when dream.enabled=False"
+    assert not pid_file.exists(), "No PID file expected when dream.autostart=False"
 
 
 def test_autospawn_no_op_when_opt_out_env_set(tmp_path: Path) -> None:
@@ -182,7 +182,7 @@ def test_autospawn_no_op_when_opt_out_env_set(tmp_path: Path) -> None:
     from co_cli.tools.shell_backend import ShellBackend
 
     config = SETTINGS_NO_MCP.model_copy(
-        update={"dream": SETTINGS_NO_MCP.dream.model_copy(update={"enabled": True})}
+        update={"dream": SETTINGS_NO_MCP.dream.model_copy(update={"autostart": True})}
     )
     deps = CoDeps(shell=ShellBackend(), config=config)
     session_file = tmp_path / "sessions" / "optout-session.jsonl"

@@ -120,12 +120,9 @@ def _dream_rows(ctx: CommandContext) -> list[tuple[str, str]]:
     def _rows() -> list[tuple[str, str]]:
         from co_cli.commands.status_report import dream_status
 
-        state = dream_status(ctx.deps)
-        if not state.enabled:
-            return [("state", "disabled")]
-        state_label = "running" if state.running else "enabled but not running"
+        state = dream_status()
         return [
-            ("state", state_label),
+            ("state", "running" if state.running else "not running"),
             ("queue depth", str(state.queue_depth)),
             ("last housekeeping", state.last_housekeeping_at or "never"),
         ]

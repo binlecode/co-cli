@@ -495,7 +495,7 @@ async def create_deps(
 def maybe_autospawn_dream(deps: CoDeps, frontend: TerminalFrontend) -> None:
     """Spawn the dream daemon in the background if not already running.
 
-    No-op when dream.enabled is False or CO_DREAM_NO_AUTOSPAWN is set.
+    No-op when dream.autostart is False or CO_DREAM_NO_AUTOSPAWN is set.
     Uses an advisory flock to prevent concurrent REPLs from double-spawning.
     Emits a one-shot notice to frontend on first spawn.
     """
@@ -509,7 +509,7 @@ def maybe_autospawn_dream(deps: CoDeps, frontend: TerminalFrontend) -> None:
         spawn_detached,
     )
 
-    if not deps.config.dream.enabled:
+    if not deps.config.dream.autostart:
         return
     if os.environ.get("CO_DREAM_NO_AUTOSPAWN"):
         return

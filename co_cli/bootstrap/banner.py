@@ -27,17 +27,12 @@ _ASCII_ART = {
 }
 
 
-def build_dream_line(deps: "CoDeps") -> str:
+def build_dream_line() -> str:
     """Build the Dream: status line for the welcome banner."""
-    state = dream_status(deps)
-    if not state.enabled:
-        return "    Dream: [dim]disabled[/dim]"
+    state = dream_status()
     if state.running:
         return f"    Dream: [accent]✓ running[/accent]  queue: {state.queue_depth}"
-    return (
-        f"    Dream: [yellow]enabled but daemon not running[/yellow]  "
-        f"queue: {state.queue_depth} (on disk)"
-    )
+    return f"    Dream: [dim]not running[/dim]  queue: {state.queue_depth} (on disk)"
 
 
 def build_memory_line(
@@ -108,7 +103,7 @@ def display_welcome_banner(
         session_count=session_count,
     )
 
-    dream_line = build_dream_line(deps)
+    dream_line = build_dream_line()
 
     lines = [
         f"\n[accent]{art}[/accent]\n",

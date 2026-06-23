@@ -84,16 +84,16 @@ def _wait_for_path(path: Path, *, timeout: float = 10.0, interval: float = 0.1) 
     return False
 
 
-def _ctx(enabled: bool = True) -> SimpleNamespace:
+def _ctx(autostart: bool = True) -> SimpleNamespace:
     return SimpleNamespace(
-        deps=SimpleNamespace(config=SimpleNamespace(dream=SimpleNamespace(enabled=enabled)))
+        deps=SimpleNamespace(config=SimpleNamespace(dream=SimpleNamespace(autostart=autostart)))
     )
 
 
-def _run_slash(args: str, enabled: bool = True) -> str:
+def _run_slash(args: str, autostart: bool = True) -> str:
     """Invoke the slash handler and return its captured console output."""
     with console.capture() as cap:
-        asyncio.run(handle_dream_slash(_ctx(enabled), args))
+        asyncio.run(handle_dream_slash(_ctx(autostart), args))
     return cap.get()
 
 
@@ -214,5 +214,5 @@ def test_slash_unknown_subcommand_emits_usage(tmp_path: Path) -> None:
 def test_slash_bare_shows_status_when_down(tmp_path: Path) -> None:
     """Bare `/dream` produces the status block (daemon down here)."""
     _setup_co_home(tmp_path)
-    out = _run_slash("", enabled=True)
+    out = _run_slash("", autostart=True)
     assert "not running" in out.lower()

@@ -28,13 +28,13 @@ from co_cli.tools.shell_backend import ShellBackend
 _SESSION_ID = "abcd1234"
 
 
-def _make_deps(tmp_path: Path, *, dream_enabled: bool = False) -> CoDeps:
+def _make_deps(tmp_path: Path, *, dream_autostart: bool = False) -> CoDeps:
     session_name = session_filename(datetime(2026, 6, 14, 12, 0, 0, tzinfo=UTC), _SESSION_ID)
     session_path = tmp_path / "sessions" / session_name
     config = SETTINGS
-    if dream_enabled:
+    if dream_autostart:
         config = SETTINGS.model_copy(
-            update={"dream": SETTINGS.dream.model_copy(update={"enabled": True})}
+            update={"dream": SETTINGS.dream.model_copy(update={"autostart": True})}
         )
     return CoDeps(
         shell=ShellBackend(),
@@ -83,6 +83,7 @@ def _snapshot(root: Path) -> set[Path]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("co_home")
 async def test_report_shows_all_sections_with_live_values(tmp_path: Path) -> None:
     """/status prints session id, model, context %, dream state, and in-flight counts."""
     deps = _make_deps(tmp_path)
@@ -107,14 +108,15 @@ async def test_report_shows_all_sections_with_live_values(tmp_path: Path) -> Non
     # Context % rendered from the live estimate (5,000 / model_max_context_tokens).
     assert "%" in text
     assert "5,000" in text
-    # Dream state present (disabled by default config).
-    assert "disabled" in text
+    # Dream state present; no daemon in this isolated CO_HOME -> not running.
+    assert "not running" in text
     # In-flight counts: 1 running background task, 1 approval, 1 queued input.
     assert "1 running" in text
     assert "active (1 background)" in text
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("co_home")
 async def test_reflects_state_between_invocations(tmp_path: Path) -> None:
     """Mutating the context estimate and queue depth changes the rendered report."""
     deps = _make_deps(tmp_path)
@@ -141,7 +143,7 @@ async def test_reflects_state_between_invocations(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_read_only_creates_no_files(co_home: Path, tmp_path: Path) -> None:
     """Invoking /status writes nothing under CO_HOME (read-only contract)."""
-    deps = _make_deps(tmp_path, dream_enabled=True)
+    deps = _make_deps(tmp_path, dream_autostart=True)
     ctx = _make_ctx(deps, deque())
 
     before = _snapshot(co_home)
@@ -157,7 +159,7 @@ async def test_read_only_creates_no_files(co_home: Path, tmp_path: Path) -> None
 @pytest.mark.usefixtures("co_home")
 async def test_degrades_when_sources_absent(tmp_path: Path) -> None:
     """With dream state and usage ledger absent, /status still prints with placeholders."""
-    deps = _make_deps(tmp_path, dream_enabled=True)
+    deps = _make_deps(tmp_path, dream_autostart=True)
     ctx = _make_ctx(deps, deque())
 
     with console.capture() as cap:
@@ -165,9 +167,34 @@ async def test_degrades_when_sources_absent(tmp_path: Path) -> None:
     text = cap.get()
 
     assert isinstance(outcome, LocalOnly)
-    # Dream is enabled but no daemon/state exists -> not-running + never-housekept.
-    assert "enabled but not running" in text
+    # Status is runtime-only: no daemon -> "not running" regardless of autostart;
+    # never-housekept since no state file exists.
+    assert "not running" in text
     assert "never" in text
     # Usage ledger absent -> session tokens degrade to zero, not a crash.
     assert "session tokens" in text
     assert "0  (0 in / 0 out)" in text
+
+
+@pytest.mark.asyncio
+async def test_reports_running_daemon_regardless_of_autostart(
+    co_home: Path, tmp_path: Path
+) -> None:
+    """A daemon started by any session (or /dream start) runs while dream.autostart=False;
+    /status reflects the live pidfile and reports it running, matching what /dream shows."""
+    import co_cli.daemons.dream.process as process_mod
+    from co_cli.daemons.dream._process import write_pid
+
+    deps = _make_deps(tmp_path)
+    assert deps.config.dream.autostart is False
+    write_pid(process_mod.DREAM_PID_FILE, os.getpid(), "slash", "")
+    ctx = _make_ctx(deps, deque())
+
+    with console.capture() as cap:
+        outcome = await dispatch("/status", ctx)
+    text = cap.get()
+
+    assert isinstance(outcome, LocalOnly)
+    # The live daemon -> dream state row reads "running", never the "not running" branch.
+    assert "running" in text
+    assert "not running" not in text

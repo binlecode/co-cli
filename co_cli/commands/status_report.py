@@ -67,34 +67,31 @@ def context_pct(deps: "CoDeps") -> float | None:
 
 @dataclass(frozen=True)
 class DreamStatus:
-    """Interpreted dream-daemon state — the single source for the three-branch
-    reading (disabled / running / enabled-but-not-running) shared by the banner
-    and /status. Surfaces format their own wording from these fields.
+    """Live dream-daemon runtime state — the single source shared by the banner and
+    /status. Reflects the actual daemon (running or not) so neither surface can
+    disagree with /dream. ``dream.autostart`` is config (whether the REPL spawns one
+    on launch), not runtime, and is deliberately absent here.
     """
 
-    enabled: bool
     running: bool
     queue_depth: int
     last_housekeeping_at: str | None
 
 
-def dream_status(deps: "CoDeps") -> DreamStatus:
-    """Probe the dream daemon once: enabled / running / queue depth / last pass.
+def dream_status() -> DreamStatus:
+    """Probe the dream daemon once: running / queue depth / last pass.
 
     The one place the daemon's filesystem status is interpreted, so the banner and
-    /status can't disagree on whether it is running. When disabled, returns without
-    touching the daemon filesystem (mirrors the banner's prior early-return).
+    /status can't disagree with the actual daemon (or with /dream). Reads the live
+    pidfile — the daemon is shared per CO_HOME, so one started by any session (or via
+    ``/dream start``) shows as running regardless of this session's ``dream.autostart``.
     """
-    if not deps.config.dream.enabled:
-        return DreamStatus(enabled=False, running=False, queue_depth=0, last_housekeeping_at=None)
-
     from co_cli.config.core import DREAM_DAEMON_DIR, USER_DIR
     from co_cli.daemons.dream.process import status_daemon
     from co_cli.daemons.dream.state import load_housekeeping_state
 
     status = status_daemon(USER_DIR)
     return DreamStatus(
-        enabled=True,
         running=bool(status.get("running")),
         queue_depth=status.get("queue_depth", 0),
         last_housekeeping_at=load_housekeeping_state(DREAM_DAEMON_DIR).last_housekeeping_at,

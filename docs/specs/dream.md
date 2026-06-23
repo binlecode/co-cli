@@ -276,7 +276,7 @@ Lazy migration: sidecars without `recall_days` default to `[]` on `setdefault` r
 `maybe_autospawn_dream(deps, frontend)` in `co_cli/bootstrap/core.py`:
 
 ```text
-if dream.enabled is False: return
+if dream.autostart is False: return
 if CO_DREAM_NO_AUTOSPAWN is set: return
 acquire advisory flock on DREAM_LOCK (POSIX-only)
 if pid_live(read_pid(DREAM_PID_FILE)): return   # already running
@@ -287,7 +287,7 @@ if first spawn for this CO_HOME:
 
 The `--origin` and `--session-id` are persisted to `dream.pid` so `co dream status` can report provenance. Concurrent REPL bootstraps serialize via `fcntl.flock` — exactly one daemon spawns.
 
-Current default: `dream.enabled = false`. Opt-in via `CO_DREAM_ENABLED=true` or settings file.
+Current default: `dream.autostart = false`. Opt-in via `CO_DREAM_AUTOSTART=true` or settings file. This flag gates only REPL auto-spawn — it does not enable or disable the daemon, which is shared per CO_HOME and can be started manually with `/dream start` regardless.
 
 ---
 
@@ -517,8 +517,8 @@ Auto-spawn and daemon existence are visible across four surfaces (mission §"Tru
 | Surface | Description |
 |---|---|
 | **First-spawn notice** | On first auto-spawn of a `CO_HOME`, REPL prints: `[dream] daemon started in background. 'co dream status' to inspect; 'co dream stop' to stop.` |
-| **Welcome banner** | `Dream:` row alongside `Memory:` / `Tools:` / `Dir:`. Three states: `✓ running  queue: N` (accent), `disabled` (dim), `enabled but daemon not running  queue: N (on disk)` (yellow). Built from local PID-file + queue-directory reads — instantaneous, never stalls startup. |
-| **`/dream` slash** | In-REPL daemon control. Bare `/dream` (or `/dream status`) is read-only inspection — calls `status_daemon` (file-based; no daemon round-trip), and when the daemon is down prints state + on-disk queue depth + the `/dream start` hint. Subcommands `start | stop | tidy` route to the same detached `process.py` control surface as the shell CLI: `start` is a manual override that works regardless of `dream.enabled`; `stop` requires the explicit `force` token (`/dream stop force`) because the daemon is shared across every attached session; `tidy` requests a one-shot housekeeping pass. The daemon's lifetime stays independent of the REPL. |
+| **Welcome banner** | `Dream:` row alongside `Memory:` / `Tools:` / `Dir:`. Reflects live runtime state only (the daemon is shared per CO_HOME; `dream.autostart` is config, not shown here), so the row can't disagree with `/dream`: `✓ running  queue: N` (accent) or `not running  queue: N (on disk)` (dim). Built from local PID-file + queue-directory reads — instantaneous, never stalls startup. |
+| **`/dream` slash** | In-REPL daemon control. Bare `/dream` (or `/dream status`) is read-only inspection — calls `status_daemon` (file-based; no daemon round-trip), and when the daemon is down prints state + on-disk queue depth + the `/dream start` hint. Subcommands `start | stop | tidy` route to the same detached `process.py` control surface as the shell CLI: `start` works regardless of `dream.autostart` (which gates only REPL auto-spawn on launch); `stop` requires the explicit `force` token (`/dream stop force`) because the daemon is shared across every attached session; `tidy` requests a one-shot housekeeping pass. The daemon's lifetime stays independent of the REPL. |
 | **`co dream status`** | Full JSON: `running`, `pid`, `uptime_seconds`, `queue_depth`, `failed_count`, `spawn_origin`, `spawn_session_id`. Authoritative source of truth — read directly from PID file + queue directory. |
 
 CLI subcommands:
@@ -540,7 +540,7 @@ The daemon wires the same observability stack as the main app via `setup_observa
 
 | Setting | Env Var | Default | Description |
 |---|---|---|---|
-| `dream.enabled` | `CO_DREAM_ENABLED` | `false` | Master switch; REPL auto-spawn only fires when true |
+| `dream.autostart` | `CO_DREAM_AUTOSTART` | `false` | REPL auto-spawn on launch fires only when true; not a master switch (the daemon can run manually via `/dream start` regardless) |
 | `dream.review_timeout_seconds` | `CO_DREAM_REVIEW_TIMEOUT_SECONDS` | `120` | Per-review LLM call timeout; `asyncio.timeout` in worker loop |
 | `dream.retry_backoff_seconds` | `CO_DREAM_RETRY_BACKOFF_SECONDS` | `30` | Sleep between retry attempts on timeout or error |
 | `dream.max_retry_attempts` | `CO_DREAM_MAX_RETRY_ATTEMPTS` | `3` | After this many failures, move queue file to `failed/` |
@@ -607,7 +607,7 @@ Internal caps (housekeeping — apply to both domains):
 | `write_review_kick(*, domain, session_id, persisted_message_count, transcript_override=None)` | `co_cli/dream_queue.py` | Shared KICK producer (REPL + compaction); atomic write to the queue; omits `transcript_override` from the payload when None |
 | `write_dream_snapshot(session_id, messages) -> Path` | `co_cli/dream_queue.py` | Writes pre-compaction messages as a JSONL snapshot under `DREAM_SNAPSHOTS_DIR`; returns the path the caller passes as `transcript_override` |
 | `maybe_autospawn_dream(deps, frontend)` | `co_cli/bootstrap/core.py` | REPL auto-spawn hook |
-| `build_dream_line(deps) -> str` | `co_cli/bootstrap/banner.py` | Banner `Dream:` line builder |
+| `build_dream_line() -> str` | `co_cli/bootstrap/banner.py` | Banner `Dream:` line builder |
 | `handle_dream_slash(ctx, args)` | `co_cli/commands/dream.py` | `/dream` slash handler |
 
 ### Recall metrics

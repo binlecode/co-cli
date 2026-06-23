@@ -24,8 +24,8 @@ async def handle_dream_slash(ctx: CommandContext, args: str) -> None:
     """Handle the /dream slash command — status (default) plus start | stop | tidy.
 
     Routes to the existing detached ``process.py`` control surface; the daemon's
-    lifetime stays independent of the REPL. ``start`` is a manual override that
-    works regardless of ``dream.enabled`` (which gates only auto-spawn).
+    lifetime stays independent of the REPL. ``start`` works regardless of
+    ``dream.autostart`` (which gates only REPL auto-spawn on launch).
     """
     from co_cli.daemons.dream.process import status_daemon
     from co_cli.display.core import console
@@ -88,15 +88,15 @@ def _print_dream_status(ctx: CommandContext, status: dict) -> None:
             console.print(f"  [dim]{key}:[/dim] {value}")
         return
 
-    if ctx.deps.config.dream.enabled:
-        queue_depth = status.get("queue_depth", 0)
-        console.print("[info]Dream daemon:[/info]  [yellow]not running[/yellow]")
-        console.print(f"  [dim]queue (on disk):[/dim] {queue_depth}")
+    queue_depth = status.get("queue_depth", 0)
+    console.print("[info]Dream daemon:[/info]  [yellow]not running[/yellow]")
+    console.print(f"  [dim]queue (on disk):[/dim] {queue_depth}")
+    if ctx.deps.config.dream.autostart:
         console.print("  [dim]hint:[/dim] `/dream start` to start manually")
     else:
-        console.print("[info]Dream daemon:[/info]  [dim]disabled[/dim]")
         console.print(
-            "  [dim]hint:[/dim] `/dream start` to start manually (or set dream.enabled=true)"
+            "  [dim]hint:[/dim] `/dream start` to start now "
+            "(or set dream.autostart=true to spawn on REPL launch)"
         )
 
 

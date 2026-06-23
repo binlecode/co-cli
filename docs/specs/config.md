@@ -260,7 +260,7 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 
 | Setting | Env Var | Default | Description |
 |---------|---------|---------|-------------|
-| `dream.enabled` | `CO_DREAM_ENABLED` | `false` | Enable dream daemon auto-spawn and KICK dispatch |
+| `dream.autostart` | `CO_DREAM_AUTOSTART` | `false` | Auto-spawn the dream daemon on REPL launch (the daemon is shared per CO_HOME and can also be started manually via `/dream start`) |
 | `dream.review_timeout_seconds` | `CO_DREAM_REVIEW_TIMEOUT_SECONDS` | `120` | Per-review LLM call timeout; on expiry the worker retries with backoff |
 | `dream.retry_backoff_seconds` | `CO_DREAM_RETRY_BACKOFF_SECONDS` | `30` | Sleep between retry attempts after a timeout |
 | `dream.max_retry_attempts` | `CO_DREAM_MAX_RETRY_ATTEMPTS` | `3` | After this many timeouts, move the KICK file to `queue/failed/` |
