@@ -81,7 +81,6 @@ MEMORY_REVIEW_SPEC = TaskAgentSpec(
     ),
     output_type=SessionReviewOutput,
     default_budget=REVIEW_MAX_ITERATIONS,
-    error_message="",
     include_skill_manifest=False,
 )
 
@@ -97,7 +96,6 @@ SKILL_REVIEW_SPEC = TaskAgentSpec(
     ),
     output_type=SessionReviewOutput,
     default_budget=REVIEW_MAX_ITERATIONS,
-    error_message="",
     include_skill_manifest=True,
 )
 

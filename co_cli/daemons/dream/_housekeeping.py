@@ -566,7 +566,6 @@ def _profile_synthesis_spec() -> TaskAgentSpec:
         tool_names=("user_profile_view", "user_profile_write", "memory_search"),
         output_type=SessionReviewOutput,
         default_budget=REVIEW_MAX_ITERATIONS,
-        error_message="",
         include_skill_manifest=False,
     )
 

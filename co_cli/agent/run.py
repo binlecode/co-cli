@@ -1,16 +1,14 @@
 """Task-agent runner — standalone daemon execution.
 
 run_standalone: takes already-forked deps, opens own span, never depth-checks,
-does not merge usage, lets exceptions propagate plain. Does not consult
-spec.error_message — daemons propagate plain exceptions.
+does not merge usage, lets exceptions propagate plain.
 """
 
 from __future__ import annotations
 
-from copy import copy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from pydantic_ai.usage import RunUsage, UsageLimits
+from pydantic_ai.usage import UsageLimits
 
 if TYPE_CHECKING:
     from co_cli.agent.spec import TaskAgentSpec
@@ -21,25 +19,23 @@ async def run_standalone(
     spec: TaskAgentSpec,
     deps: CoDeps,
     prompt: str,
-    budget: int | None = None,
-    model_settings: Any = None,
-) -> tuple[Any, RunUsage, str]:
+) -> None:
     """Run a task agent as a daemon — caller-forked deps, own span, no merge, plain exceptions.
 
     No depth check (daemons are top-level). No usage merge (no parent turn).
-    Does not consult spec.error_message — exceptions propagate plain to the
-    caller's daemon-specific error handling (timeout, report write-on-fail).
+    Exceptions propagate plain to the caller's daemon-specific error handling
+    (timeout, report write-on-fail).
+
+    Request limit is spec.default_budget; model settings are
+    deps.model.settings_noreason — standalone runs are background daemon
+    derivations (synthesis, review), which never reason at the model level
+    (reasoning techniques live wholly in the prompt); thinking-off also lifts
+    the output cap.
 
     Args:
         spec: The task agent spec.
         deps: Already-forked deps (caller did fork_deps_for_reviewer).
         prompt: User prompt.
-        budget: Request limit override (defaults to spec.default_budget).
-        model_settings: Optional override. Defaults to deps.model.settings_noreason —
-            standalone runs are background daemon derivations (synthesis, review), which
-            never reason at the model level (reasoning techniques live wholly in the
-            prompt); thinking-off also lifts the output cap. Pass an override to force
-            reasoning settings.
     """
     from co_cli.agent.build import build_task_agent
     from co_cli.observability.tracing import pop_span, push_span
@@ -47,8 +43,8 @@ async def run_standalone(
 
     if deps.model is None:
         raise ValueError(f"{spec.name}: run_standalone requires deps.model to be set.")
-    request_limit = budget if budget else spec.default_budget
-    settings = model_settings if model_settings is not None else deps.model.settings_noreason
+    request_limit = spec.default_budget
+    settings = deps.model.settings_noreason
     agent = build_task_agent(spec, deps, deps.model.model)
 
     agent_name = getattr(agent, "name", None) or "<unknown>"
@@ -86,4 +82,3 @@ async def run_standalone(
             "co.agent.final_result": str(result.output),
         },
     )
-    return result.output, copy(usage), result.run_id

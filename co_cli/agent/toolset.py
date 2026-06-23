@@ -1,7 +1,7 @@
 """Native toolset construction, the per-turn tool-visibility filter, and the call-seam call_tool wrapper."""
 
 import json
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic_ai import RunContext
@@ -94,7 +94,9 @@ def _tool_visibility_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -
     return entry is None or entry.visibility == VisibilityPolicyEnum.ALWAYS
 
 
-def _make_prepare(fn: Callable[[CoDeps], bool]):
+def _make_prepare(
+    fn: Callable[[CoDeps], bool],
+) -> Callable[[RunContext[CoDeps], ToolDefinition], Awaitable[ToolDefinition | None]]:
     """Return a per-turn prepare callback that hides a tool when fn(deps) is False."""
 
     async def prepare(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> ToolDefinition | None:

@@ -41,7 +41,6 @@ _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
 # the live turn fragile to local-GPU throttling under suite load. Prefilling
 # only the user prompt + image keeps the turn fast and the assertion sharp.
 _MINIMAL_SPEC = OrchestratorSpec(
-    name="orchestrator-multimodal-test",
     static_instruction_builders=(),
     per_turn_instructions=(),
     history_processors=(),

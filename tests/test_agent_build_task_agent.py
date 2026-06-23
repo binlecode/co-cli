@@ -31,7 +31,6 @@ def test_unknown_tool_name_raises() -> None:
         tool_names=("nonexistent_tool",),
         output_type=_Output,
         default_budget=1,
-        error_message="",
     )
     with pytest.raises(ValueError, match="test_agent: unknown tool 'nonexistent_tool'"):
         build_task_agent(spec, _deps(SETTINGS_NO_MCP), model=None)

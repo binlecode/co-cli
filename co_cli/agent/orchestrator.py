@@ -77,7 +77,6 @@ def _personality_critique_provider(deps: CoDeps) -> str | None:
 
 
 ORCHESTRATOR_SPEC = OrchestratorSpec(
-    name="orchestrator",
     static_instruction_builders=(
         _base_instructions_provider,
         _model_profile_overlay_provider,

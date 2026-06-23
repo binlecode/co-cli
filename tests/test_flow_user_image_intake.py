@@ -53,7 +53,6 @@ _LLM_MODEL = build_model(_CONFIG_NO_MCP.llm)
 # prefill (~16k tokens), making the live turn fragile to local-GPU throttling
 # under suite load. Prefilling only the user prompt + image keeps it fast.
 _MINIMAL_SPEC = OrchestratorSpec(
-    name="orchestrator-image-intake-test",
     static_instruction_builders=(),
     per_turn_instructions=(),
     history_processors=(),
