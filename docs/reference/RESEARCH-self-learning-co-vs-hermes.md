@@ -24,7 +24,7 @@ PROFILE  →  (per-session write-back via the          →   synthesize_user_pro
 DOCTRINE →                — none (author-curated, never learned) —
 ```
 
-Both review specs are *separate* forked agents (not one combined reviewer). **co now has two transcript readers, not one:** the per-session memory/skill reviewers (one transcript per KICK) and the cross-session profile synthesizer (a *window* of recent transcripts in one pass). All three forked agents and both halves run inside the one daemon process. The profile synthesizer is the structural answer to what was Gap C (now §5.1's closed Layer 1) — a *local* cross-session reconciler, no external backend.
+Both review specs are *separate* forked agents (not one combined reviewer). **co has two transcript readers:** the per-session memory/skill reviewers (one transcript per KICK) and the cross-session profile synthesizer (a *window* of recent transcripts in one pass). All three forked agents and both halves run inside the one daemon process. The profile synthesizer is a *local* cross-session reconciler — no external backend (§2.6, §5.1).
 
 ---
 
@@ -34,7 +34,7 @@ Both review specs are *separate* forked agents (not one combined reviewer). **co
 
 - Package: `co_cli/daemons/dream/` (`__init__.py` is docstring-only per repo rules).
 - Process lifecycle: `process.py` (public CLI surface: `co dream start/stop/status`) + `_process.py` (internal); main loop in `_loop.py`.
-- Trigger model: **filesystem queue + polling**, not the old per-turn in-process `asyncio.Task`. The REPL writes KICK JSON files; the detached daemon polls `queue/` every `tick_interval_seconds` (default 5s) and consumes FIFO.
+- Trigger model: **filesystem queue + polling**. The REPL writes KICK JSON files; the detached daemon polls `queue/` every `tick_interval_seconds` (default 5s) and consumes FIFO.
 - Auto-spawn: `maybe_autospawn_dream(deps, frontend)` at REPL startup (`co_cli/main.py`), guarded by `bootstrap/core.py` advisory flock; spawns a detached `co dream start --foreground` subprocess when `dream.enabled` and `CO_DREAM_NO_AUTOSPAWN` is unset.
 
 This matches the durable-queue invariants in memory: producer never gated on consumer liveness (`feedback_queue_decoupling_invariant`), queue is the sole cross-process bridge with no side-channel wake-ups (`feedback_queue_sole_bridge`).
@@ -76,7 +76,7 @@ Notes on the dispatch surface:
 
 1. **merge_memory** + **merge_skills** — both run *inside one* `asyncio.timeout(cfg.max_pass_seconds)` block (default 600s). On timeout, partial counters persist and the rest of the pass still runs.
    - *merge_memory* — union-find cluster same-kind, non-`decay_protected`, non-article items by token-Jaccard ≥ `memory.consolidation_similarity_threshold`; LLM-consolidate (`prompts/memory_merge.md`); archive originals. Canonical anchor = highest `recall_count`, recency tiebreak. Caps: `_MAX_CLUSTER_SIZE=5`, `_MAX_MERGES_PER_CYCLE=10`, `_MERGED_BODY_MIN_CHARS=20`. Articles excluded (LLM-merging fetched RAG substrate breaks source integrity).
-   - *merge_skills* — cluster similar **non-pinned user** skills (bundled skills never considered) by `skills.consolidation_similarity_threshold`, LLM-consolidate into a class-level umbrella (`prompts/skill_merge.md`), archive non-anchor originals (to `.archive/`), then `refresh_skills(deps)`. Canonical anchor = highest `(distinct recall days, use_count)`. **This absorbs the former skill curator's consolidation.**
+   - *merge_skills* — cluster similar **non-pinned user** skills (bundled skills never considered) by `skills.consolidation_similarity_threshold`, LLM-consolidate into a class-level umbrella (`prompts/skill_merge.md`), archive non-anchor originals (to `.archive/`), then `refresh_skills(deps)`. Canonical anchor = highest `(distinct recall days, use_count)`. **Consolidation lives here, not in a separate skill-curator state machine** (cf. §3, §4).
 2. **synthesize_user_profile** — the cross-session profile reconciler, in its own `asyncio.timeout(_PROFILE_SYNTHESIS_MAX_SECONDS=180)` block (between skill merge and skill decay), wrapped in a broad `except` so a failure is best-effort and never aborts the pass. Off by default. Detailed in §2.6.
 3. **decay_skills** — archive aged user skills past `decay_after_days` with no recall inside `recall_protection_days` (cap `_MAX_DECAY_PER_CYCLE=20`). Synchronous, outside the merge timeout so a slow merge can't starve it.
 4. **memory_count_over_cap warn** — a warn-only tripwire: if active item count > `MEMORY_ITEM_COUNT_WARN` (10 000, ~500× current real usage) it logs + emits a `co.housekeeping.memory_count_warn` span event and **archives nothing**. Signals a write loop / runaway agent / fixture pollution, not normal growth.
@@ -87,7 +87,7 @@ Notes on the dispatch surface:
 
 State: `HousekeepingState` (in `state.py`) at `$CO_HOME/daemons/dream/_dream_state.json`: `last_housekeeping_at`, cumulative `stats` (`memory_merged`, `skill_merged`, `skill_decayed`, `profile_synthesized`), and `last_synthesized_session` (a `SessionMarker`, see §2.6). Schedule (`scheduled_tick_due`, `_loop.py:58`): at least `run_interval_hours` since last run, clamped to the next `run_start_at` time-of-day; never-run state returns due so a fresh daemon gets a baseline pass. Manual trigger: a `DREAM_TIDY_TAG` sentinel file (`co dream tidy`) jumps the queue ahead of the scheduled check (`_loop.py:82`).
 
-### 2.5 Config (current)
+### 2.5 Config
 
 `co_cli/config/dream.py` — all daemon timing/lifecycle:
 
@@ -128,9 +128,9 @@ State: `HousekeepingState` (in `state.py`) at `$CO_HOME/daemons/dream/_dream_sta
 
 The whole loop ships **off by default** at three independent gates: `dream.enabled=False` (no daemon), `review_enabled=False` (no per-session review), and `profile_synthesis_enabled=False` (no cross-session synthesis even when the daemon and profile are on).
 
-### 2.6 Cross-session profile synthesis (`synthesize_user_profile`) — the Gap-C closure
+### 2.6 Cross-session profile synthesis (`synthesize_user_profile`)
 
-This is the load-bearing addition since the last refresh: the long-planned "embedded periodic re-derive the profile from recent transcripts" pass, **built**. It is co's *local* cross-session user-modeling pass — the second transcript reader, layered over the per-session memory reviewer.
+co's *local* cross-session user-modeling pass — the second transcript reader, layered over the per-session memory reviewer. It re-derives the profile from a window of recent transcripts at once.
 
 **Design — what it is.** A forked agent (`_profile_synthesis_spec()`, tools `user_profile_view` / `user_profile_write` / `memory_search`) that reads *several* recent session transcripts at once plus the current `USER.md` and rewrites the whole profile. Where the per-session reviewer writes USER.md one transcript at a time (and so can only react to the session in front of it), the synthesizer is the reconciler that catches what no single session can — durable patterns, contradictions, and facts gone stale. It is gated off by default and is a no-op when `user_profile_enabled=False`. It deliberately does **not** graft the soul curation lens (different layer; `_profile_synthesis_instructions` is the bare prompt).
 
@@ -142,7 +142,7 @@ This is the load-bearing addition since the last refresh: the long-planned "embe
 
 **Marker advance — success-gated, 50% overlap.** On a *successful write only*, the marker advances forward by `lookback // 2` (settling the oldest half of the window; the newer half stays un-settled and reappears next window), and `stats.profile_synthesized` increments. Window `N` with step `N/2` overlaps consecutive runs 50%, so **every session lands in ≥2 windows** and none is processed in isolation. A timed-out / errored / cancelled run leaves the marker untouched, so the same sessions are re-counted and retried next tick (`_PROFILE_SYNTHESIS_MAX_SECONDS=180`, wrapped in best-effort `except`).
 
-**The reasoning model (the prompt is where the Honcho-derived technique lives).** `prompts/profile_synthesis.md` encodes four reasoning moves co lifted from Honcho's dialectic design (memory: borrow the *reasoning*, reject the backend):
+**The reasoning model (the prompt is where the Honcho-derived technique lives).** `prompts/profile_synthesis.md` encodes four reasoning moves drawn from Honcho's dialectic design (borrow the *reasoning*, not the backend):
 1. **Prior + evidence (Bayesian framing).** Treat the current profile as the *prior*, transcripts as *evidence that refines it* — not a fresh start that replaces it. Keep durable facts unless contradicted.
 2. **Value-change vs. genuine contradiction.** A changed attribute value ("uses pytest" → "custom runner") *replaces* the old value; two statements that *cannot both be true* are resolved by trusting the more recent, consistent evidence and dropping the loser.
 3. **Two-session pattern bar.** A working-style trait is promoted only when **≥2 sessions** show it; a single-session behavior is provisional and left out. Recurrence is what separates a pattern from a one-off.
@@ -150,7 +150,7 @@ This is the load-bearing addition since the last refresh: the long-planned "embe
 
 Output is a wholesale rewrite under the char budget (consolidate, never blind-truncate), returning a `SessionReviewOutput` whose `summary` describes what was reconciled.
 
-> **Why this matters for the parity story:** hermes-core has **no** cross-session synthesis — its memory reviewer writes USER.md one transcript at a time, and the only cross-session user model it offers is the external **Honcho** backend (§5.1). co now does the cross-session reconciliation *locally, inspectably, with no network dependency*. This inverts the old Gap-C framing (§5.1, §4 claim #5).
+> **Why this matters for the parity story:** hermes-core has **no** cross-session synthesis — its memory reviewer writes USER.md one transcript at a time, and the only cross-session user model it offers is the external **Honcho** backend (§5.1). co does the cross-session reconciliation *locally, inspectably, with no network dependency* (§4 claim #5).
 
 ---
 
@@ -164,7 +164,9 @@ The as-built design is:
 
 - **Cross-session reconciliation lives in housekeeping, not review.** The per-session reviewers stay single-transcript; the cross-session view is a *housekeeping* sub-pass (profile synthesis, §2.6). This keeps the per-turn KICK path cheap and pushes the expensive multi-transcript read onto the idle clock.
 
-Settled — do not re-litigate without new evidence. With profile synthesis shipped (§2.6), the cross-session *profile* gap is closed locally; the one remaining open analysis item is the cross-session *skill*-mining gap (Gap D, §5.2): the design reorganized around it (and proved the cross-session-window pattern works, via profile synthesis) but did not extend it to skills.
+- **Cross-session *profile* reconciliation is done locally** (profile synthesis, §2.6); the one open analysis item is the cross-session *skill*-mining gap (Gap D, §5.2) — the same windowing pattern, not yet extended to skills.
+
+Settled — do not re-litigate without new evidence.
 
 ---
 
@@ -178,12 +180,12 @@ hermes-agent markets itself as "the self-improving AI agent" on five claims:
 | #2 "Improves them during use" | same reviewer, patch-loaded-first | same posture in `skill_review.md` | **PARITY** (mechanism) |
 | #3 "Nudges itself to persist knowledge" | memory-nudge reviewer + skill-nudge reviewer, **separate** | `MEMORY_REVIEW_SPEC` + `SKILL_REVIEW_SPEC`, **separate** | **PARITY in shape** |
 | #4 "Searches its own past conversations" | FTS5 + windowing, no LLM summarization, **3 modes** | lexical/regex over raw JSONL transcripts, no summarization | **PARITY** (§5, closed) |
-| #5 "Builds a deepening model of who you are" | per-session `USER.md` write-back (default **off**) + Honcho dialectic backend (external) | always-injected `~/.co-cli/USER.md` write-back **+ local cross-session synthesis** (§2.6) | **co LEADS on local cross-session modeling**; only the backend *behavioral* model remains hermes-unique (§5.1) |
+| #5 "Builds a deepening model of who you are" | per-session `USER.md` write-back (default **off**) + Honcho dialectic backend (external) | always-injected `~/.co-cli/USER.md` write-back **+ local cross-session synthesis** (§2.6) | **co LEADS on local cross-session modeling** (incl. ≥2-session pattern inference); only query-time dialectic Q&A + a structured representation remain hermes-unique (§5.1) |
 
 Notes:
 
-- **Claim #4.** hermes's `tools/session_search_tool.py` is pure FTS5 + message-window retrieval ("zero LLM cost"). It is now **3 modes** (was 4): discovery (FTS5 + lineage dedup + ±window + first/last-3 bookends), scroll (window around a message id), browse (recent sessions). The former separate "read" mode is folded into discovery's bookends (`session_search_tool.py:8-29`). co's `session_search` is lexical/regex over raw JSONL transcripts (no index). Both return raw windows, neither summarizes — parity on the no-summarization axis. The retrieval *substrate* differs: hermes FTS5-indexes transcripts; co does not index sessions at all.
-- **Claim #5 (inverted since last refresh).** hermes's `_user_profile_enabled` now defaults **False** (`agent/agent_init.py:1141`) and its USER.md is written back **only per-session**, one transcript at a time (`tools/memory_tool.py`, `target="user"`); there is **no** cross-session synthesis pass in hermes-core — cross-session user modeling exists only if you enable the external Honcho backend. co ships USER.md on by default (`user_profile_enabled=True`) *and* a local cross-session reconciler (§2.6, opt-in but in-tree, no network). So co now does *locally* what hermes only does *via an external backend*. The honest residual is that Honcho synthesizes a second-order **behavioral/dialectic** model (peer cards, Q&A); co's synthesis re-derives a first-order **declarative** profile. Different ambition, but co's is local-inspectable-reversible by construction.
+- **Claim #4.** hermes's `tools/session_search_tool.py` is pure FTS5 + message-window retrieval ("zero LLM cost"), **3 modes**: discovery (FTS5 + lineage dedup + ±window + first/last-3 bookends), scroll (window around a message id), browse (recent sessions) — a "read" full-session view is subsumed by discovery's bookends (`session_search_tool.py:8-29`). co's `session_search` is lexical/regex over raw JSONL transcripts (no index). Both return raw windows, neither summarizes — parity on the no-summarization axis. The retrieval *substrate* differs: hermes FTS5-indexes transcripts; co does not index sessions at all.
+- **Claim #5.** hermes's `_user_profile_enabled` defaults **False** (`agent/agent_init.py:1141`) and its USER.md is written back **only per-session**, one transcript at a time (`tools/memory_tool.py`, `target="user"`); hermes-core has **no** cross-session synthesis pass — cross-session user modeling exists only via the external Honcho backend. co ships USER.md on by default (`user_profile_enabled=True`) *and* a local cross-session reconciler (§2.6, opt-in but in-tree, no network) that infers ≥2-session patterns. So co does *locally* what hermes does only *via an external backend*. The residual hermes-unique capability is narrow (§5.1): query-time dialectic Q&A and a structured behavioral representation — not cross-session modeling as such, which co has.
 - **Claim #3.** co **splits** memory+skill review into two domain reviewers; hermes keeps them separable (`review_memory` / `review_skills` flags in `agent/background_review.py`, with a `_COMBINED_REVIEW_PROMPT` when both fire on the same turn).
 - **Skill curator (co↔hermes divergence).** co has no curator state machine — skill upkeep is merge+decay in housekeeping. hermes ships the curator (`agent/curator.py` + `hermes_cli/curator.py`): a 7d-interval / 30d-stale / 90d-archive state machine persisted to `.curator_state`, deterministic transitions via `apply_automatic_transitions()`, with its **LLM consolidation (umbrella-building) pass OFF by default** (`curator.consolidate=False`). So co runs LLM skill-merge by default; hermes runs deterministic decay by default and consolidates only when enabled. (`recall_protection_days=30`, `decay_after_days=90` are co housekeeping thresholds, not curator transitions.)
 
@@ -193,21 +195,28 @@ Notes:
 
 ## 5. Gaps
 
-**Closed since earlier refreshes** (no longer gaps; kept as one-line pointers so the history isn't lost):
+**Not gaps** (parity reached or capability present in co — retained as pointers):
 
-- **Gap A — cross-session recall.** Both co (lexical/regex over raw JSONL via `SessionStore.search()`) and hermes (FTS5, 3-mode) return raw windows and neither summarizes — parity, no gap (§4 claim #4).
-- **Gap B — always-injected user profile.** Shipped: `~/.co-cli/USER.md`, written back by the memory reviewer via `user_profile_view`/`user_profile_write` (§4 claim #5). No `kind='user'`; model-facing kinds are `rule | article | note`.
-- **Gap C Layer 1 — local cross-session profile reconciliation.** Shipped: `synthesize_user_profile` (§2.6), which hermes-core lacks entirely. **co leads** on this layer.
+- **Cross-session recall.** Both co (lexical/regex over raw JSONL via `SessionStore.search()`) and hermes (FTS5, 3-mode) return raw windows and neither summarizes — parity (§4 claim #4).
+- **Always-injected user profile.** `~/.co-cli/USER.md`, written back by the memory reviewer via `user_profile_view`/`user_profile_write` (§4 claim #5). No `kind='user'`; model-facing kinds are `rule | article | note`.
+- **Local cross-session profile reconciliation.** `synthesize_user_profile` (§2.6), which hermes-core lacks entirely. **co leads** here.
 
-Only the items below remain open.
+The genuinely open gaps:
 
-### 5.1 Gap C (residual) — second-order behavioral / dialectic user model — **OPEN, deliberately declined**
+### 5.1 Gap C (residual) — query-time dialectic reasoning + structured behavioral representation — **OPEN, deliberately declined**
 
-hermes's Honcho plugin (5 tools, per-turn prefetch, dialectic Q&A) synthesizes a *behavioral* model backend-side (peer cards, conclusions). co has no honcho/dialectic/peer-card/`MemoryProvider` of any kind; its model of the user is the union of declarative facts in USER.md (now cross-session-reconciled, §2.6) + memory items it chose to save. This is **not a capability hole but a scope line**: the mission tension ("local, inspectable, reversible") argues against an external backend as default. co's answer is to deepen the *local* synthesis (§2.6), not adopt a backend.
+First, what is **not** the gap (verified in code): co already does cross-session behavioral *inference*. `synthesize_user_profile` (`_housekeeping.py:619+`) reads a window of up to `profile_synthesis_lookback_sessions` (default 10) transcripts in one pass, and `profile_synthesis.md` promotes a working-style trait only when **≥2 sessions** show it — that is second-order pattern inference across sessions, not mere fact-recording. So both the multi-session read and the behavioral-pattern inference are **present and closed** (Gap C Layer 1). (The per-session domain reviewers stay single-session by design, `_reviewer.py:144-181` — the synthesizer is the multi-session reader.)
+
+What actually remains vs hermes's Honcho plugin is narrower and intentional:
+
+- **No query-time dialectic Q&A.** Honcho answers ad-hoc questions ("what does the user prefer for X?") by reasoning over observed history on demand (5 tools, per-turn prefetch). co's synthesis is **write-time only** — it bakes one static `USER.md` blob; there is no runtime "ask the user-model a question" surface.
+- **No structured behavioral representation.** Honcho keeps peer cards + conclusions as queryable backend objects; co's product is a single freeform text profile.
+
+These are scope lines, not oversights: the mission ("local, inspectable, reversible") argues against an external backend, and a statically-reconciled blob is the deliberately simpler local form. The forward option (§6.1) is to deepen the local synthesis, not adopt a backend.
 
 ### 5.2 Gap D — cross-session skill recurrence signal — **OPEN**
 
-- **What's missing:** no component proactively recognizes "this 4-step procedure has recurred across N sessions, make it an umbrella skill." The skill reviewer sees **one** transcript per KICK; skill **merge** in housekeeping clusters only *already-saved* skills (it never reads transcripts). The cross-session-window machinery now exists (profile synthesis, §2.6) but is not applied to skills.
+- **What's missing:** no component proactively recognizes "this 4-step procedure has recurred across N sessions, make it an umbrella skill." The skill reviewer sees **one** transcript per KICK; skill **merge** in housekeeping clusters only *already-saved* skills (it never reads transcripts). The cross-session-window machinery exists (profile synthesis, §2.6) but is not applied to skills.
 - **Net behavior:** per-session reviewer creates near-duplicate skills, housekeeping merge later collapses them. The recurrence signal exists only as after-the-fact dedup, never as up-front recognition.
 
 ### 5.3 Note — the internal `canon` kind (co-side, not a gap)
@@ -220,13 +229,17 @@ hermes's Honcho plugin (5 tools, per-turn prefetch, dialectic Q&A) synthesizes a
 
 ### 6.1 Remaining gap-closure work
 
-- **Gap D (§5.2)** — give the skill reviewer (or a housekeeping sub-pass) a small recent-session window so it can propose umbrella skills from recurrence *before* duplicates accumulate, rather than relying solely on after-the-fact merge. The profile synthesizer (§2.6) already proves the cross-session-window pattern works; this extends it to skills. Reconcile with §6.2 so there is one skill-creation path, not two.
+- **Generalize the cross-session windowing harness (underlies Gap D).** The marker-anchored sliding window in `synthesize_user_profile` (`_unsettled_sessions` + `lookback`/`lookback//2` overlap + success-gated advance, `_housekeeping.py:597+`) is a **domain-agnostic traversal/trigger primitive** — only the distiller agent spec and the marker key are profile-specific. Extracting it as a shared harness keyed by `(marker, distiller_spec, threshold)` lets the same mechanism drive profile, skill, and memory distillation:
+  - **Skill distillation (Gap D, §5.2) — strong fit.** A windowed skill miner reads N recent transcripts and proposes an umbrella from recurrence *before* `merge_skills`'s after-the-fact dedup ever runs (today the skill reviewer sees one transcript per KICK and merge never reads transcripts). The profile pass already proves the pattern. Reconcile with §6.2 so there is one skill-creation path, not two.
+  - **Memory distillation — rides the same harness, lower ROI.** A cross-session memory distiller would catch facts that recur but were sub-threshold in every single session (the same ≥2-session logic the profile pass uses). But its payoff is narrower than skills': memory storage is unconstrained and `merge_memory` already dedups post-hoc, so missing a recurring fact is cheap — whereas every skill carries a static-manifest cost, which is *why* Gap D bites. It must also avoid re-extracting facts the per-session memory reviewer already saved.
+  - **Shared-state caveat.** State today carries a single `last_synthesized_session` marker; each consumer advances independently, so the harness needs **per-domain markers** (e.g. a `dict[str, SessionMarker]` or one field each).
+  - **Verdict:** share the harness; strong yes for skills, conditional for memory.
 - **Gap C residual (§5.1) — forward, not a closure** — deepen the *local* synthesis (e.g. carry lightweight cross-session behavioral signal into the synthesis prompt), not adopt a backend.
 - **Optional, not a gap** — a summarization stage on `session_search` (aux-LLM digest per window, config-gated `sessions.summarize_results=False`, token-capped, single-flight) is a co-unique enhancement to weigh on its own context-spend ROI, never peer catch-up. *Small.*
 
 ### 6.2 Skill promotion vs the daemon reviewer (reconciliation)
 
-The original proposal to "promote a successful work-prompt into a reusable skill" now **overlaps** the daemon's `SKILL_REVIEW_SPEC`, which already auto-creates and patches skills. Any synthesize-then-promote feature must route through (or explicitly defer to) the reviewer to avoid two competing skill-creation mechanisms with divergent naming/dedup discipline. Retained boundary: draft generation may be automatic; durable save stays explicit and inspectable; no autonomous rewriting of soul/rule/spec files.
+A "promote a successful work-prompt into a reusable skill" feature **overlaps** the daemon's `SKILL_REVIEW_SPEC`, which already auto-creates and patches skills. Any synthesize-then-promote feature must route through (or explicitly defer to) the reviewer to avoid two competing skill-creation mechanisms with divergent naming/dedup discipline. Retained boundary: draft generation may be automatic; durable save stays explicit and inspectable; no autonomous rewriting of soul/rule/spec files.
 
 ### 6.3 Project-local skills tier
 
@@ -260,7 +273,7 @@ Three structural facts fall out:
 
 ### 7.2 The one axis where peers diverge *from* co: idle-gating the clock
 
-No kept peer subordinates its periodic path to load. hermes runs its 60s ticker on an **independent thread**; letta's APScheduler fires on its **own interval**; elizaos drains repeat-tasks on a **DB-driven cadence**. All fire periodic work regardless of conversation load. co alone runs housekeeping **only on the empty-queue branch** (`_loop.py:115`) — so under sustained KICK load the daily pass (now including the shipped profile-synthesis sub-pass, §2.6) can be starved indefinitely. Multiple independent self-learners converging on "periodic work gets its own un-preemptable cadence" is the strongest signal in this survey that co's idle-subordination is the outlier. (For *episodic* reviewers, idle-gating is fine; the divergence only bites the clock-driven phases.)
+No kept peer subordinates its periodic path to load. hermes runs its 60s ticker on an **independent thread**; letta's APScheduler fires on its **own interval**; elizaos drains repeat-tasks on a **DB-driven cadence**. All fire periodic work regardless of conversation load. co alone runs housekeeping **only on the empty-queue branch** (`_loop.py:115`) — so under sustained KICK load the daily pass (including the profile-synthesis sub-pass, §2.6) can be starved indefinitely. Multiple independent self-learners converging on "periodic work gets its own un-preemptable cadence" is the strongest signal in this survey that co's idle-subordination is the outlier. (For *episodic* reviewers, idle-gating is fine; the divergence only bites the clock-driven phases.)
 
 ### 7.3 Durability / observability ladder
 
@@ -268,19 +281,19 @@ Ranked richest → thinnest on the learning-upkeep path:
 
 - **letta / elizaos — richest (DB-backed).** A database carries the durable job/task state, so they get **queryable run history for free** — letta persists batch jobs + leader state in Postgres; elizaos persists repeat-tasks as DB rows (with `maxFailures:-1` infinite retry). Survives restart, inspectable by query.
 - **hermes — middle.** `jobs.json` atomic writes; **cross-process advisory lock** + in-process RLock; **at-most-once** (advance `next_run_at` under lock *before* submit); in-flight dedup + stale-run catch-up; per-job `last_run_at`/`last_status` only (**no append-only audit**); **no automatic retry** — manual CLI re-run.
-- **co — durable transport, improving observability.** File queue FIFO + `done/`/`failed/` dirs + **flat 3× retry × 30s backoff** (notably, the *only* kept peer with automatic retry of the learning path — hermes has none) + single `_dream_state.json` (cumulative `stats`: `memory_merged`, `skill_merged`, `skill_decayed`, `profile_synthesized`). Two observability surfaces have landed since the last refresh:
-  - **Daemon token ledger.** Each completed cycle flushes a `usage.jsonl` line with `origin="daemon"` and null `session_id` (`_loop.py:_flush_daemon_usage`, `session/usage.py:ORIGIN_DAEMON`) — POSIX-atomic cross-process appends shared with the REPL. So learning-path *token spend* is now queryable (summed into the combined total, never attributed to a session). This is the cost half of "did a run earn its keep?".
-  - **Status surface.** `co dream status` (`process.py:status_daemon`) reports `running`, `pid`, `uptime_seconds`, `queue_depth`, and **`failed_count`** — so `failed/` is no longer *silently* invisible; it is surfaced on demand.
-- The remaining deficits vs the DB-backed cohort: no **per-phase outcome audit** (the `stats` are cumulative, not per-run — you can't see *which* run merged what), no **error classification** (every failure burns all 3 retries identically), and no **proactive** consecutive-failure alert (`failed_count` is pull-only via `status`, not a log-warn that fires when it climbs).
+- **co — durable transport, partial observability.** File queue FIFO + `done/`/`failed/` dirs + **flat 3× retry × 30s backoff** (the *only* kept peer with automatic retry of the learning path — hermes has none) + single `_dream_state.json` (cumulative `stats`: `memory_merged`, `skill_merged`, `skill_decayed`, `profile_synthesized`). Two observability surfaces exist:
+  - **Daemon token ledger.** Each completed cycle flushes a `usage.jsonl` line with `origin="daemon"` and null `session_id` (`_loop.py:_flush_daemon_usage`, `session/usage.py:ORIGIN_DAEMON`) — POSIX-atomic cross-process appends shared with the REPL. Learning-path *token spend* is queryable (summed into the combined total, never attributed to a session) — the cost half of "did a run earn its keep?".
+  - **Status surface.** `co dream status` (`process.py:status_daemon`) reports `running`, `pid`, `uptime_seconds`, `queue_depth`, and **`failed_count`** — so `failed/` is surfaced on demand.
+- Deficits vs the DB-backed cohort: no **per-phase outcome audit** (the `stats` are cumulative, not per-run — you can't see *which* run merged what), no **error classification** (every failure burns all 3 retries identically), and no **proactive** consecutive-failure alert (`failed_count` is pull-only via `status`, not a log-warn that fires when it climbs).
 
-So co *out-retries* hermes (automatic vs manual) and now logs its token spend + surfaces failure counts, but still *under-observes* the DB-backed cohort on the per-run outcome audit.
+Net: co *out-retries* hermes (automatic vs manual) and logs token spend + surfaces failure counts, but *under-observes* the DB-backed cohort on the per-run outcome audit.
 
 ### 7.4 Transferable to co's dreamer (ranked, filtered for co's flat-file minimalism)
 
-1. **Structured per-phase run-log / outcome audit (still the highest ROI).** *Partially addressed:* the `usage.jsonl` daemon-origin line (§7.3) now captures per-cycle token *spend*, and `_dream_state.json` carries cumulative phase counters — but neither answers "what did *this* run do?" (merged which clusters, dropped which contradiction, synthesized the profile or no-op'd). The remaining work is a **per-pass JSONL run-log** (mirroring `usage.jsonl`), not a DB — one record per pass with the per-phase outcome. The token ledger is the cost side; this is the missing *outcome* side. Buys queryable run history without abandoning the file-queue's decoupling.
-2. **Consecutive-failure surfacing.** *Partially addressed:* `co dream status` now reports `failed_count` (§7.3), so the blind spot is no longer total — but it is **pull-only**. The remaining work is a **proactive log-warn threshold** that fires when `failed/` climbs N in a row, so a persistently-broken reviewer/synthesis is visible without someone running `status`.
-3. **Transient-vs-permanent error classification on retry.** Unchanged — co still burns all 3 retries on permanent errors; classifying to skip non-transient failures is cheap and aligned. (General best practice — none of the kept self-learning peers implements this richly, so lowest peer-evidence of the three; openclaw's `retry-hint.ts` in §7.5 is the concrete model.)
-4. **Independent clock timing (biggest design change).** Unchanged and now higher-stakes: with profile synthesis (§2.6) added to the idle-gated housekeeping path, *two* clock-driven learning passes (merge/decay + synthesis) are subordinate to queue drain. Under sustained KICK load both can be starved (§7.2). Give the clock-driven phases a cadence not subordinate to queue drain. Weigh against co's single-loop simplicity.
+1. **Structured per-phase run-log / outcome audit (highest ROI).** co has the *cost* side (the `usage.jsonl` daemon-origin line, §7.3) and cumulative phase counters in `_dream_state.json`, but neither answers "what did *this* run do?" (merged which clusters, dropped which contradiction, synthesized the profile or no-op'd). The missing piece is a **per-pass JSONL run-log** (mirroring `usage.jsonl`), not a DB — one record per pass with the per-phase outcome. Buys queryable run history without abandoning the file-queue's decoupling.
+2. **Proactive consecutive-failure surfacing.** `co dream status` reports `failed_count` (§7.3), but pull-only. The missing piece is a **log-warn threshold** that fires when `failed/` climbs N in a row, so a persistently-broken reviewer/synthesis is visible without someone running `status`.
+3. **Transient-vs-permanent error classification on retry.** co burns all 3 retries on permanent errors; classifying to skip non-transient failures is cheap and aligned. (None of the kept self-learning peers implements this richly, so lowest peer-evidence of the three; openclaw's `retry-hint.ts` in §7.5 is the concrete model.)
+4. **Independent clock timing (biggest design change).** Two clock-driven learning passes (merge/decay + profile synthesis, §2.6) are subordinate to queue drain on the idle-gated housekeeping path; under sustained KICK load both can be starved (§7.2). Give the clock-driven phases a cadence not subordinate to queue drain. Weigh against co's single-loop simplicity.
 
 **Do not borrow:** a jobs database, multi-node leader election, cron expressions, user-facing job CRUD — that is scope co deliberately lacks (single-user, local, flat-file). Take the observability layer (1–2); treat (3–4) as judgment calls.
 
@@ -305,7 +318,7 @@ openclaw does **not** self-learn — its `src/cron/` is a general-purpose user-f
 
 - **Cross-layer promotion:** when memory review identifies a recurring *procedure* (not a fact), should it hand off to skill creation, or always defer to a skill-side cross-session pass (Gap D)? Needs sessions data.
 - **Doctrine evolution:** explicitly out of scope — doctrine is hand-authored canon (`docs/specs/personality.md`). Re-evaluate only if that constraint is lifted.
-- **External memory provider:** offloading consolidation/decay/user-modeling to a provider (hermes/Honcho style) would free housekeeping to focus on mining, but adds a dependency and cuts against co's local-self-sufficiency mission. Now even less compelling: the local profile synthesizer (§2.6) already does the first-order cross-session reconciliation a backend would. The only thing a backend adds is the *second-order behavioral* model — which §5.1 deliberately declines. Probably not desirable as default.
+- **External memory provider:** offloading consolidation/decay/user-modeling to a provider (hermes/Honcho style) would free housekeeping to focus on mining, but adds a dependency and cuts against co's local-self-sufficiency mission. The local profile synthesizer (§2.6) already does the cross-session reconciliation and behavioral inference a backend would; the only things a backend adds on top are query-time dialectic Q&A and a structured behavioral representation (§5.1). Probably not desirable as default.
 - **Behavioral signal in synthesis:** should the profile synthesizer (§2.6) be fed lightweight behavioral telemetry (e.g. which tools the user reaches for, correction frequency) as additional evidence, narrowing the §5.1 residual gap *locally* — or does that over-reach the "declarative profile" scope it was built for? Needs sessions data.
 - **Daemon "split-brain" framing:** the `feedback_dream_daemon_split_brain` memory note predates the out-of-process refactor; verify it still reads correctly against the current detached-subprocess + file-queue design before citing it.
 
@@ -314,7 +327,7 @@ openclaw does **not** self-learn — its `src/cron/` is a general-purpose user-f
 ## 9. References
 
 ### co-cli source (current)
-- `co_cli/daemons/dream/` — `_loop.py` (`main_loop`, `scheduled_tick_due`, `_maybe_housekeep`, **`_flush_daemon_usage`**), `process.py` + `_process.py` (`status_daemon` now reports `failed_count` + `queue_depth`), `_reviewer.py` (`MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review`, `SessionReviewOutput`), `_housekeeping.py` (`run_housekeeping`, `merge_memory`, `merge_skills`, **`synthesize_user_profile`**, `decay_skills`, `memory_count_over_cap`, `prune_done_and_snapshots`, `prune_sessions` — note: **no `decay_memory`**), `_queue.py`, `state.py` (`HousekeepingState`, `HousekeepingStats` incl. `profile_synthesized`, **`SessionMarker`** + `last_synthesized_session`)
+- `co_cli/daemons/dream/` — `_loop.py` (`main_loop`, `scheduled_tick_due`, `_maybe_housekeep`, **`_flush_daemon_usage`**), `process.py` + `_process.py` (`status_daemon` reports `failed_count` + `queue_depth`), `_reviewer.py` (`MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC`, `process_review`, `SessionReviewOutput`), `_housekeeping.py` (`run_housekeeping`, `merge_memory`, `merge_skills`, **`synthesize_user_profile`**, `decay_skills`, `memory_count_over_cap`, `prune_done_and_snapshots`, `prune_sessions` — note: **no `decay_memory`**), `_queue.py`, `state.py` (`HousekeepingState`, `HousekeepingStats` incl. `profile_synthesized`, **`SessionMarker`** + `last_synthesized_session`)
 - `co_cli/dream_queue.py` — KICK enqueue + `write_dream_snapshot` (no `kick.py` module under `daemons/dream/`)
 - `co_cli/daemons/dream/prompts/` — `memory_review.md`, `skill_review.md`, `memory_merge.md`, `skill_merge.md`, **`profile_synthesis.md`** (the four Honcho-derived reasoning moves)
 - `co_cli/config/dream.py` (note `run_interval_hours` daily-grid validator), `co_cli/config/skills.py`, `co_cli/config/core.py` (DREAM_* path constants incl. `DREAM_SNAPSHOTS_DIR`, `DREAM_TIDY_TAG`)
@@ -334,10 +347,10 @@ openclaw does **not** self-learn — its `src/cron/` is a general-purpose user-f
 ### hermes cross-reference
 - `hermes-agent/agent/background_review.py` + `run_agent.py` (`_spawn_background_review`) — memory/skill nudge reviewers, separable via `review_memory`/`review_skills` flags (+ `_COMBINED_REVIEW_PROMPT`); review fork runs with `skip_memory=True` (external memory plugins bypassed, writes land on disk)
 - `hermes-agent/tools/skill_manager_tool.py` — `skill_manage` (6 ops: create/edit/patch/delete/write_file/remove_file), atomic writes (`_atomic_write_text` + `atomic_replace`)
-- `hermes-agent/agent/curator.py` (`:56-64` intervals/`DEFAULT_CONSOLIDATE=False`, `:276` `apply_automatic_transitions()`) + `hermes_cli/curator.py:81` — skill curator state machine, STILL PRESENT (7d interval / 30d stale / 90d archive, `.curator_state`); LLM consolidation **OFF by default** (`curator.consolidate=False`); `agent/curator_backup.py` handles state backup
+- `hermes-agent/agent/curator.py` (`:56-64` intervals/`DEFAULT_CONSOLIDATE=False`, `:276` `apply_automatic_transitions()`) + `hermes_cli/curator.py:81` — skill curator state machine (7d interval / 30d stale / 90d archive, `.curator_state`); LLM consolidation **OFF by default** (`curator.consolidate=False`); `agent/curator_backup.py` handles state backup
 - `hermes-agent/agent/{insights,trajectory,error_classifier,memory_manager}.py` — checked for new learning machinery; **none self-learns**: `insights.py` is analytics/reporting over the state DB, `trajectory.py` is ShareGPT training-data capture, `error_classifier.py` is deterministic failover taxonomy, `memory_manager.py` is the provider-orchestration framework. hermes's durable learning remains exactly: per-session background review + curator + file-backed MEMORY.md/USER.md (no cross-session synthesis)
-- `hermes-agent/tools/session_search_tool.py` — FTS5 + window retrieval, **no LLM summarization** ("zero LLM cost"); now **3 modes** (discovery/scroll/browse), "read" folded into discovery bookends (`:8-29`)
-- `hermes-agent/agent/system_prompt.py:431` + `agent/agent_init.py:1141` — `USER.md` injection (volatile tier); `_user_profile_enabled` now **defaults False** (was True). Write-back is **per-session only** (`tools/memory_tool.py:902-971`, `target="user"`); **no cross-session synthesis pass** in hermes-core — this is what co's §2.6 now does locally
+- `hermes-agent/tools/session_search_tool.py` — FTS5 + window retrieval, **no LLM summarization** ("zero LLM cost"); **3 modes** (discovery/scroll/browse), "read" folded into discovery bookends (`:8-29`)
+- `hermes-agent/agent/system_prompt.py:431` + `agent/agent_init.py:1141` — `USER.md` injection (volatile tier); `_user_profile_enabled` **defaults False**. Write-back is **per-session only** (`tools/memory_tool.py:902-971`, `target="user"`); **no cross-session synthesis pass** in hermes-core — co's §2.6 covers this locally
 - `hermes-agent/plugins/memory/honcho/__init__.py` — dialectic backend, **5 tools** (`honcho_profile`, `honcho_search`, `honcho_reasoning`, `honcho_context`, `honcho_conclude`); per-turn `prefetch()` (`agent/memory_provider.py:94`); synthesizes a backend-side behavioral model (peer cards, conclusions); review fork skips it via `skip_memory=True`. (Pluggable via `agent/memory_manager.py` + `agent/memory_provider.py` ABC — Honcho/Hindsight/Mem0; none default-on.)
 - `hermes-agent/utils.py` — `atomic_replace` / `atomic_json_write`
 - **Scheduling (§7):** `hermes-agent/cron/scheduler.py` + `cron/jobs.py` — file-based `~/.hermes/cron/jobs.json`, 60s ticker, fcntl/msvcrt `.tick.lock`, at-most-once, parallel + 1-worker sequential pools, no auto-retry; `gateway/run.py` `_start_cron_ticker` — ticker daemon thread at boot; `agent/conversation_loop.py:620` — per-turn review nudge counter

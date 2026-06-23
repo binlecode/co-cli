@@ -1,16 +1,16 @@
 ---
-description: Implementation plan drafting — translate a feature request or bug into a scoped, task-ordered execution plan with acceptance criteria.
-argument-hint: "[feature or task description]"
+description: Planning — turn a request (a feature, a document, a research question, a project) into a scoped, ordered plan with acceptance criteria and surfaced open questions.
+argument-hint: "[what to plan]"
 user-invocable: true
 ---
 
 # Plan
 
-**Invocation:** `/plan [feature or task description]`
+**Invocation:** `/plan [what to plan]`
 
-Translate a feature request, bug fix, or refactor goal into a scoped, task-ordered execution plan with acceptance criteria and open questions surfaced before implementation begins.
+Turn a request — a feature, a document, a research question, a project — into a scoped, ordered plan with acceptance criteria and open questions surfaced before the work begins.
 
-**Core principle:** A good plan makes implementation obvious. If a task leaves the implementer guessing, it is incomplete — sharpen the `Done when` or split the task.
+**Core principle:** A good plan makes the work obvious. If a task leaves the doer guessing, it is incomplete — sharpen the `Done when` or split the task.
 
 ---
 
@@ -18,14 +18,14 @@ Translate a feature request, bug fix, or refactor goal into a scoped, task-order
 
 Clarify the problem and its boundaries before writing any tasks.
 
-1. Restate the request in one sentence. If the request is ambiguous, ask one clarifying question before proceeding — do not guess.
-2. Identify what is **in scope**: the specific behaviour change, module(s) affected, and user-visible outcome.
+1. Restate the request in one sentence. If a *discoverable* fact is missing, find it; ask only when the ambiguity is a preference or constraint that genuinely changes the plan.
+2. Identify what is **in scope**: the specific change, the parts affected, and the outcome someone will observe.
 3. Identify what is **out of scope**: adjacent improvements that could be done but are not required by this request. List them briefly so they are not lost, but do not plan them.
 4. State the acceptance criteria: what observable state confirms the work is done?
-   - For features: "The user can do X and sees Y."
-   - For bugs: "The reproduction steps from the report no longer reproduce the issue."
-   - For refactors: "All existing tests pass; no public API changes."
-5. Read the relevant source files and tests to understand the current state. Note any constraints (existing abstractions to preserve, external contracts, config paths).
+   - Code: "The user can do X and sees Y."
+   - Research: "The question is answered with cited sources."
+   - Writing: "The draft covers sections A–C."
+5. Read the relevant material / current state to understand what you are working with. Note any constraints (existing structure to preserve, external contracts, sources or paths to respect).
 
 ## Phase 2 — Tasks
 
@@ -35,24 +35,25 @@ For each task, write:
 ```
 ### Task N — <verb phrase>
 
-**Files:** <file paths affected>
+**Touches:** <what the task changes or produces — files for code; sections, sources, or deliverables otherwise>
 **Done when:** <one-sentence verifiable condition>
-**Notes:** <any implementation hint or constraint — omit if none>
+**Notes:** <any hint or constraint — omit if none>
 ```
 
 Task ordering rules:
-- Data model / schema changes before logic that depends on them.
-- Test additions before implementation changes when the test defines the contract.
-- Infrastructure (config, deps) before the code that uses it.
-- Cleanup / dead-code removal last.
+- Prerequisites before the tasks that depend on them.
+- Foundational pieces before what builds on them.
+- Verification or review steps after the work they check.
 
-Keep tasks atomic: a task that requires editing more than ~3 files is a signal to split it.
+Keep tasks atomic: a task that spans many moving parts is a signal to split it.
 
-After listing tasks, add a one-line **Estimated scope** statement (e.g. "4 tasks, ~3 files, low risk") so the reviewer can calibrate effort at a glance.
+After listing tasks, add a one-line **Estimated scope** statement (e.g. "4 tasks, low risk") so the reviewer can calibrate effort at a glance.
+
+When the plan has more than one task, write each task to the session todo list as one item — its content the task's verb phrase plus its `Done when`. (Skip this for a single-task or purely informational request.)
 
 ## Phase 3 — Open questions
 
-Surface blockers and decisions that must be resolved before or during implementation.
+Surface blockers and decisions that must be resolved before or during the work.
 
 List each open question as:
 ```
@@ -60,11 +61,12 @@ List each open question as:
 ```
 
 Categories to check:
-- **External contracts**: does this change affect a public API, CLI argument, config schema, or file format that other code or users depend on?
-- **Backward compatibility**: does the plan break existing behavior? If so, is migration needed?
-- **Test gaps**: are there code paths that the plan changes but that have no test coverage? Flag them — the implementer must add coverage as part of the plan.
-- **Dependencies**: does the plan require a new package, tool, or service?
-- **Unknown behaviour**: is there a code path the author does not understand well enough to plan confidently?
+- **External dependencies or contracts**: does this change affect something others rely on — a public interface, a shared format, an upstream service?
+- **Backward compatibility / reversibility**: does the plan break something others depend on, and can it be undone?
+- **Gaps in what's known**: is there a part the author does not understand well enough to plan confidently?
+- **Resources or access needed**: does the plan require a tool, source, permission, or service not yet available?
+
+If an open question is a preference or tradeoff you are deferring, record it with your recommended default so the decision is teed up rather than reopened from scratch.
 
 If there are no open questions, write "None — ready to implement." Do not leave this section empty.
 
@@ -72,13 +74,13 @@ If there are no open questions, write "None — ready to implement." Do not leav
 
 Each is a real failure mode for this skill — the contrast is the fix.
 
-- **Vague `Done when`.** Bad: "the feature works." Good: "`pytest tests/test_auth.py::test_login` passes (3 cases)." A condition you cannot confirm by eye or with one command is not a done-when.
-- **Scope leak.** Bad: a task that quietly fixes an adjacent module the request never asked for. Good: list that improvement under out-of-scope in Phase 1 and leave it unplanned.
-- **Oversized task.** Bad: one task editing six files ("wire up the whole pipeline"). Good: split at the seams — one cohesive change per task, ~3 files or fewer each.
+- **Vague `Done when`.** Bad: "the section is solid" / "the feature works." Good: "the draft answers the three review questions with a cited source each" / "`pytest tests/test_auth.py::test_login` passes (3 cases)." A condition you cannot confirm by eye or with one check is not a done-when.
+- **Scope leak.** Bad: a task that quietly fixes an adjacent thing the request never asked for. Good: list that improvement under out-of-scope in Phase 1 and leave it unplanned.
+- **Oversized task.** Bad: one task bundling several distinct deliverables ("do the whole pipeline"). Good: split at the seams — one cohesive change per task.
 - **Open questions skipped.** Bad: "None" written without checking. Good: walk every Phase 3 category; write "None — ready to implement" only after they all clear.
 
 ## Rules
 
-- Do not write implementation code during planning — write file names and done-when conditions only.
-- Every task must have a `Done when` condition that is verifiable without running the full test suite.
-- Scope creep is a bug: if a task exceeds its stated scope during implementation, the plan must be updated before continuing.
+- The plan names the steps and their done-conditions, not the finished work product.
+- Every `Done when` must be verifiable by inspection or a single check.
+- Scope creep is a bug: if a task exceeds its stated scope during the work, the plan must be updated before continuing.

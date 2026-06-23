@@ -34,6 +34,15 @@ co-cli's own skill loader and are out of scope for this comparison).
 >   sidecars + `/skills pin` — beyond what any surveyed peer ships.
 > - **Migration importer (Step 5)** — NOT built; the plan was withdrawn.
 > - **Linked files** — still unsupported (`skill_manage` `write_file` returns error).
+> - **Update (2026-06-23):** `refactor`, `review`, and `triage` were **removed** from the
+>   bundle — coding-agent skills that don't fit co's knowledge-work positioning. `refactor`
+>   also hardcoded co's own repo tooling (`uv run pytest`, `scripts/quality-gate.sh`) and
+>   `review` co's house rules; `review`/`triage` are irreducibly software-engineering
+>   (changed-code review; bug triage) and don't generalize. Reviewing/triaging/refactoring
+>   co-cli itself is owned by the `/orchestrate-*` dev workflow. **Current bundle: 5** —
+>   `doctor`, `documents`, `office`, `plan` (kept and regeneralized to a general planner),
+>   `skill-creator`. The inline cells and counts below still list the removed skills as a
+>   point-in-time record of this survey, not the current bundle.
 > See `docs/specs/skills.md` for the authoritative current surface.
 
 **Sources (code-grounded scan basis for each peer):**
@@ -704,6 +713,8 @@ authoring contract. Candidate set, all from T2-A or harness-equivalent:
 | `co_cli/skills/triage.md` | T2-A1 hermes `systematic-debugging`; doctor's neighbor | Diagnose failing test/error — 4-phase root-cause workflow |
 | `co_cli/skills/refactor.md` | (no direct peer; high local value) | Apply a named refactor pattern with safety gates |
 | (existing) `doctor.md` | T2-A1 already shipped | (migrate to contract in Step 1) |
+
+> Note: `refactor`, `review`, and `triage` were built from this candidate set but **later removed** from the bundle (2026-06-23) — coding-agent skills off-mission for co's knowledge-work positioning. `refactor` also hardcoded co's own repo tooling (`uv run pytest`, `scripts/quality-gate.sh`) and `review` co's house rules; `review`/`triage` are irreducibly software-engineering and don't generalize. Reviewing/triaging/refactoring co-cli itself is owned by the `/orchestrate-*` dev workflow; the "high local value" calls in the rows above did not hold up. Only `plan` (regeneralized to a general planner) and `doctor` survive from this set.
 
 Skip skills that depend on tools co-cli doesn't have (image gen, browser,
 audio). Each new skill: ~1 day to draft, lint-pass, and validate end-to-end.

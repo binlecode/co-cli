@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.468]
+
+Coding-cluster realign: removed the `review`/`triage` skills and regeneralized `plan` into a general knowledge-work planner, matching co's knowledge-work / WEAK_LOCAL positioning.
+
+- **Removed `review` + `triage` skills** — coding-agent skills off-mission for a knowledge-work agent. Dropped from `_BUNDLED_NAMES`; the two `RESEARCH-skills-*` docs updated. Bundle is now 5: `doctor`, `documents`, `office`, `plan`, `skill-creator`.
+- **Regeneralized `plan/SKILL.md`** — reads as a general planner (research / writing / project / code) with coding as one example: `description`/intro de-coded, `Files:` → `Touches:`, coding task-ordering → general dependency order (verify-after), open-question categories generalized, Common Mistakes made cross-domain. Preserves the scoping-only / no-frozen-detail discipline, the core principle, and the Common Mistakes block.
+- **Plan→todo bridge** — for a multi-task plan, the skill now emits each task to the session todo list at plan time (one item per task, content = verb phrase + Done-when), so a long-running plan survives compaction instead of scrolling out of context. Ongoing tracking/closure stays owned by the always-injected `todo_read` completion gate, not the skill body.
+
 ## [0.8.466]
 
 Theme-aware TUI glyph set, a calmer welcome banner, single-source theme resolution, and `-t` on the bare `co` command.

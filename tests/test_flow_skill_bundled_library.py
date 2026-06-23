@@ -9,10 +9,7 @@ from co_cli.skills.loader import load_skills
 _SKILLS_DIR = Path(__file__).resolve().parent.parent / "co_cli" / "skills"
 _BUNDLED_NAMES = {
     "doctor",
-    "review",
     "plan",
-    "triage",
-    "refactor",
     "skill-creator",
     "documents",
     "office",
