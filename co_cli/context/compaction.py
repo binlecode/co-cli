@@ -382,13 +382,19 @@ def commit_compaction(
     ctx: RunContext[CoDeps],
     result: list[ModelMessage],
 ) -> None:
-    """Mark that compaction ran this turn.
+    """Mark that compaction ran this turn and record the post-compaction size.
 
-    Single writer of ``compaction_applied_this_turn`` — drives session-branching
-    (main.py) and the ``proactive_window_processor`` OTEL span attribute.
+    Single writer of both ``compaction_applied_this_turn`` (drives
+    session-branching in main.py and the ``proactive_window_processor`` OTEL span
+    attribute) and ``current_request_tokens_estimate`` (the floor-inclusive
+    post-compaction size the status line and span attributes report). Writing the
+    estimate here keeps every commit path — proactive, overflow recovery, and the
+    ``/compact`` command — consistent instead of leaving the field stale whenever
+    a path other than the proactive trigger shrinks the history.
 
     Callers must invoke this as the last step before returning.
     """
+    ctx.deps.runtime.current_request_tokens_estimate = effective_request_tokens(ctx.deps, result)
     ctx.deps.runtime.compaction_applied_this_turn = True
 
 
@@ -406,13 +412,12 @@ def _record_proactive_outcome(
 
     Fires the closing status callback, computes savings using ``token_count``
     (the trigger's realtime-local ``effective_request_tokens``), emits execution OTEL attributes
-    onto the wrapper span, updates the anti-thrash counter, writes the
-    post-compaction estimate back to runtime so the status line reflects the
-    compacted size, then commits runtime as the final step. Returns
-    ``tokens_after`` (the post-compaction ``effective_request_tokens``) so the
-    caller can detect a no-progress pass without recomputing. Any exception
-    before ``commit_compaction`` leaves runtime untouched — single-writer
-    atomicity for the "applied" fields.
+    onto the wrapper span, updates the anti-thrash counter, then commits runtime
+    as the final step (``commit_compaction`` writes both the post-compaction
+    estimate and the applied flag). Returns ``tokens_after`` (the post-compaction
+    ``effective_request_tokens``) so the caller can detect a no-progress pass
+    without recomputing. Any exception before ``commit_compaction`` leaves runtime
+    untouched — single-writer atomicity for the "applied" fields.
 
     The closing status callback has five cases. Two are *deliberate* static
     degrades that must NOT report "Summarizer failed": ``summary_skipped`` (the
@@ -457,7 +462,6 @@ def _record_proactive_outcome(
     else:
         ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
 
-    ctx.deps.runtime.current_request_tokens_estimate = tokens_after
     commit_compaction(ctx, result)
     return tokens_after
 

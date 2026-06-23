@@ -21,6 +21,7 @@ from co_cli.context.history_processors import (
     elide_old_multimodal_prompts,
     evict_old_tool_results,
     spill_largest_tool_results,
+    wrap_up_on_final_request,
 )
 
 if TYPE_CHECKING:
@@ -96,5 +97,6 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
         evict_old_tool_results,
         spill_largest_tool_results,
         proactive_window_processor,
+        wrap_up_on_final_request,
     ),
 )

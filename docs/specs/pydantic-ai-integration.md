@@ -4,7 +4,7 @@ How `co-cli` consumes the **pydantic-ai** SDK: the integration surface, the seam
 
 **Pinned version:** `pydantic-ai==1.92.0` (`pyproject.toml`). co is a deep structural consumer — version bumps must be validated against every seam below.
 
-**Integration philosophy:** co owns the *policy*; the SDK provides the *plumbing*. Tool deferral, approval decisions, the per-call cap, MCP-result spill, JSON repair, surrogate sanitization, and schema-budget accounting are all co-implemented around SDK primitives. The SDK contributes the agent graph, message/part types, toolset composition, the model-request transport, and the pause/resume mechanics for deferred tools. Where co diverges from an SDK feature (e.g. `defer_loading`/`search_tools`), the divergence is deliberate and documented in §7.
+**Integration philosophy:** co owns the *policy*; the SDK provides the *plumbing*. Tool deferral, approval decisions, the per-call cap, MCP-result spill, JSON repair, surrogate sanitization, schema-budget accounting, and the final-request wrap-up nudge are all co-implemented around SDK primitives. The SDK contributes the agent graph, message/part types, toolset composition, the model-request transport, and the pause/resume mechanics for deferred tools. Where co diverges from an SDK feature (e.g. `defer_loading`/`search_tools`), the divergence is deliberate and documented in §7.
 
 ---
 
@@ -148,7 +148,7 @@ call_tool(name, args, ctx, tool):
     push_span("tool {name}", kind=tool, attrs={name, args, args_chars})
 
     # 3. dispatch (or shed) + MCP spill
-    if count > cap:  result = make_exceeded_payload(count)        # shed over-cap calls
+    if count > cap:  result = json.dumps(make_exceeded_payload(count))   # shed over-cap calls (JSON string)
     else:
         result = super().call_tool(...)                          # SDK dispatch
         if result is str and info.source == MCP:                 # MCP results bypass tool_output()
@@ -176,7 +176,7 @@ build_orchestrator(spec, deps) -> SessionAgent:          # SessionAgent = Agent[
     for per_turn in spec.per_turn_instructions: agent.instructions(per_turn)   # dynamic InstructionPart
 ```
 
-**Orchestrator run** (`run_turn` → `_execute_run`): streams via `async with agent.run_stream_events(...) as stream:` then `async for event in stream:` — the context-manager form guarantees stream cleanup on cancellation (required since 1.92; direct iteration is deprecated). Uses `usage_limits=UsageLimits(request_limit=None)` — **intentionally unbounded** (the human drives turn count). This is load-bearing: the SDK default `request_limit` is 50, so the explicit `None` is required, not ceremony. The sibling `metadata={"request_limit": None}` is observability only. Stream events (`PartStart/Delta/End`, `FunctionToolCall/ResultEvent`, `FinalResultEvent`, `AgentRunResultEvent`) drive rendering; the final `AgentRunResult.output` (str or `DeferredToolRequests`) drives the approval branch.
+**Orchestrator run** (`run_turn` → `_execute_run`): streams via `async with agent.run_stream_events(...) as stream:` then `async for event in stream:` — the context-manager form guarantees stream cleanup on cancellation (required since 1.92; direct iteration is deprecated). Uses `usage_limits=UsageLimits(request_limit=resolve_request_limit(deps.config.llm))` — the turn-cumulative model-request cap (`max_model_requests_per_turn`, default 40; `0` resolves to `None` = unbounded). This is the turn-spanning circuit breaker (see [core-loop.md](core-loop.md) §1): co threads one `RunUsage` across all runs so the SDK's before-request check bounds the whole turn and fires mid-run. The sibling `metadata={"request_limit": …}` mirrors the resolved value for observability. Stream events (`PartStart/Delta/End`, `FunctionToolCall/ResultEvent`, `FinalResultEvent`, `AgentRunResultEvent`) drive rendering; the final `AgentRunResult.output` (str or `DeferredToolRequests`) drives the approval branch.
 
 **Task agents** (`build_task_agent` + `run_standalone`): a fresh `FunctionToolset` (selected tools, all `requires_approval=False`) wrapped in its own `_CallSeamToolset` for span/cap/spill parity. `output_type = spec.output_type` (genuinely variable per spec — stays `Agent[CoDeps, Any]`). Run via `agent.run(prompt, usage_limits=UsageLimits(request_limit=budget))` — task agents keep a **real** request limit (unlike the orchestrator).
 
@@ -224,7 +224,22 @@ Approval decisions carry **no** tool execution — execution and `ToolReturnPart
 
 ### 2.8 Message/part type system — `context/`, `observability/serialize.py`, `session/persistence.py`
 
-The breadth here (~22 part types) is intrinsic to **client-side compaction**, not a smell. co pattern-matches `ModelRequest`/`ModelResponse` for turn grouping (`_compaction_boundaries.py`), dedups/evicts `ToolReturnPart` (`history_processors.py`, `_dedup_tool_results.py`), estimates tokens from parts (`summarization.py`), and serializes parts to span attributes (`serialize.py`). History processors are **pure and non-mutating** — each returns a new list; `_rewrite_tool_returns` rebuilds a `ModelRequest` via `replace(...)` only when a part changed, else preserves the original object by identity. Persistence round-trips through `ModelMessagesTypeAdapter` (`dump_json`/`parse_json`) into per-session JSONL.
+The breadth here (~22 part types) is intrinsic to **client-side compaction**, not a smell. co pattern-matches `ModelRequest`/`ModelResponse` for turn grouping (`_compaction_boundaries.py`), dedups/evicts `ToolReturnPart` (`history_processors.py`, `_dedup_tool_results.py`), estimates tokens from parts (`summarization.py`), and serializes parts to span attributes (`serialize.py`). History processors never mutate their input — each returns a new list; `_rewrite_tool_returns` rebuilds a `ModelRequest` via `replace(...)` only when a part changed, else preserves the original object by identity. Most are **rewrite-only** (subtractive: dedup/evict/spill/elide); the lone **additive** processor is `wrap_up_on_final_request` (§2.13). Persistence round-trips through `ModelMessagesTypeAdapter` (`dump_json`/`parse_json`) into per-session JSONL.
+
+### 2.13 Final-request wrap-up nudge — `context/history_processors.py`
+
+A registered history processor that softens the cumulative model-request cap (§2.5, [core-loop.md](core-loop.md) §1). Because `UsageLimits(request_limit)` hard-blocks the request that *would* exceed the cap mid-stream — no chance for the model to answer — `wrap_up_on_final_request` injects a one-shot instruction on the last allowed request instead:
+
+```
+wrap_up_on_final_request(ctx, messages):
+    limit = resolve_request_limit(ctx.deps.config.llm)        # None when cap disabled
+    if limit is None or ctx.usage.requests != limit - 1: return messages   # not the final request
+    return [*messages, ModelRequest([UserPromptPart(WRAP_UP_TEXT)])]       # append the nudge
+```
+
+Two SDK behaviors this relies on (both documented, stable in 1.92.0):
+- **`ctx.usage.requests` is the live turn-cumulative count at processor time.** The SDK increments it *after* each request, so inside the processor it reads `limit - 1` exactly on the last request the SDK will still permit — fires at most once (next request makes it `limit`).
+- **Processor output is persisted, then the trailing `ModelRequest` is merged.** The SDK writes the processor's returned list back to run history (so the nudge would survive into `AgentRunResult.new_messages()`) and merges consecutive trailing `ModelRequest`s before sending, so the model sees the nudge folded into the real request. Because it persists, `drop_wrap_up_messages` strips it (exact-content match on `WRAP_UP_TEXT`) at every `run_turn` return path (`_history_after_successful_run`, `_build_error_turn_result`) — the nudge never reaches the saved transcript or the next turn. This is the one additive processor, so the "rewrite-only" purity of the others (§2.8) does not extend to it.
 
 ### 2.9 Schema-budget measurement — `bootstrap/schema_budget.py`
 
@@ -265,7 +280,7 @@ discover_mcp_tools: connect all servers concurrently; list_tools(); register nam
 
 ### 2.12 Exception taxonomy
 
-- `ModelHTTPError` — inspected by `_http_error_classifier.py` for context-overflow (drives emergency compaction); caught/re-raised in `orchestrate.py`.
+- `ModelHTTPError` — inspected by `_http_error_classifier.py` for context-overflow (drives emergency compaction); caught in `orchestrate.py` and dispatched via `_handle_model_http_error` (returns `None` to retry the run loop, else a terminal `TurnResult`).
 - `ModelAPIError`, `UnexpectedModelBehavior` — caught in orchestration error handling.
 - `ModelRetry` — raised by tools (`tool_io.py` and 20+ tool modules) for transient failures; the SDK retries up to `config.tool_retries`.
 
@@ -282,9 +297,10 @@ discover_mcp_tools: connect all servers concurrently; list_tools(); register nam
 | `mcp_servers` (url / command / args / env / prefix / approval / timeout_seconds) | `config/core.py` | `_build_mcp_toolsets` transport + `approval_required()` + discovery timeout |
 | HTTP timeouts (connect/read/write/pool) | `llm/factory.py` constants | Ollama `httpx.AsyncClient` |
 | `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `TOOL_CAP_HARD_STOP_CONSECUTIVE` | `config/tuning.py` | Call-seam cap + hard-stop |
+| `llm.max_model_requests_per_turn` | `config/llm.py` | Orchestrator `UsageLimits(request_limit=…)` via `resolve_request_limit` (40; `0` → unbounded); wrap-up nudge trigger (§2.13) |
 | `SPILL_THRESHOLD_CHARS` | `config/tuning.py` | MCP-result spill threshold default |
 
-Orchestrator `usage_limits` is **not** config-driven — it is fixed `request_limit=None` (unbounded); task-agent `request_limit` comes from `spec.default_budget` or a per-call override.
+Orchestrator `usage_limits` **is** config-driven — `request_limit` resolves from `max_model_requests_per_turn` via `resolve_request_limit` (default 40; `0` → `None` = unbounded). Task-agent `request_limit` comes from `spec.default_budget` or a per-call override.
 
 ---
 
@@ -324,7 +340,7 @@ Package-private (not callable cross-package, listed for the map): `_CallSeamTool
 | `co_cli/agent/run.py` | `run_standalone` task-agent runner with real `UsageLimits` |
 | `co_cli/bootstrap/schema_budget.py` | `measure_always_schema_budget` (synthetic `RunContext` + `prepare_tool_def`) |
 | `co_cli/agent/orchestrate.py` | `run_turn`, stream-event loop, deferred-tool approval loop, error taxonomy |
-| `co_cli/context/history_processors.py` | Pure part-rewriting processors (`_rewrite_tool_returns`) |
+| `co_cli/context/history_processors.py` | Part-rewriting processors (`_rewrite_tool_returns`); additive `wrap_up_on_final_request` + `drop_wrap_up_messages` strip helper |
 | `co_cli/observability/serialize.py` | Part/message → span-attribute serialization |
 | `co_cli/session/persistence.py` | `ModelMessagesTypeAdapter` JSONL round-trip |
 | `co_cli/deps.py` | `ToolInfo`, `VisibilityPolicyEnum`, `ToolSourceEnum`, runtime cap counters |
@@ -336,7 +352,7 @@ Package-private (not callable cross-package, listed for the map): `_CallSeamTool
 | Property | Gated by |
 |----------|----------|
 | ALWAYS-schema bucket stays within budget; measured value stable across refactor | `tests/test_orchestrator_schema_budget.py` |
-| Tool-call cap fires after consecutive violations; hard-stop | `tests/test_flow_model_request_cap.py` |
+| Tool-call cap fires after consecutive violations; hard-stop; final-request wrap-up nudge reaches the model, is suppressed when the cap is disabled, and is stripped from persisted history | `tests/test_flow_model_request_cap.py` |
 | Streaming-path JSON repair fires (and is gated off when disabled) | `tests/test_flow_tool_call_repair.py` |
 | Surrogate-codepoint retry on `request` / `request_stream`; no silent post-open recovery | `tests/test_surrogate_recovery_model.py` |
 | Non-stream JSON repair gating (Ollama on / Gemini off) | `tests/test_flow_tool_call_repair.py` |
@@ -354,7 +370,7 @@ Load-bearing, intentional, or rejected couplings — recorded so they are not re
 
 **Intentional divergences from SDK features:**
 - **No `defer_loading`/`search_tools`.** co owns deferral via `_tool_visibility_filter` + `tool_view` + `runtime.revealed_tools`, uniformly over native and MCP tools (§2.3). Registering tools with `defer_loading=True` would re-engage the SDK keyword loader and split the mechanism.
-- **Orchestrator `usage_limits=UsageLimits(request_limit=None)`** is required, not ceremony — the SDK default is 50; dropping the arg would cap the human-driven orchestrator at 50 requests. Task agents keep a real limit (`agent/run.py`).
+- **Orchestrator `usage_limits=UsageLimits(request_limit=resolve_request_limit(...))`** is load-bearing, not ceremony — passing the resolved cap (default 40) is co's deliberate circuit breaker, set *tighter* than the SDK's default 50 so an in-cap doom-loop is bounded (rationale in [core-loop.md](core-loop.md) §1). Dropping the arg would silently fall back to the SDK's 50; setting `max_model_requests_per_turn=0` resolves to `None` for a genuinely unbounded run. Task agents pass their own per-spec limit (`agent/run.py`).
 
 **Minimum-necessary wrappers (do not merge or remove):**
 - **`_CallSeamToolset` + `_SequentialMCPToolset`** — two `WrapperToolset` subclasses for two distinct boundaries: call-time (span/cap/spill) vs list-time (`sequential` patch). Textbook usage.
@@ -371,7 +387,7 @@ Load-bearing, intentional, or rejected couplings — recorded so they are not re
 - The **deferred-tool / approval protocol types** (`DeferredToolRequests`/`Results`, `ApprovalRequired`, `ToolApproved`/`Denied`) are thin data carriers. co drives the entire approval loop (§2.7); whether co ever re-implements pause/resume around its own dispatch is a separate design decision, not a mechanical cleanup.
 
 **Coding practices to preserve under any future refactor:**
-- Pure, non-mutating history processors; the single `_rewrite_tool_returns` contract; identity-preserving `replace(...)`.
+- Non-mutating history processors (never mutate the input list/objects); the single `_rewrite_tool_returns` contract; identity-preserving `replace(...)`. The lone additive processor `wrap_up_on_final_request` (§2.13) still obeys this — it appends to a new list rather than mutating — but its persisted output **must** be stripped on the way out (`drop_wrap_up_messages`); do not drop the strip when refactoring.
 - Frozen registration metadata (`ToolInfo`, `AlwaysSchemaBudget`, `MCPToolsetEntry`).
 - Thin proxies over deep subclassing (`_SanitizingMCPServer`, `_RepairingStreamedResponse` delegate via `__getattr__`, override one method).
 

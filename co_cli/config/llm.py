@@ -259,6 +259,17 @@ def cap_output_tokens(settings: ModelSettings, max_tokens: int) -> ModelSettings
     return out  # type: ignore[return-value]
 
 
+def resolve_request_limit(llm: LlmSettings) -> int | None:
+    """Turn-cumulative model-request cap for the SDK's UsageLimits, or None to disable.
+
+    max_model_requests_per_turn=0 disables the cap. Single source for both the SDK
+    request_limit (orchestrate._execute_run) and the final-request wrap-up nudge
+    trigger (history_processors.wrap_up_on_final_request).
+    """
+    cap = llm.max_model_requests_per_turn
+    return cap if cap > 0 else None
+
+
 # ---------------------------------------------------------------------------
 # LlmSettings
 # ---------------------------------------------------------------------------

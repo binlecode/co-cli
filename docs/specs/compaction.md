@@ -201,7 +201,7 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Per-turn fields a
 | Field | Written by | Read by | Reset by |
 |---|---|---|---|
 | `compaction_applied_this_turn` | `commit_compaction` (sole writer; called by `proactive_window_processor`, `recover_overflow_history` both paths, `/compact`) | `main.py` (session-branching via `TurnResult.history_compacted`); `proactive_window_processor` (OTEL span attr only) | `reset_for_turn` |
-| `current_request_tokens_estimate` | `spill_largest_tool_results` (always — even fast paths); `_record_proactive_outcome` (after an applied L3 pass — writes the post-compaction size) | `proactive_window_processor` (OTEL only, no logic branch); `main.py` `_build_status_snapshot` (status-line context %) | `reset_for_turn`; `/new`, `/clear` |
+| `current_request_tokens_estimate` | `spill_largest_tool_results` (always — even fast paths); `commit_compaction` (every commit path — proactive, both recovery paths, `/compact` — writes the post-compaction size) | `proactive_window_processor` (OTEL only, no logic branch); `main.py` `_build_status_snapshot` (status-line context %) | `reset_for_turn`; `/new`, `/clear` |
 | `tool_call_limit_run_step`, `tool_calls_in_model_request` | `_CallSeamToolset.call_tool` per call | L0 cap check + consecutive-violation streak | `_CallSeamToolset.call_tool` on `ctx.run_step` change |
 | `compaction_skip_count` | `_summarization_gate_open` (block path), `_gated_summarize_or_none` (failure paths) | `_summarization_gate_open` (probe cadence) | `_gated_summarize_or_none` (success → 0) |
 | `consecutive_low_yield_proactive_compactions` | `proactive_window_processor` (++ on low yield) | proactive gate; anti-thrash static-marker demotion (`summarize=False`) | proactive on good savings; `_reset_thrash_state` from `recover_overflow_history`; `/compact` |
@@ -477,13 +477,15 @@ proactive_window_processor — full path
         consecutive_low_yield = 0      (re-arm)
     else
         consecutive_low_yield += 1     (steps toward thrash gate)
-    runtime.current_request_tokens_estimate = tokens_after   ← status-line write-back
-                ↑ L3 now writes the post-compaction size (was L2-spill-only); the
-                  status line reflects the compacted size after a proactive pass
+                ↑ tokens_after is computed here for the savings basis above; the
+                  status-line write-back itself happens in STEP 6 (commit_compaction)
 
   ─ STEP 6: commit (last step before return) ─────────────────────
-    commit_compaction(ctx, result)           ← sole writer of:
-      runtime.compaction_applied_this_turn  = True
+    commit_compaction(ctx, result)           ← sole writer of BOTH:
+      runtime.current_request_tokens_estimate = effective_request_tokens(result)
+      runtime.compaction_applied_this_turn    = True
+                ↑ centralized so every commit path — proactive, both recovery
+                  paths, /compact — records the post-compaction size, not just L3
     _record_proactive_outcome returns tokens_after to the processor.
 
   ─ STEP 7: no-progress guard (convergence) ──────────────────────
@@ -501,7 +503,7 @@ proactive_window_processor — full path
 
 All STEPs above live inside `proactive_window_processor` — the trigger gates (threshold + anti-thrash gate), trigger-check OTEL span, and the post-compaction policy (savings, status callback, OTEL execution attributes, thrash counter, commit) are co-located. STEP 4 calls `compact_messages` — the shared assembly primitive also used by recovery PATH 2 and `/compact`. STEPs 5–6 are bundled in the private helper `_record_proactive_outcome` (which returns `tokens_after`), proactive-only (recovery and `/compact` skip it: they don't track savings, don't fire the closing callback, and `/compact` resets the thrash counter unconditionally upstream). STEP 7's no-progress guard lives in `proactive_window_processor` itself, reading the returned `tokens_after` to decide escalation. See §2.6 for the assembly logic, enrichment helper, summarizer LLM call, and circuit breaker.
 
-**Single-writer atomicity.** STEPs 4 and 5 happen *before* STEP 6's `commit_compaction` call. If anything between STEP 4 and STEP 6 raises (e.g. `estimate_message_tokens` on malformed content, savings calc edge cases), the exception propagates with runtime untouched; `proactive_window_processor`'s bare `except` returns the original `messages` reference. `commit_compaction` itself computes the token estimate before any write so a token-estimator failure inside the helper also leaves runtime untouched. Partial-commit state cannot leak across turns.
+**Single-writer atomicity.** STEPs 4 and 5 happen *before* STEP 6's `commit_compaction` call, and STEP 5 no longer writes runtime — its `tokens_after` is local, used only for the savings basis, span attributes, and the no-progress return. If anything between STEP 4 and STEP 6 raises (e.g. `estimate_message_tokens` on malformed content, savings calc edge cases), the exception propagates with runtime untouched; `proactive_window_processor`'s bare `except` returns the original `messages` reference. `commit_compaction` itself computes the token estimate before its first write, so a token-estimator failure inside the helper also leaves runtime untouched. Partial-commit state cannot leak across turns.
 
 **Token counting:**
 - `estimate_message_tokens(messages)` — `total_chars // ESTIMATE_CHARS_PER_TOKEN` over text parts and JSON-serialized `ToolCallPart.args`. Args are included because `evict_old_tool_results` clears return content only, never call args. A `BinaryContent` part in a list-shaped `UserPromptPart` (image pixels — `image_view`'s native attach or a user-dragged image, see tui.md) counts as a **bounded flat image-token constant**, never its base64 byte length: a multi-MB image must not inflate the estimate (counting bytes would spuriously trip compaction, which cannot shrink the current tail image anyway). Counts the **message list only** — the static prefill floor is not in `messages`. Unchanged consumers: the L2 spill-loop accumulator and `dedup_tool_results`.
@@ -563,7 +565,7 @@ Deferred-tool reveals are **not** carried in the compacted history: a loaded too
 name lives in `runtime.revealed_tools` (set by `tool_view`), which compaction never
 touches — so reveals survive compaction for free, with no discovery-preservation step.
 
-**Runtime commit — `commit_compaction(ctx, result)`.** `compact_messages` returns without touching `runtime.*`. Every caller — including recovery PATH 1 (strip-only-fits, no LLM, no marker) — invokes `commit_compaction` as the last step before returning. `commit_compaction` is the **sole writer** of `compaction_applied_this_turn`; it has no other side effects.
+**Runtime commit — `commit_compaction(ctx, result)`.** `compact_messages` returns without touching `runtime.*`. Every caller — including recovery PATH 1 (strip-only-fits, no LLM, no marker) — invokes `commit_compaction` as the last step before returning. `commit_compaction` is the **sole writer** of `compaction_applied_this_turn` and, across every commit path, of the post-compaction `current_request_tokens_estimate` (the floor-inclusive `effective_request_tokens(result)`); it has no other side effects.
 
 | Caller | Calls | Extra side effects (all proactive-only) |
 |---|---|---|
@@ -768,7 +770,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | Symbol | Source | Contract |
 |---|---|---|
 | `compact_messages(ctx, messages, bounds, focus, summarize=True) -> tuple[list[ModelMessage], str \| None]` | `co_cli/context/compaction.py` | Async — slices messages by `(head_end, tail_start, dropped_count)`, runs the gated summarizer (skipped when `summarize=False` → static marker, no LLM), assembles `head \| marker \| [todo_snapshot] \| tail`; does NOT write runtime |
-| `commit_compaction(ctx, result) -> None` | `co_cli/context/compaction.py` | Sole writer of `compaction_applied_this_turn`; no other side effects |
+| `commit_compaction(ctx, result) -> None` | `co_cli/context/compaction.py` | Sole writer of `compaction_applied_this_turn` and the post-compaction `current_request_tokens_estimate` (`effective_request_tokens(result)`); no other side effects |
 
 ### Compaction entry points
 

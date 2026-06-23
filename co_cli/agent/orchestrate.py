@@ -72,12 +72,13 @@ _LENGTH_RETRY_BOOST = 2
 
 assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for retry to terminate"
 
-from co_cli.config.llm import cap_output_tokens
+from co_cli.config.llm import cap_output_tokens, resolve_request_limit
 from co_cli.config.tuning import (
     MAX_TOOL_CALLS_PER_MODEL_REQUEST,
     TOOL_CAP_HARD_STOP_CONSECUTIVE,
 )
 from co_cli.context.compaction import is_context_overflow, recover_overflow_history
+from co_cli.context.history_processors import drop_wrap_up_messages
 from co_cli.context.timeouts import LLM_RUN_TIMEOUT_SECS
 from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt
@@ -370,15 +371,6 @@ def _handle_stream_event(
     return None
 
 
-def _resolve_request_limit(deps: CoDeps) -> int | None:
-    """Turn-cumulative model-request cap for the SDK's UsageLimits, or None to disable.
-
-    max_model_requests_per_turn=0 disables the cap.
-    """
-    cap = deps.config.llm.max_model_requests_per_turn
-    return cap if cap > 0 else None
-
-
 async def _execute_run(
     turn_state: _TurnState,
     agent: SessionAgent,
@@ -401,7 +393,7 @@ async def _execute_run(
     Stream rendering policy (buffering, flush, thinking gating) is owned by
     StreamRenderer. Tool display metadata is owned by tool_display.
     """
-    request_limit = _resolve_request_limit(deps)
+    request_limit = resolve_request_limit(deps.config.llm)
     result: SessionRunResult | None = None
     renderer = StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)
     _t0 = time.monotonic()
@@ -571,7 +563,7 @@ def _check_turn_caps(
 
 
 def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
-    msgs = (
+    msgs = drop_wrap_up_messages(
         turn_state.latest_result.all_messages()
         if turn_state.latest_result
         else turn_state.current_history
@@ -786,8 +778,10 @@ def _history_after_successful_run(
     nudges drop out structurally.
     """
     if turn_state.reformulation_clean_history is None:
-        return latest_result.all_messages()
-    return [*turn_state.reformulation_clean_history, *latest_result.new_messages()]
+        return drop_wrap_up_messages(latest_result.all_messages())
+    return drop_wrap_up_messages(
+        [*turn_state.reformulation_clean_history, *latest_result.new_messages()]
+    )
 
 
 async def _attempt_overflow_recovery(

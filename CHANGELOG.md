@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.448]
+
+Add a final-request wrap-up nudge so a turn that hits the model-request cap ends with a real answer instead of a cold-truncated tool call, and centralize the post-compaction size write-back.
+
+- **Wrap-up nudge on the last allowed request** — new `wrap_up_on_final_request` history processor (`co_cli/context/history_processors.py`, registered in `orchestrator.py`) splices a one-shot synthetic user message when `ctx.usage.requests == limit - 1`, telling the model to produce its final answer rather than spend its last step on a tool call the SDK would abort. The nudge is stripped from persisted history by `drop_wrap_up_messages` on every turn-result return path (`_history_after_successful_run`, `_build_error_turn_result`). The request-cap resolver moves to `config/llm.py` as `resolve_request_limit` — one source for both the SDK `UsageLimits` and the nudge trigger.
+- **Compaction estimate write centralized in `commit_compaction`** — `current_request_tokens_estimate` was written only by `_record_proactive_outcome`, so the overflow-recovery escalation (and the `/compact` command) left the field at its stale pre-compaction value after shrinking history, feeding a wrong number to the status-line context % and the `compaction.request_tokens_estimate` span attribute. `commit_compaction` (`co_cli/context/compaction.py`) is now the sole writer of both `compaction_applied_this_turn` and the floor-inclusive post-compaction `effective_request_tokens(result)`, so every commit path — proactive, both recovery paths, `/compact` — stays consistent.
+
 ## [0.8.447]
 
 Fix the safety-prompt streak counters mis-ordering parallel tool batches, which produced spurious doom-loop / shell-reflection warnings.
