@@ -70,15 +70,18 @@ class MCPToolsetEntry:
     ``server`` is a ``_SanitizingMCPServer`` wrapping the raw MCPServer (before
     ``approval_required()`` wrapping) so ``list_tools()`` returns sanitized schemas
     and can be called directly without walking the wrapper chain.
-    ``is_approval_required``, ``prefix``, and ``timeout_seconds`` are recorded at build time;
-    discovery reads them without inspecting wrapper topology.
+    ``is_approval_required``, ``prefix``, and ``connect_timeout_seconds`` are recorded at
+    build time; connection and discovery read them without inspecting wrapper topology.
+    ``connect_timeout_seconds`` bounds connection/discovery (pydantic-ai ``timeout``).
+    The per-call response bound (``call_timeout_seconds`` → pydantic-ai ``read_timeout``)
+    is applied by the SDK from the constructed server, so it is not re-recorded here.
     """
 
     toolset: AbstractToolset
     server: Any  # MCPServer subclass — lazily imported; avoids top-level pydantic_ai.mcp import
     is_approval_required: bool
     prefix: str
-    timeout_seconds: float
+    connect_timeout_seconds: float
 
 
 def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
@@ -92,11 +95,17 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
         if cfg.url:
             if cfg.url.rstrip("/").endswith("/sse"):
                 mcp_server = MCPServerSSE(
-                    cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout_seconds
+                    cfg.url,
+                    tool_prefix=cfg.prefix or name,
+                    timeout=cfg.connect_timeout_seconds,
+                    read_timeout=cfg.call_timeout_seconds,
                 )
             else:
                 mcp_server = MCPServerStreamableHTTP(
-                    cfg.url, tool_prefix=cfg.prefix or name, timeout=cfg.timeout_seconds
+                    cfg.url,
+                    tool_prefix=cfg.prefix or name,
+                    timeout=cfg.connect_timeout_seconds,
+                    read_timeout=cfg.call_timeout_seconds,
                 )
         else:
             if cfg.command is None:
@@ -104,12 +113,12 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
                     "MCP server %r: command required when url is not set — skipped", name
                 )
                 continue
-            env = dict(cfg.env) if cfg.env else {}
             mcp_server = MCPServerStdio(
                 cfg.command,
                 args=cfg.args,
-                timeout=cfg.timeout_seconds,
-                env=env or None,
+                timeout=cfg.connect_timeout_seconds,
+                read_timeout=cfg.call_timeout_seconds,
+                env=cfg.env or None,
                 tool_prefix=cfg.prefix or name,
             )
         is_approval_required = cfg.approval == "ask"
@@ -127,7 +136,7 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
                 server=sanitizing_server,
                 is_approval_required=is_approval_required,
                 prefix=cfg.prefix or name,
-                timeout_seconds=cfg.timeout_seconds,
+                connect_timeout_seconds=cfg.connect_timeout_seconds,
             )
         )
     return entries
@@ -138,7 +147,7 @@ async def _discover_one(
 ) -> tuple[list[tuple[str, ToolInfo]], str | None]:
     prefix = entry.prefix
     try:
-        async with asyncio.timeout(entry.timeout_seconds):
+        async with asyncio.timeout(entry.connect_timeout_seconds):
             tools = await entry.server.list_tools()
         hits: list[tuple[str, ToolInfo]] = []
         for t in tools:

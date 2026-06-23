@@ -178,7 +178,7 @@ build_orchestrator(spec, deps) -> SessionAgent:          # SessionAgent = Agent[
 
 **Orchestrator run** (`run_turn` → `_execute_run`): streams via `async with agent.run_stream_events(...) as stream:` then `async for event in stream:` — the context-manager form guarantees stream cleanup on cancellation (required since 1.92; direct iteration is deprecated). Uses `usage_limits=UsageLimits(request_limit=resolve_request_limit(deps.config.llm))` — the turn-cumulative model-request cap (`max_model_requests_per_turn`, default 40; `0` resolves to `None` = unbounded). This is the turn-spanning circuit breaker (see [core-loop.md](core-loop.md) §1): co threads one `RunUsage` across all runs so the SDK's before-request check bounds the whole turn and fires mid-run. The sibling `metadata={"request_limit": …}` mirrors the resolved value for observability. Stream events (`PartStart/Delta/End`, `FunctionToolCall/ResultEvent`, `FinalResultEvent`, `AgentRunResultEvent`) drive rendering; the final `AgentRunResult.output` (str or `DeferredToolRequests`) drives the approval branch.
 
-**Task agents** (`build_task_agent` + `run_standalone`): a fresh `FunctionToolset` (selected tools, all `requires_approval=False`) wrapped in its own `_CallSeamToolset` for span/cap/spill parity. `output_type = spec.output_type` (genuinely variable per spec — stays `Agent[CoDeps, Any]`). Run via `agent.run(prompt, usage_limits=UsageLimits(request_limit=budget))` — task agents keep a **real** request limit (unlike the orchestrator).
+**Task agents** (`build_task_agent` + `run_standalone`): a fresh `FunctionToolset` (selected tools, all `requires_approval=False`) wrapped in its own `_CallSeamToolset` for span/cap/spill parity. `output_type = spec.output_type` (genuinely variable per spec — stays `Agent[CoDeps, Any]`). Run via `agent.run(prompt, usage_limits=UsageLimits(request_limit=budget))` — task agents keep a **real** request limit (unlike the orchestrator). The budget resolves as `budget if budget else spec.default_budget` (`run.py`), so `0` and `None` both fall back to the spec default — task agents have **no unbounded path**, deliberately unlike the orchestrator where `0` resolves to `None` (§2.5, §3). The `0`-as-falsy sentinel diverges from `resolve_request_limit`'s `0`-as-unbounded.
 
 ### 2.6 Streaming + JSON repair — `SurrogateRecoveryModel` (`llm/surrogate_recovery_model.py`)
 
@@ -264,7 +264,7 @@ _build_mcp_toolsets(config):
         raw = MCPServerSSE | MCPServerStreamableHTTP | MCPServerStdio   # transport by config shape
         sanitizing = _SanitizingMCPServer(raw)                          # sanitize inputSchema on list_tools()
         inner = sanitizing.approval_required() if is_approval_required else sanitizing
-        record MCPToolsetEntry(toolset=inner, server=sanitizing, is_approval_required, prefix, timeout_seconds)
+        record MCPToolsetEntry(toolset=inner, server=sanitizing, is_approval_required, prefix, connect_timeout_seconds)   # call_timeout_seconds → read_timeout, held by the server
 
 build_mcp_entries: wrap each entry.toolset in _SequentialMCPToolset(toolset, tool_catalog)   # patch sequential
 discover_mcp_tools: connect all servers concurrently; list_tools(); register names as DEFERRED ToolInfo
@@ -294,13 +294,13 @@ discover_mcp_tools: connect all servers concurrently; list_tools(); register nam
 | `llm.judge_model` | `config/llm.py` | Builds a distinct judge model handle |
 | reasoning/noreason `ModelSettings` | `config/llm.py` | `LlmModel.settings` / `.settings_noreason` |
 | `tool_retries` | `config/core.py` | `Agent(tool_retries=…)` and per-tool `ModelRetry` budget |
-| `mcp_servers` (url / command / args / env / prefix / approval / timeout_seconds) | `config/core.py` | `_build_mcp_toolsets` transport + `approval_required()` + discovery timeout |
+| `mcp_servers` (url / command / args / env / prefix / approval / connect_timeout_seconds / call_timeout_seconds) | `config/core.py` | `_build_mcp_toolsets` transport + `approval_required()` + discovery timeout (`connect`, pydantic-ai `timeout`) + per-call response timeout (`call`, pydantic-ai `read_timeout`) |
 | HTTP timeouts (connect/read/write/pool) | `llm/factory.py` constants | Ollama `httpx.AsyncClient` |
 | `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `TOOL_CAP_HARD_STOP_CONSECUTIVE` | `config/tuning.py` | Call-seam cap + hard-stop |
 | `llm.max_model_requests_per_turn` | `config/llm.py` | Orchestrator `UsageLimits(request_limit=…)` via `resolve_request_limit` (40; `0` → unbounded); wrap-up nudge trigger (§2.13) |
 | `SPILL_THRESHOLD_CHARS` | `config/tuning.py` | MCP-result spill threshold default |
 
-Orchestrator `usage_limits` **is** config-driven — `request_limit` resolves from `max_model_requests_per_turn` via `resolve_request_limit` (default 40; `0` → `None` = unbounded). Task-agent `request_limit` comes from `spec.default_budget` or a per-call override.
+Orchestrator `usage_limits` **is** config-driven — `request_limit` resolves from `max_model_requests_per_turn` via `resolve_request_limit` (default 40; `0` → `None` = unbounded). Task-agent `request_limit` comes from `spec.default_budget` or a per-call override, resolved as `budget if budget else spec.default_budget` — `0`/`None` both fall back to the default (no unbounded path), an intentional asymmetry with the orchestrator's `0 → None`.
 
 ---
 

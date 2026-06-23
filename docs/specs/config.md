@@ -284,7 +284,8 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 | `command` | `None` | Executable for stdio transport (e.g. `npx`) |
 | `url` | `None` | Remote URL for HTTP transport; mutually exclusive with `command` |
 | `args` | `[]` | CLI arguments (stdio only) |
-| `timeout_seconds` | `5` | Connect timeout in seconds (1–60) |
+| `connect_timeout_seconds` | `5` | Connection/tool-discovery timeout in seconds (1–60); does not bound tool-call execution |
+| `call_timeout_seconds` | `120` | Per-tool-call response timeout in seconds (1–600); mirrors the 120s model-progress stall window |
 | `env` | `{}` | Extra env vars for subprocess (stdio only) |
 | `approval` | `"ask"` | Tool approval policy: `ask` or `auto` |
 | `prefix` | `None` | Optional tool name prefix for this server |

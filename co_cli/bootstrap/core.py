@@ -399,7 +399,7 @@ async def create_deps(
         mcp_entries = build_mcp_entries(config, tool_catalog)
         for entry in mcp_entries:
             try:
-                async with asyncio.timeout(entry.timeout_seconds):
+                async with asyncio.timeout(entry.connect_timeout_seconds):
                     await stack.enter_async_context(entry.toolset)
                 connected.append(entry)
             except Exception as e:

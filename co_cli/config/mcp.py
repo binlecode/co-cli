@@ -28,7 +28,18 @@ class MCPServerSettings(BaseModel):
     args: list[str] = Field(
         default_factory=list, description="Command-line arguments (stdio only)"
     )
-    timeout_seconds: int = Field(default=5, ge=1, le=60)
+    connect_timeout_seconds: int = Field(
+        default=5,
+        ge=1,
+        le=60,
+        description="Max seconds to wait for connection/tool-discovery (server init); does not bound tool-call execution.",
+    )
+    call_timeout_seconds: int = Field(
+        default=120,
+        ge=1,
+        le=600,
+        description="Max seconds to wait for a single tool call to respond. Mirrors the model-progress stall window (LLM_RUN_TIMEOUT_SECS=120) so a tool call never blocks the run longer than model generation would.",
+    )
     env: dict[str, str] = Field(
         default_factory=dict,
         description="Extra environment variables passed to subprocess (stdio only)",
