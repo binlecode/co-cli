@@ -2,7 +2,7 @@
 
 Production paths:
   co_cli/config/llm.py              — LlmSettings.max_model_requests_per_turn, resolve_request_limit
-  co_cli/agent/orchestrate.py       — _check_turn_caps, run_turn
+  co_cli/agent/orchestrate.py       — _check_turn_caps, _last_assistant_text, run_turn
   co_cli/agent/_instructions.py     — wrap_up_prompt (final-request wrap-up nudge)
 """
 
@@ -19,7 +19,7 @@ from pydantic_ai.toolsets import FunctionToolset
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.agent._instructions import WRAP_UP_TEXT, wrap_up_prompt
-from co_cli.agent.orchestrate import run_turn
+from co_cli.agent.orchestrate import TOOL_CAP_NO_ANSWER_TEXT, run_turn
 from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.config.core import load_config
 from co_cli.config.llm import MAX_MODEL_REQUESTS_PER_TURN, LlmSettings
@@ -529,8 +529,9 @@ def _make_hard_stop_no_answer_agent() -> Agent:
 
 
 @pytest.mark.asyncio
-async def test_hard_stop_without_answer_errors() -> None:
-    """A hard-stop whose run produced no final text answer must still return error."""
+async def test_hard_stop_without_answer_returns_canned_message() -> None:
+    """A hard-stop whose run produced no text anywhere returns the canned message,
+    never error/None — the cap is a circuit breaker but the turn always closes gracefully."""
     deps = _make_capped_deps(max_model_requests=90)
     agent = _make_hard_stop_no_answer_agent()
     frontend = HeadlessFrontend(approval_response="y")
@@ -543,8 +544,80 @@ async def test_hard_stop_without_answer_errors() -> None:
         frontend=frontend,
     )
 
-    assert turn.outcome == "error", f"expected error outcome; got {turn.outcome!r}"
-    assert turn.output is None
+    assert turn.outcome == "continue", f"expected graceful close; got {turn.outcome!r}"
+    assert turn.output == TOOL_CAP_NO_ANSWER_TEXT
+    assert any("Tool-call cap exceeded" in s for s in frontend.statuses), (
+        f"status must mention 'Tool-call cap exceeded'; got statuses: {frontend.statuses}"
+    )
+
+
+def _make_hard_stop_partial_text_agent() -> Agent:
+    """Agent that hard-stops with no usable final output but earlier visible text.
+
+    Protocol:
+      model call 1    — streams text "partial progress" then MAX_TOOL_CALLS+1 noop calls
+      model calls 2-3 — each streams MAX_TOOL_CALLS+1 noop calls (hard-stop latches)
+      model call 4    — approval-gated call → DeferredToolRequests (no usable string output)
+    The salvage must surface "partial progress" from call 1's response rather than the
+    canned fallback.
+    """
+    call_count = {"n": 0}
+    _OVER = MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1
+
+    async def stream_fn(
+        messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        call_count["n"] += 1
+        n = call_count["n"]
+        if n == 1:
+            yield "partial progress"
+        if 1 <= n <= 3:
+            for i in range(_OVER):
+                yield {
+                    i: DeltaToolCall(
+                        name="noop", json_args=f'{{"x":{i}}}', tool_call_id=f"c{n}x{i}"
+                    )
+                }
+        else:
+            yield {0: DeltaToolCall(name="needs_approval", json_args="{}", tool_call_id=f"ap{n}")}
+
+    toolset: FunctionToolset = FunctionToolset()
+
+    async def needs_approval(ctx: RunContext[CoDeps]) -> str:
+        return "approved"
+
+    async def noop(ctx: RunContext[CoDeps], x: int) -> str:
+        return f"noop {x}"
+
+    toolset.add_function(needs_approval, requires_approval=True)
+    toolset.add_function(noop, requires_approval=False)
+
+    return Agent(
+        FunctionModel(stream_function=stream_fn),
+        deps_type=CoDeps,
+        output_type=[str, DeferredToolRequests],
+        toolsets=[_CallSeamToolset(toolset)],
+    )
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_salvages_partial_text() -> None:
+    """A hard-stop with no usable final output surfaces the most recent assistant text
+    from history (not the canned fallback, not error/None)."""
+    deps = _make_capped_deps(max_model_requests=90)
+    agent = _make_hard_stop_partial_text_agent()
+    frontend = HeadlessFrontend(approval_response="y")
+
+    turn = await run_turn(
+        agent=agent,
+        user_input="hard stop partial text",
+        deps=deps,
+        message_history=[],
+        frontend=frontend,
+    )
+
+    assert turn.outcome == "continue", f"expected graceful close; got {turn.outcome!r}"
+    assert turn.output == "partial progress"
     assert any("Tool-call cap exceeded" in s for s in frontend.statuses), (
         f"status must mention 'Tool-call cap exceeded'; got statuses: {frontend.statuses}"
     )

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.451]
+
+Close the consecutive tool-call cap gracefully — it never returns an empty error result, salvaging the model's last visible answer instead of discarding it.
+
+- **Consecutive-cap hard-stop salvages partial work** — `_check_turn_caps` (`co_cli/agent/orchestrate.py`) previously fell to `_build_error_turn_result` (`outcome="error"`, `output=None`) whenever the capped run had no usable final string, throwing away any assistant text already in history. It now surfaces the most recent assistant text via a new `_last_assistant_text` scan, or a deterministic `TOOL_CAP_NO_ANSWER_TEXT` message when there is genuinely none, always returning `outcome="continue"`. This is the peer-convergent behavior (hermes/codex/openclaw all return what already exists at a cap ceiling); the cap stays a hard circuit breaker, but the turn always closes with a usable result and zero extra LLM calls. `_build_error_turn_result` is unchanged for the genuinely-error callers (cumulative cap, API/timeout errors).
+- **Tests**: `tests/test_flow_model_request_cap.py` — `test_hard_stop_without_answer_returns_canned_message` (no text anywhere → canned message + `continue`) and `test_hard_stop_salvages_partial_text` (earlier assistant text surfaced, not the fallback).
+
 ## [0.8.450]
 
 Move the final-request wrap-up nudge from a spliced history message to a dynamic instruction, and fix the length-continuation retry duplicating the user prompt.

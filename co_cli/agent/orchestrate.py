@@ -284,8 +284,9 @@ class _StallTimer:
     every stream event: a fresh window is armed on each event seen with zero tools
     outstanding, and the timer is disarmed while one or more tools execute (no stream
     events flow between a tool call and its result, so a long legit tool is bounded
-    by its own timeout, not by this loop). Parallel tool calls stay disarmed until
-    the outstanding count returns to zero.
+    by its own timeout, not by this loop — for MCP tools that bound is the per-server
+    call_timeout_seconds, plumbed to pydantic-ai read_timeout, default 120s). Parallel
+    tool calls stay disarmed until the outstanding count returns to zero.
     """
 
     def __init__(self, timeout_cm: asyncio.Timeout, loop: asyncio.AbstractEventLoop) -> None:
@@ -518,6 +519,27 @@ async def _run_approval_loop(
     deps.runtime.resume_tool_names = None
 
 
+TOOL_CAP_NO_ANSWER_TEXT = (
+    "Stopped after hitting the tool-call cap before producing an answer. "
+    "The work so far is in history — re-ask or narrow the request."
+)
+
+
+def _last_assistant_text(messages: list[ModelMessage]) -> str:
+    """Return the most recent non-empty assistant text in a message list, or ''.
+
+    Scans backwards for the latest ModelResponse whose TextParts join to non-empty
+    text. Used to salvage the model's last visible answer when a cap terminates the
+    turn without a usable final output.
+    """
+    for msg in reversed(messages):
+        if isinstance(msg, ModelResponse):
+            text = "".join(p.content for p in msg.parts if isinstance(p, TextPart)).strip()
+            if text:
+                return text
+    return ""
+
+
 def _check_turn_caps(
     turn_state: _TurnState,
     deps: CoDeps,
@@ -528,8 +550,10 @@ def _check_turn_caps(
     On a hard-stop the SDK run has already completed, so the model's final answer
     (if it produced one) sits in ``latest_result.output``. Surface that answer as a
     ``continue`` turn rather than discarding it — the status line already tells the
-    user the loop was capped. Only fall back to an error result when there is no
-    usable answer (output is ``DeferredToolRequests``, empty, or absent).
+    user the loop was capped. When there is no usable final output, salvage the most
+    recent assistant text from history (or a deterministic fallback message) and still
+    return ``continue`` — the cap is a circuit breaker, but we never discard usable
+    work or return an empty error.
 
     The turn-cumulative model-request cap is enforced mid-run by the SDK
     (``request_limit`` in ``_execute_run``) and surfaces as ``UsageLimitExceeded``
@@ -557,8 +581,20 @@ def _check_turn_caps(
             outcome="continue",
             model_requests=turn_state.model_requests,
         )
-    turn_state.outcome = "error"
-    return _build_error_turn_result(turn_state)
+    messages = latest_result.all_messages() if latest_result else turn_state.current_history
+    output = _last_assistant_text(messages) or TOOL_CAP_NO_ANSWER_TEXT
+    if latest_result is not None:
+        turn_state.current_history = _history_after_successful_run(turn_state, latest_result)
+    if not turn_state.latest_streamed_text:
+        frontend.on_final_output(output)
+    return TurnResult(
+        messages=turn_state.current_history,
+        output=output,
+        usage=turn_state.latest_usage,
+        interrupted=False,
+        outcome="continue",
+        model_requests=turn_state.model_requests,
+    )
 
 
 def _build_error_turn_result(turn_state: _TurnState) -> TurnResult:
