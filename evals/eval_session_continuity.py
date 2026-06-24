@@ -125,6 +125,7 @@ async def case_w2_d_resume_helpers_rehydrate(
                 case_id=case_id,
                 turn_index=0,
                 user_input=seed_input,
+                prior_message_count=len(history),
                 run_turn_callable=lambda: run_turn(
                     agent=agent,
                     user_input=seed_input,
@@ -181,6 +182,7 @@ async def case_w2_d_resume_helpers_rehydrate(
                     case_id=case_id,
                     turn_index=1,
                     user_input=followup_input,
+                    prior_message_count=len(prior_messages),
                     run_turn_callable=lambda: run_turn(
                         agent=agent,
                         user_input=followup_input,
@@ -307,6 +309,7 @@ async def case_w2_e_compact_replaces_with_summary(
                 case_id=case_id,
                 turn_index=0,
                 user_input=marker_input,
+                prior_message_count=len(history),
                 run_turn_callable=lambda: run_turn(
                     agent=agent,
                     user_input=marker_input,
@@ -328,6 +331,7 @@ async def case_w2_e_compact_replaces_with_summary(
                     case_id=case_id,
                     turn_index=i + 1,
                     user_input=user_input,
+                    prior_message_count=len(history),
                     run_turn_callable=lambda u=user_input, h=history: run_turn(
                         agent=agent,
                         user_input=u,
@@ -383,6 +387,7 @@ async def case_w2_e_compact_replaces_with_summary(
                     case_id=case_id,
                     turn_index=target_turns + 1,
                     user_input=followup_input,
+                    prior_message_count=len(post_compact_history),
                     run_turn_callable=lambda: run_turn(
                         agent=agent,
                         user_input=followup_input,

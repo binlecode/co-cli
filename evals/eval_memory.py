@@ -220,6 +220,7 @@ async def case_w3_g_forget_propagates_to_recall(
                 case_id=case_id,
                 turn_index=0,
                 user_input=t0_input,
+                prior_message_count=len(history),
                 run_turn_callable=lambda: run_turn(
                     agent=agent,
                     user_input=t0_input,
@@ -250,6 +251,7 @@ async def case_w3_g_forget_propagates_to_recall(
                     case_id=case_id,
                     turn_index=1,
                     user_input=t1_input,
+                    prior_message_count=len(history),
                     run_turn_callable=lambda: run_turn(
                         agent=agent,
                         user_input=t1_input,
@@ -277,6 +279,7 @@ async def case_w3_g_forget_propagates_to_recall(
                     case_id=case_id,
                     turn_index=2,
                     user_input=t2_input,
+                    prior_message_count=len(history),
                     run_turn_callable=lambda: run_turn(
                         agent=agent,
                         user_input=t2_input,

@@ -240,6 +240,7 @@ async def _drive_turns(
                 case_id=case_id,
                 turn_index=i,
                 user_input=user_input,
+                prior_message_count=prior_len,
                 run_turn_callable=(
                     lambda h=history, ui=user_input: run_turn(
                         agent=agent,
@@ -709,6 +710,7 @@ async def _case_w11_d_plan_skill_todo_execution(
                     case_id=case_id,
                     turn_index=i,
                     user_input=user_input,
+                    prior_message_count=prior_len,
                     run_turn_callable=(
                         lambda h=history, ui=user_input: run_turn(
                             agent=agent,

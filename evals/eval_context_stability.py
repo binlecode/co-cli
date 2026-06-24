@@ -425,6 +425,7 @@ async def case_cs_a_text_pressure_bounded(
                         case_id=case_id,
                         turn_index=i,
                         user_input=user_input,
+                        prior_message_count=len(history),
                         run_turn_callable=lambda u=user_input, h=history: run_turn(
                             agent=agent,
                             user_input=u,
@@ -562,6 +563,7 @@ async def case_cs_a_text_pressure_bounded(
                     case_id=case_id,
                     turn_index=_NUM_TURNS,
                     user_input=_COHERENCE_PROBE_PROMPT,
+                    prior_message_count=len(history),
                     run_turn_callable=lambda: run_turn(
                         agent=agent,
                         user_input=_COHERENCE_PROBE_PROMPT,
@@ -903,6 +905,7 @@ async def case_cs_c_tool_spill_precedes_summarize(
                         case_id=case_id,
                         turn_index=index,
                         user_input=user_input,
+                        prior_message_count=len(history),
                         run_turn_callable=lambda u=user_input, h=history: run_turn(
                             agent=agent,
                             user_input=u,

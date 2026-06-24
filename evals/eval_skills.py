@@ -185,6 +185,7 @@ async def case_w4_a_dispatch_user_skill(
                     case_id=case_id,
                     turn_index=0,
                     user_input=outcome.delegated_input,
+                    prior_message_count=0,
                     run_turn_callable=lambda: run_turn(
                         agent=agent,
                         user_input=outcome.delegated_input,
@@ -345,6 +346,7 @@ async def case_w4_b_skill_selection(
                     case_id=case_id,
                     turn_index=index,
                     user_input=prompt,
+                    prior_message_count=0,
                     run_turn_callable=lambda p=prompt: run_turn(
                         agent=agent,
                         user_input=p,

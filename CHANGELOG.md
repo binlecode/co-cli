@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.481]
+
+Fix the eval-trace `record_turn` slicing bug that made per-prompt eval loops (fresh `message_history=[]` under one `case_id` with an incrementing `turn_index`) silently drop the turn's own tool calls, producing false-negative verdicts (surfaced by `eval_skills.py` W4.B).
+
+- **Root fix at the contract boundary** (`evals/_trace.py`) — `record_turn` now takes a required `prior_message_count: int` and slices `messages[prior_message_count:]`. The module-level `_PRIOR_MSG_COUNT` cache and the `turn_index==0` reset branch are removed. The cut point is the caller's exact knowledge (`0` for fresh, `len(history)` for continuation), never inferred from message-count shape — a rejected heuristic that could silently fail a fresh prompt longer than its predecessor.
+- **All 22 callers updated** (12 `evals/eval_*.py` files) — each passes `len(<the message_history it threads into run_turn>)`, reproducing the prior continuation slice exactly while fixing fresh-history loops. Audit confirmed `eval_skills.py` W4.B was the sole fresh-history-in-loop bug site.
+- **New functional test** (`tests/test_eval_trace_slicing.py`) — over real `TurnResult` + pydantic-ai messages: a fresh turn (`prior_message_count=0`) captures its own `skill_view` call; a continuation turn records only its new tail, not the prior turn's tool call.
+
 ## [0.8.480]
 
 Reinforce deliberation discipline (plan-before-mutate + ask-when-unsure) and redesign the W11.A/B eval cases to evaluate it from first principles.

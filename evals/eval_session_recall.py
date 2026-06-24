@@ -160,6 +160,7 @@ async def case_sr_a_concept_expansion(
                 case_id=case_id,
                 turn_index=0,
                 user_input=user_input,
+                prior_message_count=0,
                 run_turn_callable=lambda: run_turn(
                     agent=agent,
                     user_input=user_input,

@@ -33,12 +33,6 @@ from co_cli.observability.tracing import current_trace_id
 _INLINE_MAX_CHARS = 4096
 _THINKING_ENV = "EVAL_VERBOSE_TRACE"
 
-_PRIOR_MSG_COUNT: dict[str, int] = {}
-"""Per-case running count of messages already traced, so each ``TurnTrace`` records
-only THIS turn's new messages. ``run_turn`` returns ``all_messages()`` (cumulative
-history), so without slicing, turn N's ``assistant_text``/``tool_calls`` would include
-turns 0..N-1. Keyed by ``case_id``; reset when ``turn_index == 0`` (new case)."""
-
 
 @dataclass
 class ToolCallRecord:
@@ -199,6 +193,7 @@ async def record_turn(
     case_id: str,
     turn_index: int,
     user_input: str,
+    prior_message_count: int,
     run_turn_callable: Any,
     case_dir_path: Path,
     agent: Any | None = None,
@@ -207,6 +202,14 @@ async def record_turn(
 
     ``run_turn_callable`` is a zero-arg async callable returning a
     ``TurnResult`` (the eval composes the kwargs it needs and passes a thunk).
+
+    ``run_turn`` returns the cumulative ``all_messages()`` — the history passed
+    in plus this turn's new messages. To record only THIS turn's messages, the
+    caller supplies ``prior_message_count`` = the number of messages it handed
+    ``run_turn`` as ``message_history`` (``0`` for a fresh turn, ``len(history)``
+    for a continuation). The recorder slices ``messages[prior_message_count:]``.
+    The cut point is the caller's exact knowledge, never inferred — a fresh
+    ``message_history=[]`` turn must pass ``0`` or its own messages are dropped.
 
     Returns ``(turn_result, turn_trace)``. Always appends one line to
     ``case_<id>.jsonl`` even on exception — caller can inspect both the
@@ -244,9 +247,7 @@ async def record_turn(
             trace_ids.append(tid)
         if turn_result is not None:
             msgs = getattr(turn_result, "messages", None) or []
-            prior = 0 if turn_index == 0 else _PRIOR_MSG_COUNT.get(case_id, 0)
-            new_msgs = msgs[prior:]
-            _PRIOR_MSG_COUNT[case_id] = len(msgs)
+            new_msgs = msgs[prior_message_count:]
             assistant_text, tool_calls, thinking_raw = _extract_messages(new_msgs)
             if not assistant_text:
                 assistant_text = response_text(turn_result)
