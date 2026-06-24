@@ -48,6 +48,16 @@ Call `skill_create(name=<task-type-name>, content=<body>)`. Any advisory finding
 
 On success, `refresh_skills` makes the skill immediately dispatchable and searchable — confirm with `skill_view(<name>)`.
 
+## Quality failures
+
+Name the failure mode before you commit a skill — these are the five ways a freshly minted skill goes wrong:
+
+- **Premature Completion** — declaring the skill done before the body actually captures the procedure end-to-end.
+- **Duplication** — minting a skill that overlaps one already in the `<available_skills>` manifest.
+- **Sediment** — bloating an existing skill with accreted low-value lines instead of editing for value.
+- **Sprawl** — an oversized, multi-purpose skill that should be split into narrower ones.
+- **No-op Prose** — lines that don't change agent behavior versus the default the model would produce anyway.
+
 ## Rules
 
 - Search before creating: scan the `<available_skills>` manifest first to avoid duplicates.
@@ -55,3 +65,4 @@ On success, `refresh_skills` makes the skill immediately dispatchable and search
 - Don't create for one-offs — the bar is repeated use of the same procedure.
 - R1–R3 must pass before write; R4 is advisory.
 - One procedure per skill: don't fold multiple workflows into one body.
+- Subtraction: if a line doesn't change agent behavior versus the default, cut it.

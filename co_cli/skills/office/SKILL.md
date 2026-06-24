@@ -43,7 +43,7 @@ The command writes markdown to stdout. The structure markers depend on the forma
 
 ## Step 4 — Handle the result
 
-- **Normal output** (markdown with the markers above) → answer the user's question and cite the **slide N**, the **sheet name**, or the docx **heading / quoted phrase** the fact came from.
+- **Normal output** (markdown with the markers above) → answer the user's question and cite the **slide N**, the **sheet name**, or the docx **heading / quoted phrase** the fact came from. Ground every claim in the extracted text — never answer from memory or from a partial / capped extraction; if the extraction is incomplete (e.g. a truncated sheet), say so rather than filling the gap.
 - **A non-zero exit with an error line** → relay the cause plainly:
   - `File not found:` → the path is wrong; re-check with `file_search`.
   - `Unsupported file type for office extraction` → not a `.docx`/`.pptx`/`.xlsx`; route per Step 2.

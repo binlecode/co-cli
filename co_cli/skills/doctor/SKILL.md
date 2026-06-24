@@ -27,11 +27,13 @@ Consider:
 - Is a fallback active, and does it affect the current task?
 - Is the issue environmental (missing key, unreachable server) or a configuration problem?
 
+**Red Flag — STOP before you recommend.** If the findings contradict each other, OR several fallbacks are active at once, the evidence is too thin to name a single cause. Do not report a fix yet. Spend the ONE allowed follow-up probe (Phase 1) to disambiguate FIRST, then diagnose. Naming a likely issue on contradictory or many-fallback evidence is a guess, not a diagnosis.
+
 ## Phase 3 — Report
 
 Respond with this exact structure:
 
-**Likely issue:** What is wrong or degraded — be specific (e.g. "Gemini API key not set", "knowledge index offline — grep fallback active", "MCP server `notes` binary not found").
+**Likely issue:** `severity: info | warning | error` — then what is wrong or degraded, specifically (e.g. "Gemini API key not set", "knowledge index offline — grep fallback active", "MCP server `notes` binary not found"). The severity word is a plain reading of how degraded the picture is; it carries no repair, exit-code, or auto-filter behavior — Doctor still only recommends.
 
 **What still works:** List capabilities that are functioning normally and relevant to the user's context. When reporting MCP, state servers and tools as distinct counts — one server exposes many tools (e.g. "2 MCP tools from 1 server (context7)"), never collapse them into one ambiguous number.
 

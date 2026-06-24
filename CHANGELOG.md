@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.482]
+
+Adopt peer-validated prompt-design devices into the four surviving bundled skills, and restore the real lint gate that guards them.
+
+- **`plan`** — gains a `## Red Flags — STOP` block (four excuse→reality reflex lines targeting scope-skipping and vague done-conditions) and short named labels on the four Common Mistakes (Mushy done / Silent scope leak / Boulder task / Hand-waved questions). The dual-encoding is intentional: label = recall anchor, red-flag = reflex cue on an observable excuse.
+- **`skill-creator`** — gains a `## Quality failures` named vocabulary (Premature Completion / Duplication / Sediment / Sprawl / No-op Prose) and a subtraction Rule ("if a line doesn't change agent behavior versus the default, cut it").
+- **`office`** — gains a source-of-truth guard in Step 4: cite the extracted text, never answer from memory or from a partial / capped extraction.
+- **`doctor`** — gains a Phase-2 `Red Flag — STOP` guard (contradictory findings or many active fallbacks → spend the one allowed follow-up probe before recommending) and a recommend-only `severity:` prose label on the Report's Likely-issue line.
+- **Bundled-library lint gate restored** (`tests/test_flow_skill_bundled_library.py`) — the test now lints every shipped `SKILL.md` body (R1–R3 + B1 hard, R4 soft) instead of only load-checking, making the file's own docstring and `skills.md §6`'s promise true and giving these edits a machine-verifiable gate.
+- **Research doc retired** — `RESEARCH-skills-prompt-gaps.md` deleted and its live cross-references in `RESEARCH-skills-peers-tiers.md` cleaned.
+
 ## [0.8.481]
 
 Fix the eval-trace `record_turn` slicing bug that made per-prompt eval loops (fresh `message_history=[]` under one `case_id` with an incrementing `turn_index`) silently drop the turn's own tool calls, producing false-negative verdicts (surfaced by `eval_skills.py` W4.B).

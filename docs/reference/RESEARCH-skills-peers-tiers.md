@@ -1,7 +1,7 @@
 # RESEARCH: Skill Surface Tiering Across Peers — hermes · openclaw · codex
 
 Cross-peer synthesis of three general AI-agent CLIs that ship bundled skill
-catalogs, plus `RESEARCH-skills-prompt-gaps.md`. Establishes a three-tier
+catalogs. Establishes a three-tier
 classification of **skill capabilities** (the workflows skills encode, not
 individual skill names) based on convergence across peers, with full
 per-peer inventories, runtime architecture comparison, co-cli coverage
@@ -49,7 +49,6 @@ co-cli's own skill loader and are out of scope for this comparison).
 - **hermes**: repo `skills/` + `optional-skills/`; `tools/skills_sync.py`, `tools/skills_hub.py`, `tools/skills_tool.py`, `agent/prompt_builder.py`, `agent/skill_utils.py`, `agent/skill_registry.py`
 - **openclaw** (HEAD `bafe49f062`, local pulled fresh from `origin/main`): repo `skills/` + `.agents/skills/`; `src/agents/skills.ts`, `src/agents/skills/{workspace,skill-contract,refresh,source,plugin-skills,frontmatter}.ts`, `src/agents/skills-clawhub.ts`, `extensions/{skill-workshop,migrate-claude,migrate-hermes}/`
 - **codex**: `codex-rs/skills/src/lib.rs`, `codex-rs/skills/src/assets/samples/*/SKILL.md`
-- **co-cli gap analysis**: `RESEARCH-skills-prompt-gaps.md` (sibling doc — authoring/discovery gaps vs hermes)
 
 **Tiering method:** Each skill *capability* (the workflow domain) is scored by
 how many of the three peers ship at least one bundled skill in that domain.
@@ -576,7 +575,7 @@ the model retains *awareness of every skill name* even when budget is tight.
 Hermes accepts the budget cost; co-cli pays nothing because it has no index.
 
 **co-cli's architecture is leanest** but **least discoverable**. The
-prompt-gaps doc recommends an *opt-in / aspirational* awareness layer
+right direction here is an *opt-in / aspirational* awareness layer
 (not hermes's mandatory-scan). openclaw's compact-mode pattern is a useful
 reference if co-cli ever adds an index — it bounds the prompt cost.
 
@@ -596,8 +595,7 @@ reference if co-cli ever adds an index — it bounds the prompt cost.
 > read it as "what was proposed," not "what's pending." Remaining real gaps:
 > **install-from-source (T1-2)** and opportunistic tool-backed Tier-2 skills.
 
-Derived from `RESEARCH-skills-prompt-gaps.md` "Concrete Gaps" § and the
-convergence matrix above. Ordering is by **dependency**, not signal strength —
+Derived from the convergence matrix above. Ordering is by **dependency**, not signal strength —
 the lifecycle trio is the strongest 3-peer convergence but it sits on top of
 the lifecycle spec.
 
@@ -735,7 +733,7 @@ dispatch path.
 - `co_cli/agent/_instructions.py` has no `add_skill_awareness_prompt` equivalent (compare `add_category_awareness_prompt` at lines 21-24 — same shape, different domain).
 - `deps.skill_registry` and `get_skill_registry()` exist but the agent never sees them through any prompt channel.
 - Peer baselines: hermes `<available_skills>` block via `agent/prompt_builder.build_skills_system_prompt()` (mandatory-scan); openclaw `formatSkillsForPrompt()` at `src/agents/skills/skill-contract.ts:46` with **compact-mode fallback** at `formatSkillsCompact()` (drops descriptions before count-truncating). Codex relies on skill-tool listing.
-- co-cli explicitly should not adopt hermes's mandatory-scan framing — the prompt-gaps doc is direct: *"do not adopt hermes's mandatory-scan skill index. The 'you MUST load any even partially relevant skill' framing is too aggressive and would nullify co-cli's prompt-mass advantage."*
+- co-cli explicitly should not adopt hermes's mandatory-scan framing: do not adopt a mandatory-scan skill index — the "you MUST load any even partially relevant skill" framing is too aggressive and would nullify co-cli's prompt-mass advantage.
 
 **Implementation plan.**
 - New runtime instructions callback in `co_cli/agent/_instructions.py` (`add_skill_awareness_prompt`). Iterates `deps.skill_registry`, filters `disable_model_invocation=True`, emits compact `name — description` lines under an aspirational header: *"The following skills are available — invoke them with `skill_run(name)` when directly relevant."* Not mandatory-scan.

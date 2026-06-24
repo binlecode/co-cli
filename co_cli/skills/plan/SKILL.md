@@ -76,10 +76,19 @@ If there are no open questions, write "None — ready to implement." Do not leav
 
 Each is a real failure mode for this skill — the contrast is the fix.
 
-- **Vague `Done when`.** Bad: "the section is solid" / "the feature works." Good: "the draft answers the three review questions with a cited source each" / "`pytest tests/test_auth.py::test_login` passes (3 cases)." A condition you cannot confirm by eye or with one check is not a done-when.
-- **Scope leak.** Bad: a task that quietly fixes an adjacent thing the request never asked for. Good: list that improvement under out-of-scope in Phase 1 and leave it unplanned.
-- **Oversized task.** Bad: one task bundling several distinct deliverables ("do the whole pipeline"). Good: split at the seams — one cohesive change per task.
-- **Open questions skipped.** Bad: "None" written without checking. Good: walk every Phase 3 category; write "None — ready to implement" only after they all clear.
+- **Mushy done.** Vague `Done when`. Bad: "the section is solid" / "the feature works." Good: "the draft answers the three review questions with a cited source each" / "`pytest tests/test_auth.py::test_login` passes (3 cases)." A condition you cannot confirm by eye or with one check is not a done-when.
+- **Silent scope leak.** A task that quietly fixes an adjacent thing the request never asked for. Good: list that improvement under out-of-scope in Phase 1 and leave it unplanned.
+- **Boulder task.** One task bundling several distinct deliverables ("do the whole pipeline"). Good: split at the seams — one cohesive change per task.
+- **Hand-waved questions.** "None" written without checking. Good: walk every Phase 3 category; write "None — ready to implement" only after they all clear.
+
+## Red Flags — STOP
+
+If you catch yourself thinking any of these, you are already off the rails. Stop and do the Phase the excuse skips.
+
+- "I get the gist — I'll just start listing tasks" → you are skipping Phase 1. A plan written before scope is set will mis-aim. STOP: restate the request, mark in-scope vs out-of-scope, state acceptance criteria, THEN draft tasks.
+- "I'll write 'Done when: it works' and tighten it later" → a done-condition you cannot confirm by eye or one check is not a done-condition, and "later" never comes. STOP: write the observable state that proves the task complete, or split the task until you can.
+- "This adjacent fix is right there, I'll fold it in" → that is scope leak, and it hides work the reviewer never approved. STOP: record it under out-of-scope and leave it unplanned.
+- "Open questions look fine, I'll just put 'None'" → "None" without walking the Phase 3 categories is a guess, not a clearance. STOP: check external contracts, reversibility, knowledge gaps, and access — then write "None — ready to implement" only if all clear.
 
 ## Rules
 
