@@ -53,7 +53,9 @@ BUILTIN_COMMANDS["history"] = SlashCommand(
     "history", "Show delegation history (delegation agents + background tasks)", _cmd_history
 )
 BUILTIN_COMMANDS["compact"] = SlashCommand(
-    "compact", "Summarize conversation via LLM to reduce context", _cmd_compact
+    "compact",
+    "Summarize conversation via LLM to reduce context: /compact [focus]",
+    _cmd_compact,
 )
 BUILTIN_COMMANDS["memory"] = SlashCommand(
     "memory",
@@ -64,9 +66,14 @@ BUILTIN_COMMANDS["dream"] = SlashCommand(
     "dream", "Manage the dream daemon (status | start | stop | tidy)", handle_dream_slash
 )
 BUILTIN_COMMANDS["approvals"] = SlashCommand(
-    "approvals", "Manage session approval rules", _cmd_approvals
+    "approvals", "Manage session approval rules: /approvals [list|clear [index]]", _cmd_approvals
 )
-BUILTIN_COMMANDS["skills"] = SlashCommand("skills", "List and inspect loaded skills", _cmd_skills)
+BUILTIN_COMMANDS["skills"] = SlashCommand(
+    "skills",
+    "List and inspect loaded skills: /skills "
+    "[list|check|lint [<name>|--all]|reload|usage [<name>]|pin <name>|unpin <name>]",
+    _cmd_skills,
+)
 BUILTIN_COMMANDS["tasks"] = SlashCommand(
     "tasks",
     "Manage background tasks: /tasks [run <cmd> | cancel <id> | <status-filter> | <task-id>]",
@@ -78,7 +85,9 @@ BUILTIN_COMMANDS["queue"] = SlashCommand(
     _cmd_queue,
 )
 BUILTIN_COMMANDS["resume"] = SlashCommand("resume", "Resume a past session", _cmd_resume)
-BUILTIN_COMMANDS["sessions"] = SlashCommand("sessions", "List past sessions", _cmd_sessions)
+BUILTIN_COMMANDS["sessions"] = SlashCommand(
+    "sessions", "List past sessions: /sessions [keyword]", _cmd_sessions
+)
 BUILTIN_COMMANDS["reasoning"] = SlashCommand(
     "reasoning",
     "Show or set reasoning display: /reasoning [off|collapsed|full|next]",

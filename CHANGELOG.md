@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.475]
+
+Surface the usage syntax for the remaining arg-taking `/help` commands.
+
+- **`/compact`, `/approvals`, `/skills`, `/sessions`** — these accept args but their `/help` descriptions didn't say so, unlike `/memory`·`/tasks`·`/queue`·`/reasoning`·`/usage` which already fold usage into the description. Added accurate usage to each in `commands/core.py`: `/compact [focus]`, `/approvals [list|clear [index]]`, `/skills [list|check|lint…|pin…|unpin…]`, `/sessions [keyword]`. The `/approvals` and `/skills` strings mirror the handlers' own error-usage lines so they can't drift. Follows the `0.8.473` bracket-escaping fix that made these `[brackets]` render literally.
+
 ## [0.8.473]
 
 Fix `/help` (and `/skills`) mangling command descriptions and arg-hints that contain `[brackets]`.
