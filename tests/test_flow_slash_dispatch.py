@@ -63,8 +63,12 @@ def _make_ctx(deps: CoDeps) -> CommandContext:
 
 
 def _write_skill(skills_dir: Path, name: str, body: str, extra_frontmatter: str = "") -> None:
-    """Write a minimal skill into skills_dir as <name>/SKILL.md."""
-    content = f"---\ndescription: Test skill {name}\n{extra_frontmatter}---\n\n{body}\n"
+    """Write a minimal slash-invocable skill into skills_dir as <name>/SKILL.md.
+
+    Sets ``user-invocable: true`` explicitly because that is now opt-in (the loader
+    default is false) — these cases exercise the slash-dispatch path.
+    """
+    content = f"---\ndescription: Test skill {name}\nuser-invocable: true\n{extra_frontmatter}---\n\n{body}\n"
     skill_dir = skills_dir / name
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(content, encoding="utf-8")
@@ -154,6 +158,71 @@ async def test_no_args_body_unchanged(tmp_path: Path) -> None:
     outcome = await dispatch("/myskill", ctx)
     assert isinstance(outcome, DelegateToAgent)
     assert outcome.delegated_input == "Just do this"
+
+
+@pytest.mark.asyncio
+async def test_arguments_token_not_leaked_on_bare_invocation(tmp_path: Path) -> None:
+    """A body with $ARGUMENTS/$0 but no args delegates with neither literal token.
+
+    When a skill body references $ARGUMENTS (and $0) but is invoked with no
+    arguments, interpolation must still run and substitute empty/name — the raw
+    placeholders must never survive into the delegated input.
+
+    Regression guard: the old `if args and "$ARGUMENTS" in body` guard skipped
+    interpolation entirely when args were empty, leaking the literal '$ARGUMENTS'
+    (and '$0') token to the agent.
+    """
+    _write_skill(tmp_path, "argskill", "Plan: $ARGUMENTS (via $0)")
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+    outcome = await dispatch("/argskill", ctx)
+    assert isinstance(outcome, DelegateToAgent)
+    assert "$ARGUMENTS" not in outcome.delegated_input
+    assert "$0" not in outcome.delegated_input
+    assert outcome.delegated_input == "Plan:  (via argskill)"
+
+
+# ---------------------------------------------------------------------------
+# 3b. Real bundled `plan` skill carries an inline task / renders clean empty
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bundled_plan_skill_carries_inline_task(tmp_path: Path) -> None:
+    """/plan <task> delegates a body that contains the inline task text.
+
+    The bundled `plan` skill advertises `argument-hint: "[what to plan]"`; its body
+    must honour that by carrying the task into the delegated input so the agent
+    plans the actual request rather than the methodology alone.
+
+    Regression guard: if the $ARGUMENTS placeholder is dropped from the body, the
+    task text is silently discarded and the agent plans nothing concrete.
+    """
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+    outcome = await dispatch("/plan write a literature review on topic X", ctx)
+    assert isinstance(outcome, DelegateToAgent)
+    assert "write a literature review on topic X" in outcome.delegated_input
+
+
+@pytest.mark.asyncio
+async def test_bundled_plan_skill_bare_renders_clean(tmp_path: Path) -> None:
+    """Bare /plan delegates the methodology body with no placeholder token left.
+
+    A bare invocation must still deliver the planning methodology (so the agent
+    can plan the conversation's most-recent request) with no literal $ARGUMENTS/$0
+    surviving into the delegated input.
+
+    Regression guard: a leaked '$ARGUMENTS' token would read as a stray placeholder
+    to the agent; a mangled body would lose the methodology.
+    """
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+    outcome = await dispatch("/plan", ctx)
+    assert isinstance(outcome, DelegateToAgent)
+    assert "$ARGUMENTS" not in outcome.delegated_input
+    assert "$0" not in outcome.delegated_input
+    assert "Phase 1 — Scope" in outcome.delegated_input
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +377,31 @@ async def test_unknown_command_returns_local_only(tmp_path: Path) -> None:
     deps = _make_deps(tmp_path)
     ctx = _make_ctx(deps)
     outcome = await dispatch("/nonexistent_xyz_command", ctx)
+    assert isinstance(outcome, LocalOnly)
+
+
+@pytest.mark.asyncio
+async def test_skill_without_flag_is_not_slash_invocable(tmp_path: Path) -> None:
+    """A skill carrying no user-invocable flag is NOT reachable as a slash command.
+
+    Slash exposure is opt-in: the loader defaults user-invocable to false, and
+    dispatch only delegates to a user-invocable skill. So a skill the agent
+    fabricates (reviewer, merge, manual drop) with no flag is model-selectable only
+    and never mounts as /<name>.
+
+    Regression guard: if either the default flips back to true or dispatch stops
+    checking the flag, agent-authored skills leak into the slash-command surface.
+    """
+    skill_dir = tmp_path / "modelonly"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\ndescription: Model-only skill\n---\n\nDo the thing.\n",
+        encoding="utf-8",
+    )
+    deps = _make_deps(tmp_path)
+    ctx = _make_ctx(deps)
+    outcome = await dispatch("/modelonly", ctx)
+    assert not isinstance(outcome, DelegateToAgent)
     assert isinstance(outcome, LocalOnly)
 
 

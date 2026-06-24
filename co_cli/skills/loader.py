@@ -107,7 +107,7 @@ def _load_skill_file(
             description=meta.get("description", ""),
             body=body.strip(),
             argument_hint=meta.get("argument-hint", ""),
-            user_invocable=meta.get("user-invocable", True),
+            user_invocable=meta.get("user-invocable", False),
             disable_model_invocation=meta.get("disable-model-invocation", False),
             skill_env=skill_env,
             path=path,

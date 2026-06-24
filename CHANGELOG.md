@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.472]
+
+Tighten the slash-command surface: skills no longer leak into `/help`, the human stdin command is dropped (peer-aligned), and the background-task commands consolidate under `/tasks`.
+
+- **Skills slash-exposure is now opt-in** — `user-invocable` defaults to `false` (`skills/loader.py`) and `dispatch()` only routes to a `user_invocable` skill (`commands/core.py`). Agent-authored/dynamic skills (dream reviewer, housekeeping merge, manual drops) are model-only and never mount as `/<name>`. Curated commands (`plan`, `doctor`, `skill-creator`) already opt in explicitly. Closes the leak where eval/reviewer-fabricated skills appeared in `/help`.
+- **`/tasks` consolidation** — folded `/background` and `/cancel` into one command matching co's `/dream`·`/memory`·`/queue` idiom: `/tasks run <cmd>` launches, `/tasks cancel <id>` terminates, bare lists status, a task-id shows detail. `commands/background.py` + `commands/cancel.py` removed.
+- **Removed the `/write` (a.k.a. `/send-stdin`) human stdin command** — no peer (hermes, codex, openclaw, opencode) exposes a human slash command to write a task's stdin; it stays an agent-only affordance via the `task_write`/`task_close` tools.
+- **Eval-fixture teardown** (`evals/eval_skills.py`) — W4.A/W4.M/W4.R now remove their seeded skill fixtures on completion so `eval_smoke`/`eval_merge_*`/the reviewer-encoded skill stop polluting the real `~/.co-cli/skills/` surface.
+
 ## [0.8.470]
 
 Clarify `/doctor`'s MCP reporting so server and tool counts stay distinct.

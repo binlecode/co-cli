@@ -43,7 +43,7 @@ Per-turn: `main.py` saves current env for keys in `skill_env`, calls `os.environ
 Skills are reached through three distinct paths:
 
 **Path 1 — User slash-command.**
-The user types `/skill-name [args]` in the REPL. `dispatch()` matches the name in `skill_catalog`, expands the body (argument substitution), and returns `DelegateToAgent`. The REPL then calls `run_turn()` with the expanded body as the user input — a full new agent turn. The skill body replaces the user's input for that turn; the model never sees the raw `/skill-name` string.
+The user types `/skill-name [args]` in the REPL. `dispatch()` matches the name in `skill_catalog` and proceeds **only for a `user_invocable` skill** — a model-only skill (the default) falls through to "unknown command" and never mounts as a slash command. It then expands the body (argument substitution) and returns `DelegateToAgent`. The REPL then calls `run_turn()` with the expanded body as the user input — a full new agent turn. The skill body replaces the user's input for that turn; the model never sees the raw `/skill-name` string.
 
 **Path 2 — Model inline use.**
 The agent reads the `<available_skills>` manifest injected per-turn into the system prompt, identifies a matching skill, and calls `skill_view(name)` to load the full body. The body is returned as a tool result inside the current turn. The agent reads it and follows its phases as its procedure — no new turn, no dispatch, no REPL involvement. This is the primary path for agent-initiated skill use.
@@ -63,7 +63,7 @@ The dream daemon's domain reviewers also write via the skill write tools (`skill
 | `description` | listing text shown in `/skills` and exposed via `get_skill_catalog()` |
 | `body` | prompt body injected into the main agent on dispatch |
 | `argument_hint` | UI hint for `/help` and `/skills` |
-| `user_invocable` | whether the skill appears as a slash command |
+| `user_invocable` | whether the skill is reachable as a slash command — gates listing (`/help`, completer) **and** `dispatch()`. Opt-in: defaults to false, so agent-authored/dynamic skills (reviewer, merge, manual drops) stay model-only unless they explicitly opt in |
 | `disable_model_invocation` | hide from `get_skill_catalog()` results and manifest |
 | `skill_env` | env vars injected for the duration of the dispatched turn |
 | `path` | absolute path to the skill's `SKILL.md` on disk; `None` for programmatic configs |
@@ -76,7 +76,7 @@ Every skill is a directory `<name>/` containing a `SKILL.md` entry file; the dir
 |-------------------|---------|
 | `description` | human-readable summary (required) |
 | `argument-hint` | argument usage hint |
-| `user-invocable` | include in slash-command completer and `/help` |
+| `user-invocable` | expose as a slash command — `/help`, completer, and `dispatch()`; **opt-in, defaults to false** |
 | `disable-model-invocation` | hide from `get_skill_catalog()` and manifest |
 | `skill-env` | turn-scoped env injection, filtered through `_SKILL_ENV_BLOCKED` |
 

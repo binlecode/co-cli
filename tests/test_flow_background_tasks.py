@@ -306,7 +306,7 @@ async def test_write_to_completed_task_raises_typed_error(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
-# task_write / task_close tools + /write command (Phase 2 tool surface)
+# task_write / task_close tools (Phase 2 tool surface)
 # ---------------------------------------------------------------------------
 
 
@@ -385,30 +385,6 @@ async def test_write_after_reader_exits_is_clean_error(tmp_path: Path) -> None:
     closed = await task_close(_tool_ctx(deps, "task_close"), task_id=task_id)
     assert _is_error(again)
     assert _is_error(closed)
-
-
-@pytest.mark.asyncio
-async def test_write_slash_command_passes_input_verbatim(tmp_path: Path) -> None:
-    """/write <id> <input> sends the remainder of the line verbatim (spaces preserved)."""
-    deps = _make_tool_deps(tmp_path)
-    logs_dir = tmp_path / "logs"
-    task_id = make_task_id()
-    state = _make_state(task_id, "python3 -u -c \"print('echo:', input())\"", str(tmp_path))
-    deps.session.background_tasks[task_id] = state
-    await spawn_task(state, deps.session, logs_dir=logs_dir)
-
-    ctx = CommandContext(
-        message_history=[],
-        deps=deps,
-        agent=None,  # type: ignore[arg-type]
-        frontend=HeadlessFrontend(),
-    )
-    await dispatch(f"/write {task_id} hello   world", ctx)
-
-    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
-        await state._monitor_task
-
-    assert state.log_path.read_text().splitlines() == ["echo: hello   world"]
 
 
 # ---------------------------------------------------------------------------
@@ -654,3 +630,59 @@ async def test_task_cancel_already_completed_returns_current_status(tmp_path: Pa
     assert result.metadata is not None
     assert result.metadata.get("status") == "completed"
     assert state.status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# /tasks command — verb routing (run | cancel | status), folds in /background + /cancel
+# ---------------------------------------------------------------------------
+
+
+def _cmd_ctx(deps: CoDeps) -> CommandContext:
+    return CommandContext(
+        message_history=[],
+        deps=deps,
+        agent=None,  # type: ignore[arg-type]
+        frontend=HeadlessFrontend(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_tasks_run_launches_background_task(tmp_path: Path) -> None:
+    """/tasks run <cmd> spawns a real background task whose output reaches its log."""
+    deps = _make_tool_deps(tmp_path)
+    await dispatch("/tasks run python3 -u -c \"print('hi-from-run')\"", _cmd_ctx(deps))
+
+    tasks = list(deps.session.background_tasks.values())
+    assert len(tasks) == 1
+    state = tasks[0]
+    async with asyncio.timeout(BG_TASK_COMPLETION_TIMEOUT_SECS):
+        await state._monitor_task
+    assert "hi-from-run" in state.log_path.read_text()
+
+
+@pytest.mark.asyncio
+async def test_tasks_cancel_terminates_running_task(tmp_path: Path) -> None:
+    """/tasks cancel <id> terminates a running task (no longer reports running)."""
+    deps = _make_tool_deps(tmp_path)
+    task_id = make_task_id()
+    state = _make_state(task_id, "sleep 999", str(tmp_path))
+    deps.session.background_tasks[task_id] = state
+    await spawn_task(state, deps.session, logs_dir=tmp_path / "logs")
+
+    await dispatch(f"/tasks cancel {task_id}", _cmd_ctx(deps))
+
+    async with asyncio.timeout(BG_TASK_TEARDOWN_TIMEOUT_SECS):
+        await state._monitor_task
+    assert state.status != "running"
+
+
+@pytest.mark.asyncio
+async def test_tasks_run_keyword_not_confused_with_status_filter(tmp_path: Path) -> None:
+    """A bare status word ('running') lists; only the exact verb 'run' launches.
+
+    Regression guard: if verb routing matched a prefix, /tasks running would try to
+    launch the command 'ning' instead of filtering the list by status.
+    """
+    deps = _make_tool_deps(tmp_path)
+    await dispatch("/tasks running", _cmd_ctx(deps))
+    assert not deps.session.background_tasks

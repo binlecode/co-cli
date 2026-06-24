@@ -335,10 +335,7 @@ All built-in commands registered in `BUILTIN_COMMANDS`:
 | `/skills` | `[name]` | List loaded skills; show detail for named skill | `None` |
 | `/memory` | `list\|count\|forget\|dream\|restore\|stats [args] [flags]` | Manage memory items; dream lifecycle details live in [dream.md](dream.md) | `None` |
 | `/approvals` | `list\|clear\|...` | View and manage session approval rules | `None` |
-| `/background` | `<command>` | Run a shell command in the background | `None` |
-| `/tasks` | `[status-filter \| task-id]` | List background tasks; pass a 12-hex-char task ID to show detail | `None` |
-| `/cancel` | `<task-id>` | Cancel a running background task | `None` |
-| `/write` | `<task-id> <input>` | Write a line to a running background task's stdin (first token = id; remainder verbatim + newline) to answer an interactive prompt | `None` |
+| `/tasks` | `[run <cmd> \| cancel <id> \| status-filter \| task-id]` | Manage background tasks: bare lists status; `run` launches a shell command; `cancel` terminates (SIGTERM→SIGKILL); a 12-hex-char task ID shows detail; any other token filters by status | `None` |
 | `/queue` | `[list\|clear\|pop [n]]` | Inspect or prune pending REPL input-queue items; mid-turn bypass runs immediately without enqueueing | `None` |
 | `/reasoning` | `[off\|collapsed\|full\|next]` | Show or set reasoning display mode (see §2) | `None` |
 | `/usage` | `[week\|month\|total]` | Show token usage: no arg = current session totals (daemon excluded); a window shows a Session / Daemon / Total split with a distinct-session count | `None` |

@@ -5,8 +5,6 @@ from __future__ import annotations
 import logging
 
 from co_cli.commands.approvals import _cmd_approvals
-from co_cli.commands.background import _cmd_background
-from co_cli.commands.cancel import _cmd_cancel
 from co_cli.commands.clear import _cmd_clear
 from co_cli.commands.compact import _cmd_compact
 from co_cli.commands.dream import handle_dream_slash
@@ -35,7 +33,6 @@ from co_cli.commands.types import (
     SlashOutcome,
 )
 from co_cli.commands.usage import _cmd_usage
-from co_cli.commands.write import _cmd_write
 from co_cli.display.core import console
 
 logger = logging.getLogger(__name__)
@@ -70,19 +67,10 @@ BUILTIN_COMMANDS["approvals"] = SlashCommand(
     "approvals", "Manage session approval rules", _cmd_approvals
 )
 BUILTIN_COMMANDS["skills"] = SlashCommand("skills", "List and inspect loaded skills", _cmd_skills)
-BUILTIN_COMMANDS["background"] = SlashCommand(
-    "background", "Run a command in the background", _cmd_background
-)
 BUILTIN_COMMANDS["tasks"] = SlashCommand(
     "tasks",
-    "List background tasks or show task detail: /tasks [status-filter | task-id]",
+    "Manage background tasks: /tasks [run <cmd> | cancel <id> | <status-filter> | <task-id>]",
     _cmd_tasks,
-)
-BUILTIN_COMMANDS["cancel"] = SlashCommand(
-    "cancel", "Cancel a running background task", _cmd_cancel
-)
-BUILTIN_COMMANDS["write"] = SlashCommand(
-    "write", "Write input to a running background task's stdin: /write <id> <input>", _cmd_write
 )
 BUILTIN_COMMANDS["queue"] = SlashCommand(
     "queue",
@@ -131,14 +119,17 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> SlashOutcome:
             return ReplaceTranscript(history=result)
         return LocalOnly()
 
-    # Check skill index after built-in commands (skills cannot shadow builtins)
+    # Check skill index after built-in commands (skills cannot shadow builtins).
+    # Only user-invocable skills are reachable by slash; a model-only skill
+    # (user-invocable: false — now the default) falls through to "unknown command"
+    # so it never becomes a slash command the user can type or discover.
     skill = ctx.deps.skill_catalog.get(name)
-    if skill is not None:
+    if skill is not None and skill.user_invocable:
         from co_cli.skills.usage import bump_recall
 
         bump_recall(ctx.deps, name)
         body = skill.body
-        if args and "$ARGUMENTS" in body:
+        if "$ARGUMENTS" in body:
             args_list = args.split()
             body = body.replace("$ARGUMENTS", args)
             body = body.replace("$0", name)

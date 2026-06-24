@@ -30,10 +30,13 @@ canonical-anchor pick, sibling archival, skill decay) are covered by pytest unde
 ``tests/`` — see the phase-2 coverage map. These evals own only the model-driven
 halves a unit test cannot assert.
 
-Eval-seeded artifacts (deterministic/per-run names; reruns overwrite in place):
-  - ``~/.co-cli/skills/eval_smoke/SKILL.md`` — written by W4.A; left in place.
-  - ``~/.co-cli/skills/eval_merge_{a,b}_<rand>/`` — written by W4.M; one archived
-    on merge, the surviving umbrella left in place; purged at the next W4.M run.
+Eval-seeded skill fixtures (eval-owned names) are torn down on run completion so
+they never linger in the user's real ``~/.co-cli/skills/`` slash-command surface:
+  - ``eval_smoke/`` — written by W4.A.
+  - ``eval_merge_{a,b}_<rand>/`` (+ ``.archive/``) — written by W4.M.
+  - the reviewer-encoded deploy skill — created by W4.R.
+W4.A/W4.M fixtures are purged in ``main()``'s finally; W4.R removes its own
+reviewer-created skill inline (its name is model-chosen).
 
 Specs: docs/specs/skills.md, tui.md
 Mission tenet: operator — procedural capability
@@ -130,6 +133,7 @@ async def case_w4_a_dispatch_user_skill(
         "---\n"
         "name: eval_smoke\n"
         "description: Eval smoke skill — reports CO_EVAL_TOKEN and $ARGUMENTS verbatim.\n"
+        "user-invocable: true\n"
         "skill-env:\n"
         f"  CO_EVAL_TOKEN: {token_value}\n"
         "---\n"
@@ -535,6 +539,16 @@ async def case_skill_reviewer_encodes_correction(
         )
 
     skill_path, skill_body = encoded[0]
+
+    # Tear down skills the reviewer newly created this run (eval residue that would
+    # otherwise pollute the user's /help command surface). Only dirs absent before
+    # the run are removed — a pre-existing skill the reviewer merely patched is left
+    # intact. The judge below reads the captured ``skill_body`` string, not the file.
+    import shutil
+
+    for created in set(after) - set(before):
+        shutil.rmtree(created.parent, ignore_errors=True)
+
     rubric = (
         "A skill maintainer read a short conversation and wrote/patched the skill below. "
         "The conversation contained exactly ONE durable correction: the user demanded that "
@@ -600,6 +614,27 @@ def _purge_merge_skills(user_skills_dir: Path) -> None:
         for path in parent.glob("eval_merge_*"):
             if path.is_dir():
                 shutil.rmtree(path, ignore_errors=True)
+
+
+def _purge_eval_skill_fixtures(user_skills_dir: Path) -> None:
+    """Remove eval-owned skill fixtures (live + archived) so they never linger.
+
+    W4.A writes ``eval_smoke/`` and W4.M writes ``eval_merge_{a,b}_<rand>/``. Both
+    default to ``user-invocable: true`` and so would surface in the user's ``/help``
+    slash-command list across unrelated sessions. Run from ``main()``'s finally to
+    keep the real ``~/.co-cli/skills/`` command surface clean after every run.
+    (The W4.R reviewer-encoded skill is torn down inline by that case, since its
+    name is model-chosen and not known here.)
+    """
+    import shutil
+
+    for parent in (user_skills_dir, user_skills_dir / ".archive"):
+        if not parent.exists():
+            continue
+        for pattern in ("eval_smoke", "eval_merge_*"):
+            for path in parent.glob(pattern):
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
 
 
 def _write_merge_skill(user_skills_dir: Path, name: str, distinct_step: str) -> Path:
@@ -803,6 +838,7 @@ async def main() -> int:
             )
             print(f"[skills] {cr_m.name}: {m_label} — {cr_m.reason or 'ok'}")
     finally:
+        _purge_eval_skill_fixtures(deps.user_skills_dir)
         await stack.aclose()
     return 0 if all(c.passed for c in cases) else 1
 
