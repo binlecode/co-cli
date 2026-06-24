@@ -10,8 +10,10 @@ synthesizes from multiple seeded sources without inventing detail.
 
 Each case pairs a structural signal (T0 presents enumerated steps and does not
 fire a state-mutating tool before the plan; T1 issues executing tool calls; the
-synthesis answer references both seeded artifacts) with the LLM rubric verdict
-from ``multistep_plan.v2.md``, mapped onto the 4-state Verdict.
+synthesis answer references both seeded artifacts) with the LLM rubric verdict,
+mapped onto the 4-state Verdict. W11.A-C grade against ``multistep_plan.v2.md``;
+W11.D grades against ``multistep_plan.v3.md`` (the plan->todo->done rubric, whose
+criterion inverts v2's pause-checkpoint to reward authorized drive-to-completion).
 
 Cases:
   W11.A  breakdown_before_execute     2-turn: T0 asks where to start; T1 "do the
@@ -24,6 +26,14 @@ Cases:
   W11.C  synthesis_from_mixed_sources  1-turn: summarize Helios context + prior DB
                                        decision into a 4-line doc. PASS references
                                        BOTH artifacts by distinctive content.
+  W11.D  plan_skill_todo_execution     2-turn: drive the REAL bundled ``/plan`` skill
+                                       through dispatch on a knowledge-work briefing
+                                       grounded in the seeded Helios artifacts (a
+                                       stakeholder note synthesizing both sources).
+                                       PASS if the live ``session_todos`` ledger is
+                                       populated (≥2) after the plan turn and ≥1 item
+                                       reaches ``completed`` after the execute turn
+                                       (no unflagged pending), + judge pass.
 
 W11.B (pause-for-approval mid-plan) is framed distinctly from W12's
 ``completeness_gate`` (don't-claim-done-with-pending): this case is about
@@ -40,6 +50,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import sys
 import time
@@ -60,6 +71,8 @@ from evals._trace import record_turn, response_text
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 
 from co_cli.agent.orchestrate import run_turn
+from co_cli.commands.core import dispatch
+from co_cli.commands.types import CommandContext, DelegateToAgent
 
 _FIXTURE_NAME = "multistep_research_baseline"
 
@@ -545,8 +558,215 @@ async def _case_w11_c_synthesis_from_mixed_sources(
     )
 
 
+# W11.D drives the REAL bundled `/plan` skill through slash dispatch on a knowledge-
+# work scenario grounded in the seeded Helios artifacts — a stakeholder briefing that
+# SYNTHESIZES project_helios_context + decision_use_sqlite (research/synthesis/writing,
+# co's core mission), NOT a code refactor. Unlike W12.D's unreachable deploy-log goal,
+# the deliverable is completable in conversation, so the emitted todos CAN reach
+# `completed`. Distinct from W11.C (a one-shot 4-line summary with no plan/todo ledger):
+# here the goal is decomposed into a tracked todo ledger and driven to done.
+_W11_D_PLAN_TASK = (
+    "Plan and write a short briefing note for a stakeholder who wasn't in the room, "
+    "summarizing where project Helios's datastore stands. Ground it in the seeded "
+    "knowledge — read the 'project_helios_context' and 'decision_use_sqlite' memory "
+    "artifacts first — and structure it in three sections: (1) Helios's current "
+    "workload and how its data is stored, (2) the prior decision on its query layer "
+    "and the threshold that would trigger revisiting it, and (3) your recommendation "
+    "on what to watch and do next. Track each of the three sections as a separate "
+    "todo item and complete them one at a time. Write the note in your replies — no "
+    "files needed."
+)
+_W11_D_EXECUTE_TURN = (
+    "Go ahead and complete the whole briefing now — work through each section and mark it done."
+)
+
+# Phrases in the closing summary that flag an item the agent could not finish. An
+# unresolved todo is acceptable only if the summary acknowledges it (mirrors W12.D).
+_UNFINISHED_FLAG_PHRASES = (
+    "couldn't",
+    "could not",
+    "can't",
+    "cannot",
+    "unable to",
+    "did not",
+    "didn't",
+    "not done",
+    "not complete",
+    "remaining",
+    "still pending",
+    "left to do",
+)
+
+
+async def _case_w11_d_plan_skill_todo_execution(
+    deps: Any,
+    agent: Any,
+    frontend: Any,
+    run: Any,
+    spans_log: Path,
+) -> CaseResult:
+    """W11.D — real ``/plan`` skill → populated todo ledger → driven to done.
+
+    Drives the bundled ``plan`` skill through ``dispatch("/plan <task>")`` (the
+    shipped slash path, applying ``skill_env``/``active_skill_name`` as
+    ``main.py:_apply_command_outcome`` does), then two turns: turn 0 delegates the
+    interpolated skill body so the agent plans the inline task; turn 1 tells it to
+    execute. Floors are read from the LIVE ``deps.session.session_todos`` (the
+    post-merge runtime source of truth, written at ``co_cli/tools/todo/rw.py``) —
+    NOT a ToolReturnPart snapshot:
+      - emission: ``session_todos`` populated (≥ 2) right after the PLAN turn → the
+        plan→todo bridge fired.
+      - execution: after the execute turn ≥ 1 item is ``completed`` AND no
+        ``pending``/``in_progress`` remains unless the closing summary flags it
+        (the W12.D completeness logic, computed over ``session_todos``).
+    The judge grades the transcript against ``multistep_plan.v3.md`` — the
+    plan→todo→done rubric (NOT v2, whose criterion 2 rewards pausing and would
+    penalize this case's authorized drive-to-completion). PASS = both floors met +
+    judge passes; SOFT_PASS = judge passes but a floor is partial (probabilistic
+    WEAK_LOCAL emission); FAIL otherwise. UAT smoke — a single run shows the flow
+    CAN complete; it does not hard-FAIL on a probabilistic miss alone (mirrors
+    W11.A's ladder).
+    """
+    case_id = "W11.D"
+    case_t0 = time.monotonic()
+    rubric_text, rubric_version = load_rubric("multistep_plan", "v3")
+    reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
+    case_verdict = Verdict.FAIL
+    model_call_seconds = 0.0
+    token_usage: dict[str, int] = {}
+    slices: list[_TurnSlice] = []
+    todos_after_plan: list[Any] = []
+    completed_count = 0
+
+    try:
+        # Real seeded knowledge workspace — the briefing task synthesizes its two
+        # artifacts (project_helios_context + decision_use_sqlite), grounding the
+        # plan in real sources (graded by the plan→todo→done rubric multistep_plan.v3).
+        load_fixture(_FIXTURE_NAME, deps)
+        # Isolate the todo ledger: W11.A/B/C share this deps instance and leave their
+        # own todos in session_todos, so the emission floor must start from empty to
+        # measure ONLY what THIS case's plan turn creates.
+        deps.session.session_todos = []
+
+        ctx = CommandContext(
+            message_history=[],
+            deps=deps,
+            agent=agent,
+            completer=None,
+            frontend=frontend,
+        )
+        outcome = await dispatch(f"/plan {_W11_D_PLAN_TASK}", ctx)
+        if not isinstance(outcome, DelegateToAgent):
+            reason_parts.append(
+                f"dispatch returned {type(outcome).__name__}, expected DelegateToAgent"
+            )
+            raise RuntimeError("dispatch_not_delegate")
+        if _W11_D_PLAN_TASK not in outcome.delegated_input:
+            reason_parts.append("inline task not carried into delegated_input")
+            raise RuntimeError("task_not_carried")
+
+        os.environ.update(outcome.skill_env)
+        deps.runtime.active_skill_name = outcome.skill_name
+        deps.runtime.active_skill_env = dict(outcome.skill_env)
+
+        inputs = [outcome.delegated_input, _W11_D_EXECUTE_TURN]
+        history: list[Any] = []
+        for i, user_input in enumerate(inputs):
+            prior_len = len(history)
+            async with asyncio.timeout(CALL_TIMEOUT_S):
+                result, trace = await record_turn(
+                    case_id=case_id,
+                    turn_index=i,
+                    user_input=user_input,
+                    run_turn_callable=(
+                        lambda h=history, ui=user_input: run_turn(
+                            agent=agent,
+                            user_input=ui,
+                            deps=deps,
+                            message_history=h,
+                            frontend=frontend,
+                        )
+                    ),
+                    case_dir_path=run.case_trace_path(case_id),
+                    agent=agent,
+                )
+            history = list(result.messages)
+            new_msgs = history[prior_len:]
+            slices.append(
+                _TurnSlice(
+                    result=result,
+                    trace=trace,
+                    new_messages=new_msgs,
+                    assistant_text=response_text(result),
+                    tool_calls=_tool_calls_from(new_msgs),
+                )
+            )
+            # Snapshot the live ledger right after the PLAN turn — before the
+            # execute turn reassigns session_todos — so the emission floor is
+            # honestly turn-0-specific.
+            if i == 0:
+                todos_after_plan = list(deps.session.session_todos)
+        deps.runtime.active_skill_name = None
+
+        model_call_seconds, token_usage = _aggregate_trace_stats(slices)
+
+        todos_final = list(deps.session.session_todos)
+        completed_count = sum(1 for t in todos_final if t.get("status") == "completed")
+        unresolved = sum(1 for t in todos_final if t.get("status") in {"pending", "in_progress"})
+        closing_text = slices[-1].assistant_text.lower() if slices else ""
+        flagged = any(phrase in closing_text for phrase in _UNFINISHED_FLAG_PHRASES)
+
+        emission_ok = len(todos_after_plan) >= 2
+        execution_ok = completed_count >= 1 and (unresolved == 0 or flagged)
+        reason_parts.append(
+            f"todos_after_plan={len(todos_after_plan)} completed={completed_count} "
+            f"unresolved={unresolved} flagged={flagged}"
+        )
+
+        final_history = slices[-1].result.messages if slices else []
+        async with asyncio.timeout(CALL_TIMEOUT_S):
+            verdict = await judge_with_llm(
+                rubric_text, final_history, deps=deps, model=deps.judge_model
+            )
+        reason_parts.append(f"judge.score={verdict.score}")
+        if verdict.rationale:
+            reason_parts.append(verdict.rationale[:160])
+
+        if emission_ok and execution_ok and verdict.passed:
+            case_verdict = Verdict.PASS
+        elif verdict.passed or verdict.score >= 6:
+            case_verdict = Verdict.SOFT_PASS
+            reason_parts.append("floor_partial")
+        else:
+            case_verdict = Verdict.FAIL
+
+        budget = TURN_BUDGET_S * len(inputs)
+        if model_call_seconds > budget:
+            case_verdict = Verdict.FAIL
+            reason_parts.append(f"[slow] {model_call_seconds:.1f}s vs budget {budget:.0f}s")
+    except Exception as exc:
+        case_verdict = Verdict.FAIL
+        reason_parts.append(f"exception: {type(exc).__name__}: {exc}")
+
+    sub_goals_total = max(len(todos_after_plan), 2)
+    sub_goals_met = min(completed_count, sub_goals_total)
+    perf = _collect_perf_for(
+        slices, spans_log, sub_goals_met=sub_goals_met, sub_goals_total=sub_goals_total
+    )
+    duration = time.monotonic() - case_t0
+    return CaseResult(
+        name=case_id,
+        verdict=case_verdict,
+        duration_s=duration,
+        model_call_seconds=model_call_seconds,
+        token_usage=token_usage,
+        reason=" ".join(reason_parts).strip(),
+        perf=perf,
+    )
+
+
 async def main() -> int:
-    """Drive W11.A-W11.C end-to-end, write trace, return exit code."""
+    """Drive W11.A-W11.D end-to-end, write trace, return exit code."""
     await ensure_ollama_warm()
 
     async with eval_deps() as (deps, agent, frontend), open_eval_run("multistep_plan") as run:
@@ -558,6 +778,7 @@ async def main() -> int:
             _case_w11_a_breakdown_before_execute,
             _case_w11_b_intermediate_checkpoint,
             _case_w11_c_synthesis_from_mixed_sources,
+            _case_w11_d_plan_skill_todo_execution,
         ):
             try:
                 case = await runner(deps, agent, frontend, run, spans_log)
@@ -569,8 +790,7 @@ async def main() -> int:
                     reason=f"runner_crash: {type(exc).__name__}: {exc}",
                 )
             run.append(case)
-            verdict = "PASS" if case.passed else "FAIL"
-            print(f"[multistep_plan] {case.name}: {verdict} — {case.reason or 'ok'}")
+            print(f"[multistep_plan] {case.name}: {case.verdict.name} — {case.reason or 'ok'}")
             cases.append(case)
 
     return 0 if all(c.passed for c in cases) else 1

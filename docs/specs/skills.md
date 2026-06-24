@@ -116,13 +116,13 @@ Skill dispatch is the third branch of `dispatch()` (after built-ins and before u
 ```
 name matched in ctx.deps.skill_catalog
   body = skill.body
-  if args non-empty AND "$ARGUMENTS" in body:
-    args_list = args.split()           # whitespace-split positional args
-    body = body.replace("$ARGUMENTS", args)   # raw argument string
+  if "$ARGUMENTS" in body:
+    args_list = args.split()           # whitespace-split positional args ([] when no args)
+    body = body.replace("$ARGUMENTS", args)   # raw argument string ("" when no args)
     body = body.replace("$0", name)           # skill name
     for i, arg in reversed(enumerate(args_list, 1)):
       body = body.replace(f"${i}", arg)       # $1, $2, ... positional
-  # else: body used as-is (no args or no $ARGUMENTS token in body)
+  # else (no $ARGUMENTS token in body): body used as-is
   return DelegateToAgent(
     delegated_input=body,
     skill_env=dict(skill.skill_env),   # copy of filtered env vars
@@ -136,11 +136,11 @@ Positional replacements iterate in reverse order so `$1` does not partially matc
 
 | Token | Replacement | Condition |
 |-------|------------|-----------|
-| `$ARGUMENTS` | raw argument string (unsplit) | only when args non-empty and token present in body |
+| `$ARGUMENTS` | raw argument string (unsplit) | whenever the token is present in the body; substitutes `""` when no args were passed |
 | `$0` | skill name | same |
 | `$1`, `$2`, ... | whitespace-split positional args | same; missing positionals left as literal `$N` |
 
-If no arguments are passed, or the body contains no `$ARGUMENTS` token, the body is used verbatim.
+If the body contains no `$ARGUMENTS` token, it is used verbatim. If `$ARGUMENTS` is present but no arguments were passed, `$ARGUMENTS` substitutes to an empty string and `$0` to the skill name — a bare invocation never leaks a literal `$ARGUMENTS`/`$0` token.
 
 ### Skill Env Lifecycle
 

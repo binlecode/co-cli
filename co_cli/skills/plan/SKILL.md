@@ -16,6 +16,8 @@ Turn a request — a feature, a document, a research question, a project — int
 
 ## Phase 1 — Scope
 
+The request to plan appears at the end of this document. If it is empty, plan the most recent request in this conversation. If there is no request there **and** none in the conversation, ask the user what they want planned before drafting — do not invent one.
+
 Clarify the problem and its boundaries before writing any tasks.
 
 1. Restate the request in one sentence. If a *discoverable* fact is missing, find it; ask only when the ambiguity is a preference or constraint that genuinely changes the plan.
@@ -84,3 +86,7 @@ Each is a real failure mode for this skill — the contrast is the fix.
 - The plan names the steps and their done-conditions, not the finished work product.
 - Every `Done when` must be verifiable by inspection or a single check.
 - Scope creep is a bug: if a task exceeds its stated scope during the work, the plan must be updated before continuing.
+
+---
+
+$ARGUMENTS

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.478]
+
+Make `/plan <task>` honor an inline task, and add eval coverage for the real plan→todo→done flow.
+
+- **`/plan <task>` now carries the task** — the bundled `plan` skill body gained a trailing `$ARGUMENTS` placeholder, so `/plan write a literature review on X` plans the actual request instead of dropping it. A bare `/plan` still falls back to the conversation's most-recent request, and a new Phase-1 reflex asks the user what to plan when no task is supplied and none is in the conversation (no dispatch-level arg validation — `plan` stays consistent with the other bundled skills).
+- **New eval `W11.D`** (`evals/eval_multistep_plan.py`) drives the *real* `/plan` skill through slash dispatch on a Helios stakeholder-briefing task, asserting the live `session_todos` ledger is populated after the plan turn and driven to `completed` after the execute turn (PASS/SOFT_PASS/FAIL ladder; reads live `deps.session.session_todos`, no ToolReturnPart snapshot). Validated green (3 todos → 3 completed, judge 10/10).
+- **New rubric `multistep_plan.v3`** — a scenario-agnostic plan→todo→done rubric whose criterion inverts v2's pause-checkpoint to reward authorized drive-to-completion (v2 penalized W11.D's correct behavior).
+- The dispatch-time `$ARGUMENTS` interpolation contract was already safe on bare invocation (committed in `8fd2e989`); `docs/specs/skills.md` was realigned to that behavior.
+
 ## [0.8.477]
 
 Repair slash-command surface drift: remove the orphaned `/history` command and fix the phantom `/memory dream` subcommand.
