@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.484]
+
+Rename the bundled `documents` skill to `pdf`, and ship interactive PDF form-field extraction (the Tier-A read gap from the document-parity audit).
+
+- **`documents` → `pdf` skill rename** (total, zero-alias) — the old name read as an umbrella over all document types but the skill only handles PDF, competing with `office` in skill selection. Skill dir, `co-extract-pdf` module path, spec (`skills-pdf.md`), flow test (`test_flow_skill_pdf.py`), and all cross-references in `office` + vision tools updated. W4.B selection eval green (PDF→`pdf`, decks→`office`, URL→neither).
+- **PDF form-field extraction** (`co_cli/skills/pdf/scripts/extract_pdf.py`) — filled AcroForm widget values now render as a `### Form fields` block (`- name: value`, widget order) inside each page's `## Page N`. Type-aware "filled" filter (text/combo/list non-empty; checkbox/radio on-state only, `"Off"` dropped); per-page error boundary; a PDF with no filled widgets is byte-for-byte unchanged.
+- **`pdf` skill body** — Step-4 note that filled form fields appear under their page and must be grounded and cited like page text.
+- **Tier-B / Tier-C scoping decision docs** — document-authoring go/no-go (peer-survey grounded: live-session-vs-file-artifact split, pptx-first S1 candidate) and the doctrine-revisit verdicts (affirm marker-pdf / nano-pdf / native-ingest rejections with observable re-open triggers), plus the parity research.
+
 ## [0.8.482]
 
 Adopt peer-validated prompt-design devices into the four surviving bundled skills, and restore the real lint gate that guards them.
