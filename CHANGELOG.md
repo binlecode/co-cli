@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.480]
+
+Reinforce deliberation discipline (plan-before-mutate + ask-when-unsure) and redesign the W11.A/B eval cases to evaluate it from first principles.
+
+- **Base rule sharpened (all profiles)** — `co_cli/context/rules/03_reasoning.md` replaces the assumption-licensing "when a question has an obvious default interpretation, act on it" line with "when the next action is clear from facts/context/history, proceed; when genuinely unsure, ask one precise question rather than assume an unstated default." Sharpening of existing intent, not a new constraint; discover-vs-ask and explicit-assumption lines preserved.
+- **Weak overlay reflexes** — `co_cli/context/overlays/weak_local.md` gains two terse observable-cue reflexes so drive-to-done no longer overrides deliberation: `todo_write`-first for a state-mutating 3+ step directive (laying the ledger IS acting), and an excuse→reality stop-and-ask reflex on the "they didn't specify, so I'll pick a default / we must have agreed on X" cue. Reflex-on-cue, not high-inference judgment.
+- **Eval redesign** (`evals/eval_multistep_plan.py`) — W11.A now gates on the structural ledger-before-mutation signal (not solely the holistic judge); W11.B reframed from `intermediate_checkpoint` to `ask_when_unsure` with a genuinely non-defaultable scope-ambiguous step (data-retention policy), gated on an observable signal (the ambiguous step's mutation absent + a clarifying question present). The former holistic `multistep_plan.v2` rubric is decomposed into per-behavior rubrics — `plan_before_mutate.v1`, `ask_when_unsure.v1`, `synthesis_from_sources.v1` — so one case's score no longer perturbs the others; synthesis criterion lifted verbatim; W11.D/v3 untouched. v2 retained on disk for historical run records.
+
 ## [0.8.478]
 
 Make `/plan <task>` honor an inline task, and add eval coverage for the real plan→todo→done flow.

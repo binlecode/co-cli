@@ -43,9 +43,9 @@ through your tools (reading files, running commands, searching). If so,
 discover it. Only ask the user for decisions that depend on their preferences,
 priorities, or constraints.
 
-When a question has an obvious default interpretation, act on it rather than
-asking for clarification. Only ask when the ambiguity genuinely changes which
-tool or action should run.
+When the next action is clear from facts, context, or history, proceed. When
+you are genuinely unsure — and the ambiguity changes which tool or action
+should run — ask one precise question rather than assume an unstated default.
 
 When asking about preferences, present 2-4 concrete options with a
 recommended default.

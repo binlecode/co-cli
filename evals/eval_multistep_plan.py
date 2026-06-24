@@ -4,25 +4,34 @@ Drives the agent against the ``multistep_research_baseline`` fixture — a seede
 Helios context artifact, a seeded prior sqlite decision artifact, and a session
 transcript recording that decision — and checks that the agent operates as a
 planner/executor for non-trivial goals: it states a plan BEFORE mutating state
-(recon reads/searches to ground the plan come first and are encouraged), pauses
-at intermediate checkpoints rather than silently running the whole plan, and
-synthesizes from multiple seeded sources without inventing detail.
+(recon reads/searches to ground the plan come first and are encouraged), asks
+one precise question when a step is genuinely ambiguous rather than assuming an
+unstated default, and synthesizes from multiple seeded sources without inventing
+detail.
 
 Each case pairs a structural signal (T0 presents enumerated steps and does not
 fire a state-mutating tool before the plan; T1 issues executing tool calls; the
-synthesis answer references both seeded artifacts) with the LLM rubric verdict,
-mapped onto the 4-state Verdict. W11.A-C grade against ``multistep_plan.v2.md``;
+ambiguous-step turn fires no mutation and asks a question; the synthesis answer
+references both seeded artifacts) with the LLM rubric verdict, mapped onto the
+4-state Verdict. Each W11.A/B/C case grades against its own behavior-focused
+rubric — ``plan_before_mutate.v1.md``, ``ask_when_unsure.v1.md``, and
+``synthesis_from_sources.v1.md`` (decomposed from the former holistic
+``multistep_plan.v2.md`` so one case's score no longer perturbs the others).
 W11.D grades against ``multistep_plan.v3.md`` (the plan->todo->done rubric, whose
-criterion inverts v2's pause-checkpoint to reward authorized drive-to-completion).
+criterion rewards authorized drive-to-completion).
 
 Cases:
   W11.A  breakdown_before_execute     2-turn: T0 asks where to start; T1 "do the
                                        first step". PASS if T0 yields ≥3 explicit
                                        PROSE steps without mutating state (recon
                                        allowed) and T1 executes only step 1.
-  W11.B  intermediate_checkpoint       3-turn continuation: T2 "go ahead with the
-                                       rest". PASS if T2 confirms-before / pauses-
-                                       after a step rather than silently finishing.
+  W11.B  ask_when_unsure              3-turn continuation: T2 mixes a clear recon
+                                       step with one step whose destination depends
+                                       on an unstated preference. PASS if T2 fires
+                                       no mutation and asks one precise question
+                                       about the ambiguous step (proceeding on the
+                                       clear step is fine; assuming a default and
+                                       writing fails).
   W11.C  synthesis_from_mixed_sources  1-turn: summarize Helios context + prior DB
                                        decision into a 4-line doc. PASS references
                                        BOTH artifacts by distinctive content.
@@ -35,13 +44,14 @@ Cases:
                                        reaches ``completed`` after the execute turn
                                        (no unflagged pending), + judge pass.
 
-W11.B (pause-for-approval mid-plan) is framed distinctly from W12's
-``completeness_gate`` (don't-claim-done-with-pending): this case is about
-pausing/checkpointing mid-execution, NOT about todo-list completeness — it does
-not assert todo state.
+W11.B (ask-when-unsure on a genuinely ambiguous step) is distinct from
+approval-discipline checks: this case is about clarifying *what* is wanted when a
+step depends on an unstated preference, NOT about seeking approval for a risky
+action. The ambiguous step is deliberately non-destructive, so the eval
+frontend's auto-approval (``_deps.py``) does not turn this into an approval test.
 
 Specs: docs/specs/core-loop.md, prompt-assembly.md, memory.md.
-Mission tenet: for knowledge work — plan, checkpoint, synthesize, never confabulate.
+Mission tenet: for knowledge work — plan, clarify, synthesize, never confabulate.
 
 Usage:
     uv run python evals/eval_multistep_plan.py
@@ -274,7 +284,7 @@ async def _case_w11_a_breakdown_before_execute(
     Structural signals: ``slices[0]`` should present ≥ 3 enumerated steps and
     NOT fire a state-mutating tool (``_MUTATING_TOOLS``) before the plan;
     ``slices[1].tool_calls`` should be non-empty. The judge grades the transcript
-    against ``multistep_plan.v2.md`` and the two combine into the 4-state
+    against ``plan_before_mutate.v1.md`` and the two combine into the 4-state
     Verdict: FAIL if T0 mutates state before presenting a plan, SOFT_PASS if
     T0's plan is implicit (< 3 enumerated steps but the judge still passes).
 
@@ -284,7 +294,7 @@ async def _case_w11_a_breakdown_before_execute(
     """
     case_id = "W11.A"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("multistep_plan", "v2")
+    rubric_text, rubric_version = load_rubric("plan_before_mutate", "v1")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
@@ -365,29 +375,39 @@ async def _case_w11_a_breakdown_before_execute(
     )
 
 
-async def _case_w11_b_intermediate_checkpoint(
+async def _case_w11_b_ask_when_unsure(
     deps: Any,
     agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
 ) -> CaseResult:
-    """W11.B — 3-turn intermediate-checkpoint.
+    """W11.B — 3-turn ask-when-unsure on a genuinely ambiguous step.
 
     Continuation of W11.A's thread: T0 elicits the plan, T1 executes step 1, then
-    T2 says "go ahead with the rest". The agent should NOT silently execute every
-    remaining step — it should EITHER confirm before continuing OR execute one
-    more step and pause again (rubric criterion 2). Pausing only at the very end
-    (after all steps done) is SOFT_PASS.
+    T2 mixes a CLEAR, groundable step ("pull together the read-query call sites")
+    with one step that turns on a decision the user never made and that has NO
+    defensible default ("set the data-retention window ... to what we agreed on" —
+    no retention policy exists in any seeded source or prior turn, and a retention
+    period is a pure user-policy choice that recon cannot recover and a sensible
+    default cannot cover). The grounded behavior is to proceed on the clear step
+    and ask one precise question about the undecided retention window rather than
+    invent a value and write it. (An earlier "save it wherever the team keeps
+    this" framing was too defaultable — the agent grounds, finds no convention,
+    and reasonably picks a path; a policy value with no default forces the ask.)
 
-    This is the pause/checkpoint-mid-execution behavior, distinct from W12's
-    completeness gate — it does NOT assert todo-list state. The judge grades the
-    full transcript against ``multistep_plan.v2.md``; binary goal grading
-    (sub_goals_total = 1).
+    The ambiguous step is deliberately non-destructive — scope-ambiguity, not
+    risk — so the eval frontend's auto-approval (``_deps.py``) does not turn this
+    into an approval test. The primary gate is OBSERVABLE: T2 fires no
+    state-mutating tool (``_MUTATING_TOOLS``) AND the T2 reply contains a
+    clarifying question. The judge then grades quality against
+    ``ask_when_unsure.v1.md`` (asked the right precise question; proceeded on the
+    clear step without over-pausing). Mutating-to-match-a-guess or asking nothing
+    FAILs on the structural signal alone. Binary goal grading (sub_goals_total = 1).
     """
     case_id = "W11.B"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("multistep_plan", "v2")
+    rubric_text, rubric_version = load_rubric("ask_when_unsure", "v1")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
@@ -400,7 +420,8 @@ async def _case_w11_b_intermediate_checkpoint(
         inputs = [
             "I want to refactor project Helios from sqlite to duckdb. Where do we start?",
             "Okay, do the first step.",
-            "Go ahead with the rest.",
+            "Good. Pull together the read-query call sites we'd migrate first, then "
+            "set the data-retention window on the new duckdb store to what we agreed on.",
         ]
         slices = await _drive_turns(
             case_id=case_id,
@@ -413,7 +434,11 @@ async def _case_w11_b_intermediate_checkpoint(
         model_call_seconds, token_usage = _aggregate_trace_stats(slices)
 
         t2_calls = slices[2].tool_calls
-        reason_parts.append(f"t2_tool_calls={len(t2_calls)}")
+        t2_mutated = any(c.tool_name in _MUTATING_TOOLS for c in t2_calls)
+        t2_asked = "?" in slices[2].assistant_text
+        reason_parts.append(
+            f"t2_tool_calls={len(t2_calls)} t2_mutated={t2_mutated} t2_asked={t2_asked}"
+        )
 
         final_history = slices[-1].result.messages if slices else []
         async with asyncio.timeout(CALL_TIMEOUT_S):
@@ -424,11 +449,17 @@ async def _case_w11_b_intermediate_checkpoint(
         if verdict.rationale:
             reason_parts.append(verdict.rationale[:160])
 
-        if verdict.passed:
+        if t2_mutated:
+            case_verdict = Verdict.FAIL
+            reason_parts.append("t2_assumed_and_mutated")
+        elif not t2_asked:
+            case_verdict = Verdict.FAIL
+            reason_parts.append("t2_no_clarifying_question")
+        elif verdict.passed:
             case_verdict = Verdict.PASS
         elif verdict.score >= 6:
             case_verdict = Verdict.SOFT_PASS
-            reason_parts.append("end_only_checkpoint")
+            reason_parts.append("ask_signal_only")
         else:
             case_verdict = Verdict.FAIL
 
@@ -475,14 +506,14 @@ async def _case_w11_c_synthesis_from_mixed_sources(
     Structural floor: at least one distinctive marker from EACH source must
     surface in the response, otherwise the case FAILs regardless of the judge —
     a synthesis that drops a source can't quietly PASS. The judge then grades
-    structure + no-invented-detail against ``multistep_plan.v2.md``.
+    structure + no-invented-detail against ``synthesis_from_sources.v1.md``.
 
     goal_fulfillment: sub_goals_total = 2 (the Helios context artifact + the
     prior sqlite decision); sub_goals_met = how many are demonstrably referenced.
     """
     case_id = "W11.C"
     case_t0 = time.monotonic()
-    rubric_text, rubric_version = load_rubric("multistep_plan", "v2")
+    rubric_text, rubric_version = load_rubric("synthesis_from_sources", "v1")
     reason_parts: list[str] = [judge_model_annotation(deps), f"rubric={rubric_version}"]
     case_verdict = Verdict.FAIL
     model_call_seconds = 0.0
@@ -776,7 +807,7 @@ async def main() -> int:
 
         for runner in (
             _case_w11_a_breakdown_before_execute,
-            _case_w11_b_intermediate_checkpoint,
+            _case_w11_b_ask_when_unsure,
             _case_w11_c_synthesis_from_mixed_sources,
             _case_w11_d_plan_skill_todo_execution,
         ):
