@@ -1,6 +1,6 @@
 # Co CLI — Office Skill (local Word / PowerPoint / Excel reading)
 
-A skill-component spec (namespaced `skills-*`; see [skills.md](skills.md) for the skill subsystem it plugs into). Covers the `office` skill end to end: locating a local Office file, routing by source/type, and extracting `.docx`/`.pptx`/`.xlsx` to markdown with format-appropriate citation markers. Sibling of [skills-document.md](skills-document.md) (PDF) — the two are reciprocal: `documents` routes Office formats here, `office` routes `.pdf` back. Each owns one backend and one citation contract.
+A skill-component spec (namespaced `skills-*`; see [skills.md](skills.md) for the skill subsystem it plugs into). Covers the `office` skill end to end: locating a local Office file, routing by source/type, and extracting `.docx`/`.pptx`/`.xlsx` to markdown with format-appropriate citation markers. Sibling of [skills-pdf.md](skills-pdf.md) (PDF) — the two are reciprocal: `pdf` routes Office formats here, `office` routes `.pdf` back. Each owns one backend and one citation contract.
 
 ## Product Intent
 
@@ -13,7 +13,7 @@ flowchart TD
     U[User: read/summarize/query an Office file] --> SK[office SKILL.md body]
     SK --> LOC[Step 1-2: locate + route by source/type]
     LOC -->|URL| WF[web_fetch]
-    LOC -->|.pdf| DOC[documents skill]
+    LOC -->|.pdf| DOC[pdf skill]
     LOC -->|legacy .doc/.ppt/.xls| RESAVE[ask user to re-save as OOXML]
     LOC -->|other text| FR[file_read]
     LOC -->|local .docx/.pptx/.xlsx| EX[Step 3: co-extract-office via shell_exec]
@@ -46,7 +46,7 @@ No torch/CUDA, no `onnxruntime`/`magika`, no `pandas` in any of them — the ML-
 
 ### Entry Points
 
-- **Dispatch:** model-selected via the `<available_skills>` manifest when the user references a `.docx`/`.pptx`/`.xlsx` file. Routing within the body is by source (URL → `web_fetch`) and type (`.pdf` → `documents` skill; legacy binary → re-save).
+- **Dispatch:** model-selected via the `<available_skills>` manifest when the user references a `.docx`/`.pptx`/`.xlsx` file. Routing within the body is by source (URL → `web_fetch`) and type (`.pdf` → `pdf` skill; legacy binary → re-save).
 - **Extraction:** `co-extract-office <path>` (all formats) and `co-extract-office <path> --max-rows N` (xlsx row cap), both through `shell_exec`.
 
 ## 2. Core Logic
@@ -58,7 +58,7 @@ if user gave a path: use it
 else: file_search by name/extension (*.pptx, …); if several, confirm which
 route:
   http/https URL              -> web_fetch (extractor is local-files-only)
-  .pdf                        -> documents skill (never file_read the binary)
+  .pdf                        -> pdf skill (never file_read the binary)
   .doc / .ppt / .xls (legacy) -> ask the user to re-save as OOXML
   other local text (.txt/.md) -> file_read (no extraction)
   local .docx/.pptx/.xlsx     -> extract (Step 3)
@@ -72,7 +72,7 @@ Validation is **ordered**, and the first failing check wins — so each cause pr
 main(path, --max-rows):
   1. existence    : not path.exists()              -> "File not found:" exit 1
   2. extension    : suffix not in {.docx,.pptx,.xlsx}
-                      suffix == .pdf -> "Not an Office file — use the documents skill for PDF:" exit 1
+                      suffix == .pdf -> "Not an Office file — use the pdf skill for PDF:" exit 1
                       else           -> "Unsupported file type for office extraction (expected .docx/.pptx/.xlsx):" exit 1
   3. container    : _classify_container(path)       # magic-byte sniff, see below
                       open error    -> "Could not open Office file (corrupt or unreadable):" exit 1
@@ -195,11 +195,11 @@ No dedicated Settings model. Relevant configuration:
 | `co-extract-office <path>` | Extract `.docx`/`.pptx`/`.xlsx` to markdown on stdout (always terminated by a trailing newline), exit 0. Error → one-line stderr, exit 1. |
 | `co-extract-office <path> --max-rows N` | **xlsx-only** knob: cap rows rendered per sheet at `N` (default 1000); a capped sheet emits `[truncated: showing rows 1–N of M]`. Parsed for every call but ignored by docx/pptx. |
 
-Error stderr lines (exit 1): `File not found:`, `Not an Office file — use the documents skill for PDF:`, `Unsupported file type for office extraction (expected .docx/.pptx/.xlsx):`, `Office file is password-protected or encrypted:`, `Could not open Office file (corrupt or unreadable):`. Every error is a single line with no traceback, written via `sys.stderr.write` (T20 — `print` is forbidden under `co_cli/`).
+Error stderr lines (exit 1): `File not found:`, `Not an Office file — use the pdf skill for PDF:`, `Unsupported file type for office extraction (expected .docx/.pptx/.xlsx):`, `Office file is password-protected or encrypted:`, `Could not open Office file (corrupt or unreadable):`. Every error is a single line with no traceback, written via `sys.stderr.write` (T20 — `print` is forbidden under `co_cli/`).
 
 ### SKILL.md routing contract
 
-`office/SKILL.md` (not user-invocable). Frontmatter `description` is the routing surface (Office-only; defers `.pdf` to the `documents` skill and URLs to `web_fetch`). Body steps 1–4 implement locate → route → extract → answer as in §2. Mutual exclusivity with `documents` is the load-bearing property — neither description may swallow the other's formats.
+`office/SKILL.md` (not user-invocable). Frontmatter `description` is the routing surface (Office-only; defers `.pdf` to the `pdf` skill and URLs to `web_fetch`). Body steps 1–4 implement locate → route → extract → answer as in §2. Mutual exclusivity with `pdf` is the load-bearing property — neither description may swallow the other's formats.
 
 ## 5. Files
 
@@ -230,6 +230,6 @@ Error stderr lines (exit 1): `File not found:`, `Not an Office file — use the 
 | pptx extracts with a `## Slide N` marker per slide and slide text | `tests/test_flow_skill_office.py` |
 | xlsx extracts with a `## Sheet <name>` marker and a markdown table | `tests/test_flow_skill_office.py` |
 | Missing path / unsupported extension each exit non-zero with their distinct stderr line | `tests/test_flow_skill_office.py` |
-| A `.pdf` routes to the documents skill (distinct stderr message) | `tests/test_flow_skill_office.py` |
+| A `.pdf` routes to the pdf skill (distinct stderr message) | `tests/test_flow_skill_office.py` |
 | `office` is a registered bundled skill that loads with a non-empty body + description | `tests/test_flow_skill_bundled_library.py` |
-| Model selects `office` (not `documents`) for a deck/spreadsheet prompt, `documents` for a PDF, neither for a URL | `evals/eval_skills.py` (W4.B) |
+| Model selects `office` (not `pdf`) for a deck/spreadsheet prompt, `pdf` for a PDF, neither for a URL | `evals/eval_skills.py` (W4.B) |

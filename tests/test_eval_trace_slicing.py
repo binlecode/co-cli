@@ -81,7 +81,7 @@ async def test_fresh_history_turn_captures_its_own_tool_call(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_continuation_turn_records_only_new_messages(tmp_path: Path) -> None:
     """A continuation turn records only its new tail, not the prior turn's tool call."""
-    prior = _skill_view_turn("documents", "c0", "first")
+    prior = _skill_view_turn("pdf", "c0", "first")
     this_turn = _skill_view_turn("office", "c1", "second")
     cumulative = prior + this_turn
     result = TurnResult(

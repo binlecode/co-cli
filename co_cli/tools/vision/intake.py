@@ -24,7 +24,7 @@ from pydantic_ai.messages import BinaryContent
 _MAX_IMAGE_BYTES = 20 * 1024 * 1024
 
 # Accepted image media types, keyed by file suffix. PDFs are out of scope — they route
-# to the documents skill (text) or the scanned-PDF tier-2 path (which renders pages to
+# to the pdf skill (text) or the scanned-PDF tier-2 path (which renders pages to
 # PNGs and feeds them back through image_view).
 _MEDIA_TYPES: dict[str, str] = {
     ".png": "image/png",
@@ -58,7 +58,7 @@ def read_image(resolved: Path) -> BinaryContent | ImageRejection:
         accepted = ", ".join(sorted(_MEDIA_TYPES))
         return ImageRejection(
             f"Unsupported image type: {resolved.suffix or '(no suffix)'}. "
-            f"image_view accepts {accepted}. For a PDF, use the documents skill."
+            f"image_view accepts {accepted}. For a PDF, use the pdf skill."
         )
 
     size = resolved.stat().st_size

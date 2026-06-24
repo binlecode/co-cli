@@ -33,7 +33,7 @@ dependencies = [
 
 [project.scripts]
 co = "co_cli.main:app"
-co-extract-pdf = "co_cli.skills.documents.scripts.extract_pdf:main"
+co-extract-pdf = "co_cli.skills.pdf.scripts.extract_pdf:main"
 co-extract-office = "co_cli.skills.office.scripts.extract_office:main"
 
 [dependency-groups]

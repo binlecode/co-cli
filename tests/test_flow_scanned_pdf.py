@@ -5,7 +5,7 @@ Three layers, all no-mock:
   rasterizes the committed image-only fixture to PNGs and reports ``total_pages`` so a
   caller can detect truncation. Real pymupdf, real subprocess.
 - Honest degradation (always-run): on a text-only host rendering still works but
-  ``image_view`` is gated off, so the documents skill's scanned branch must degrade
+  ``image_view`` is gated off, so the pdf skill's scanned branch must degrade
   rather than fake a read. Deterministic, no model.
 - Vision E2E (skipped on text-only hosts): a vision-capable model reads a rendered
   page's known content, proving page-keyed grounding end to end. Real model.
@@ -30,7 +30,7 @@ from co_cli.check import probe_ollama_model
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.llm.call import llm_call
 from co_cli.llm.factory import build_model
-from co_cli.skills.documents.scripts.extract_pdf import SCANNED_SENTINEL
+from co_cli.skills.pdf.scripts.extract_pdf import SCANNED_SENTINEL
 from co_cli.tools.shell_backend import ShellBackend
 from co_cli.tools.system.tool_view import tool_view
 from co_cli.tools.vision.view import _vision_available, image_view

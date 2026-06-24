@@ -72,7 +72,7 @@ One row per architectural component the agent ships. Each component must have at
 | Context / history management | `eval_session_continuity` (W2.D–E: rehydrate, compact-quality) | `eval_daily_chat` (carry-forward); compaction idempotence → pytest | adequate; post-compaction agent quality judged (W2.E) |
 | Tools | `eval_memory` W3.G (memory tools) | `eval_approval_discipline` W8 (approval-gated tools); all evals exercise some tool | adequate; approval-flow now covered by W8; tool-result spill is pytest-owned (`test_flow_spill`) |
 | Memory (knowledge + session recall) | `eval_memory` W3.G (forget propagates to recall) | `eval_daily_chat` W1.D, `eval_session_continuity` W2.D, `eval_user_model` W10 | adequate; CRUD/index/rank lifecycle → pytest |
-| Skills | `eval_skills` W4.A (dispatch + env), W4.B (documents↔office skill-selection exclusivity) | — | adequate for dispatch + selection; cleanup/CRUD/shadow → pytest |
+| Skills | `eval_skills` W4.A (dispatch + env), W4.B (pdf↔office skill-selection exclusivity) | — | adequate for dispatch + selection; cleanup/CRUD/shadow → pytest |
 | Trust / safety surfaces | `eval_approval_discipline` W8 (proposes-before-destructive, respects-denial) | — | adequate; approvals state / unknown-slash / deny-side-effects → pytest |
 | Personality / bounded autonomy | `eval_bounded_autonomy` W9 | `eval_daily_chat` W1.A | adequate |
 | Background / async ops | migrated to pytest (`tests/test_flow_background_tasks`) | — | structural; no behavioral eval |
@@ -166,7 +166,7 @@ The canonical inventory. New evals append a row here AND a tenet citation in the
 | `evals/eval_session_continuity.py` | W2 | D rehydrate_uses_context · E compact_quality_holds | continuity across sessions | All LLM judge |
 | `evals/eval_memory.py` | W3 | G forget_propagates_to_recall | local + personal — durable + reversible | LLM judge |
 | `evals/eval_session_recall.py` | — (FM-1) | SR.A concept_expansion (probe-word miss → structural `session_search(pattern=)` recovery of a shaped entity) | continuity across sessions — cross-session recall | LLM judge + structural (recovery gate, route recorded) |
-| `evals/eval_skills.py` | W4 | A dispatch_user_skill (dispatch + env) · B skill_selection_mutual_exclusivity (documents↔office) | operator (procedural capability) | All LLM judge |
+| `evals/eval_skills.py` | W4 | A dispatch_user_skill (dispatch + env) · B skill_selection_mutual_exclusivity (pdf↔office) | operator (procedural capability) | All LLM judge |
 | `evals/eval_groundedness.py` | W7 | tool_up_when_unsure · decline_when_unknown · resist_leading_prompt | trusted — grounded + inspectable | All LLM judge |
 | `evals/eval_approval_discipline.py` | W8 | proposes_before_destructive · respects_denial · adjusts_plan_after_denial | trusted — explicit operator control | LLM judge + structural (deny via eval frontend; files-intact assert) |
 | `evals/eval_bounded_autonomy.py` | W9 | correction_recovery · refusal_context_drift · ambiguity_escalation | strategic — bounded autonomy | All LLM judge |
@@ -226,7 +226,7 @@ Structural wiring gates (FTS rows, session rotate/clear/list, compaction idempot
 | Post-compaction agent answers coherently and cites pre-compaction facts | `eval_session_continuity` | W2.E |
 | Forget propagates to recall (agent stops citing removed artifact) | `eval_memory` | W3.G |
 | Skill dispatch propagates env + args | `eval_skills` | W4.A |
-| Model selects the right skill under documents↔office mutual exclusivity | `eval_skills` | W4.B |
+| Model selects the right skill under pdf↔office mutual exclusivity | `eval_skills` | W4.B |
 | Agent tools-up when unsure (no confabulation) | `eval_groundedness` | tool_up_when_unsure |
 | Agent declines unknown rather than guessing | `eval_groundedness` | decline_when_unknown |
 | Agent resists leading-prompt manipulation | `eval_groundedness` | resist_leading_prompt |

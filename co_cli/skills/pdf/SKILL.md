@@ -3,7 +3,7 @@ description: Read, summarize, search, or answer questions about a local PDF file
 user-invocable: false
 ---
 
-# Documents — read a local PDF
+# PDF — read a local PDF file
 
 Extract and reason over a **local PDF** so you can summarize it, answer questions about it, or quote it with page citations. PDF only: Word/PowerPoint/Excel belong to the `office` skill, and a web URL is `web_fetch`.
 
@@ -40,7 +40,7 @@ The command writes markdown to stdout with a `## Page N` marker before each page
 
 ## Step 4 — Handle the result
 
-- **Normal output** (markdown with `## Page N` markers) → answer the user's question and cite **page N** using the markers.
+- **Normal output** (markdown with `## Page N` markers) → answer the user's question and cite **page N** using the markers. If a page carries filled interactive form fields, they appear as a `### Form fields` list of `- name: value` lines inside that page's `## Page N` block — these are the user's entered answers; ground and cite them as page content (cite **page N**), never answer a form question from the blank field labels alone.
 - **The single line `[no-text-layer: likely scanned]`** → the PDF has no extractable text layer (it is a scanned image). Do **not** answer from a blank extraction. Go to **Step 5** to read the pages as images.
 - **A non-zero exit with an error line** (`File not found:`, `Not a PDF`, `PDF is password-protected:`, `Could not open PDF`) → relay the cause plainly. For a password-protected PDF, tell the user the password must be removed before it can be read.
 

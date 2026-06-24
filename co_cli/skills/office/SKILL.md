@@ -1,11 +1,11 @@
 ---
-description: Read, summarize, search, or answer questions about a local Word, PowerPoint, or Excel file on disk (.docx, .pptx, .xlsx). Extracts the document's text — slide by slide, sheet by sheet, or with its headings — so you can quote or summarize it with citations. Use whenever the user points at a .docx/.pptx/.xlsx file or asks what a deck, document, or spreadsheet says or contains. Office formats only — for a PDF (.pdf) use the documents skill instead; for a web page URL use web_fetch.
+description: Read, summarize, search, or answer questions about a local Word, PowerPoint, or Excel file on disk (.docx, .pptx, .xlsx). Extracts the document's text — slide by slide, sheet by sheet, or with its headings — so you can quote or summarize it with citations. Use whenever the user points at a .docx/.pptx/.xlsx file or asks what a deck, document, or spreadsheet says or contains. Office formats only — for a PDF (.pdf) use the pdf skill instead; for a web page URL use web_fetch.
 user-invocable: false
 ---
 
 # Office — read a local Word / PowerPoint / Excel file
 
-Extract and reason over a **local Office file** so you can summarize it, answer questions about it, or quote it with citations. Office formats only (`.docx`, `.pptx`, `.xlsx`): a PDF belongs to the `documents` skill, and a web URL is `web_fetch`.
+Extract and reason over a **local Office file** so you can summarize it, answer questions about it, or quote it with citations. Office formats only (`.docx`, `.pptx`, `.xlsx`): a PDF belongs to the `pdf` skill, and a web URL is `web_fetch`.
 
 ## When this fires
 
@@ -21,7 +21,7 @@ The user asks you to read, summarize, search, or answer questions about a Word d
 
 - **A web URL** (http/https), not a local file → use `web_fetch`; this skill's extractor is for local files only.
 - **A local `.docx`, `.pptx`, or `.xlsx`** → extract it (Step 3).
-- **A local `.pdf`** → this is a PDF, not an Office format. Hand off to the `documents` skill. If that skill is not loaded, tell the user that PDF support lives in the `documents` skill and that this skill handles Office formats only — do **not** try to read the binary with `file_read`.
+- **A local `.pdf`** → this is a PDF, not an Office format. Hand off to the `pdf` skill. If that skill is not loaded, tell the user that PDF support lives in the `pdf` skill and that this skill handles Office formats only — do **not** try to read the binary with `file_read`.
 - **A legacy `.doc`, `.ppt`, or `.xls`** (pre-2007 binary format) → this extractor reads only the modern OOXML formats. Ask the user to re-save the file as `.docx`/`.pptx`/`.xlsx` and then retry.
 - **Any other local text file** (`.txt`, `.md`, …) → just use `file_read`; no extraction needed.
 
@@ -47,10 +47,10 @@ The command writes markdown to stdout. The structure markers depend on the forma
 - **A non-zero exit with an error line** → relay the cause plainly:
   - `File not found:` → the path is wrong; re-check with `file_search`.
   - `Unsupported file type for office extraction` → not a `.docx`/`.pptx`/`.xlsx`; route per Step 2.
-  - `Not an Office file — use the documents skill for PDF` → hand off to the `documents` skill.
+  - `Not an Office file — use the pdf skill for PDF` → hand off to the `pdf` skill.
   - `Office file is password-protected or encrypted:` → the file is locked; tell the user the password must be removed (re-save without encryption) before it can be read.
   - `Could not open Office file (corrupt or unreadable):` → the file is damaged or not a real OOXML file; tell the user plainly.
 
 ## Scope
 
-Local Office reading (`.docx`/`.pptx`/`.xlsx`) via text extraction. No PDF (see the `documents` skill), no legacy `.doc`/`.ppt`/`.xls` (ask the user to re-save as the modern format), no OCR of scanned images embedded in the file, no charts / embedded images / pivot semantics (text and tables only), and no writing or modifying the source file.
+Local Office reading (`.docx`/`.pptx`/`.xlsx`) via text extraction. No PDF (see the `pdf` skill), no legacy `.doc`/`.ppt`/`.xls` (ask the user to re-save as the modern format), no OCR of scanned images embedded in the file, no charts / embedded images / pivot semantics (text and tables only), and no writing or modifying the source file.

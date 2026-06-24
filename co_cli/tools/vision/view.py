@@ -50,7 +50,7 @@ async def image_view(
     on your next step. Use this for any "what's in this image?" question about a file on
     disk.
 
-    When NOT to use: for a PDF's text, use the documents skill instead — this tool is
+    When NOT to use: for a PDF's text, use the pdf skill instead — this tool is
     image-only (png, jpeg, webp, gif).
 
     Args:

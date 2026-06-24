@@ -12,7 +12,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from co_cli.skills.documents.scripts.extract_pdf import SCANNED_SENTINEL
+from co_cli.skills.pdf.scripts.extract_pdf import SCANNED_SENTINEL
 
 _FIXTURES = Path(__file__).parent / "skills" / "fixtures"
 _TEXT_PDF = _FIXTURES / "text.pdf"

@@ -4,7 +4,7 @@ Invokes the REAL installed command via subprocess against committed Office fixtu
 (.docx/.pptx/.xlsx), proving the entry-point wiring (pyproject [project.scripts]) end
 to end. No mocks: real mammoth/python-pptx/openpyxl extraction, real subprocess. All
 assertions observe stdout/stderr and the exit code only — mirroring the sibling
-``test_flow_skill_documents.py`` contract.
+``test_flow_skill_pdf.py`` contract.
 """
 
 from __future__ import annotations
@@ -67,10 +67,10 @@ def test_missing_path_fails() -> None:
 
 
 def test_pdf_routed_to_documents_skill() -> None:
-    """An existing .pdf exits non-zero, steering the caller to the documents skill."""
+    """An existing .pdf exits non-zero, steering the caller to the pdf skill."""
     result = _run(str(_TEXT_PDF))
     assert result.returncode != 0
-    assert "use the documents skill" in result.stderr
+    assert "use the pdf skill" in result.stderr
 
 
 def test_unsupported_extension_fails(tmp_path: Path) -> None:

@@ -5,13 +5,13 @@ W4.A (dispatch_follows_procedure, judged): write a user skill, dispatch it via
 does, drive a real ``run_turn``, and judge that the response followed each numbered
 instruction in the skill body. This exercises slash-dispatch **mechanics**.
 
-W4.B (skill_selection_mutual_exclusivity, behavioral): the ``documents`` and ``office``
+W4.B (skill_selection_mutual_exclusivity, behavioral): the ``pdf`` and ``office``
 bundled skills are both ``user-invocable: false`` — the model's only entry path is
 selecting them from the ``<available_skills>`` manifest and loading them with
 ``skill_view(name)`` (per the skill-protocol rule). W4.B drives real turns over
 representative prompts and asserts the model selects the right skill from the manifest:
-a PDF prompt selects ``documents`` (not ``office``); a deck / spreadsheet prompt selects
-``office`` (not ``documents``); a bare web URL selects neither (that is ``web_fetch``).
+a PDF prompt selects ``pdf`` (not ``office``); a deck / spreadsheet prompt selects
+``office`` (not ``pdf``); a bare web URL selects neither (that is ``web_fetch``).
 The observable is which skill name reaches ``skill_view`` — the descriptions are the only
 selection signal, so this is the durable regression gate on their mutual exclusivity.
 
@@ -291,26 +291,26 @@ _SELECTION_PROMPTS = [
     (
         "pdf",
         "Please summarize the quarterly report saved at ~/reports/q3-report.pdf.",
-        {"documents"},
+        {"pdf"},
         {"office"},
     ),
     (
         "pptx",
         "Summarize the slide deck at ~/decks/q3-review.pptx for me.",
         {"office"},
-        {"documents"},
+        {"pdf"},
     ),
     (
         "xlsx",
         "What's in the spreadsheet at ~/data/budget.xlsx?",
         {"office"},
-        {"documents"},
+        {"pdf"},
     ),
     (
         "url",
         "Summarize this web page for me: https://example.com/quarterly-update",
         set(),
-        {"documents", "office"},
+        {"pdf", "office"},
     ),
 ]
 
@@ -321,7 +321,7 @@ async def case_w4_b_skill_selection(
     frontend: EvalFrontend,
     run,
 ) -> CaseResult:
-    """W4.B — assert documents↔office mutual exclusivity in model skill selection.
+    """W4.B — assert pdf↔office mutual exclusivity in model skill selection.
 
     Drives one real turn per prompt in ``_SELECTION_PROMPTS`` (fresh history each),
     captures the ``skill_view`` selections, and fails on the first prompt whose
@@ -387,7 +387,7 @@ async def case_w4_b_skill_selection(
     if passed:
         reason = (
             f"all {len(_SELECTION_PROMPTS)} prompts selected the right skill "
-            "(documents↔office mutual exclusivity holds)"
+            "(pdf↔office mutual exclusivity holds)"
         )
 
     return CaseResult(

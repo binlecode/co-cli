@@ -12,7 +12,7 @@ _BUNDLED_NAMES = {
     "doctor",
     "plan",
     "skill-creator",
-    "documents",
+    "pdf",
     "office",
 }
 

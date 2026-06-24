@@ -184,7 +184,7 @@ def main() -> int:
     suffix = path.suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
         if suffix == ".pdf":
-            return _fail(f"Not an Office file — use the documents skill for PDF: {args.path}")
+            return _fail(f"Not an Office file — use the pdf skill for PDF: {args.path}")
         return _fail(
             f"Unsupported file type for office extraction "
             f"(expected .docx/.pptx/.xlsx): {args.path}"

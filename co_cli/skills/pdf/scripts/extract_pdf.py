@@ -1,4 +1,4 @@
-"""Extract a local PDF to markdown for the `documents` skill.
+"""Extract a local PDF to markdown for the `pdf` skill.
 
 Reached only as the ``co-extract-pdf`` console entry point through ``shell_exec`` —
 never imported into the agent process. Emits markdown with explicit ``## Page N``
@@ -88,12 +88,47 @@ def _validate_source(path: Path, raw: str) -> int:
     return 0
 
 
-def _resolve_pages(path: Path, spec: str | None) -> tuple[list[int], int]:
-    """Return the selected 0-based page list and the document's text-layer char count.
+_BUTTON_FIELD_TYPES = {"CheckBox", "RadioButton"}
+
+
+def _page_form_fields(doc, page_index: int) -> list[tuple[str, str]]:
+    """Return the filled ``(field_name, field_value)`` widget pairs on a page, in widget order.
+
+    "Filled" is type-aware: text/combo/list fields keep a non-empty string value;
+    checkbox/radio buttons keep only their on-state — an unset button reports an empty
+    value or the literal ``"Off"`` (pymupdf), neither of which is a real answer. A
+    malformed widget degrades to an empty list for that page: the per-page try/except
+    keeps a widget-read error from escaping to abort the caller's text-layer computation.
+    """
+    fields: list[tuple[str, str]] = []
+    try:
+        page = doc[page_index]
+        for widget in page.widgets():
+            name = widget.field_name
+            value = widget.field_value
+            if not name or value is None:
+                continue
+            value_text = str(value).strip()
+            if not value_text:
+                continue
+            if widget.field_type_string in _BUTTON_FIELD_TYPES and value_text == "Off":
+                continue
+            fields.append((name, value_text))
+    except Exception:
+        return []
+    return fields
+
+
+def _resolve_pages(
+    path: Path, spec: str | None
+) -> tuple[list[int], int, dict[int, list[tuple[str, str]]]]:
+    """Return the selected 0-based page list, the text-layer char count, and the form map.
 
     The text-layer count comes from pymupdf's raw ``get_text`` over the selected
     pages — the actual embedded text, independent of pymupdf4llm's markdown image
-    placeholders — so Constraint 7's scanned detection cannot be fooled by them.
+    placeholders — so Constraint 7's scanned detection cannot be fooled by them. The
+    form map is keyed by 0-based page index and holds only pages that carry at least one
+    filled widget (empty pages are dropped so a non-form PDF yields an empty map).
     Raises ValueError on a malformed --pages spec.
     """
     import pymupdf
@@ -104,9 +139,10 @@ def _resolve_pages(path: Path, spec: str | None) -> tuple[list[int], int]:
             _parse_pages(spec, doc.page_count) if spec is not None else list(range(doc.page_count))
         )
         text_chars = sum(len(doc[page].get_text().strip()) for page in pages)
+        form_fields = {page: fields for page in pages if (fields := _page_form_fields(doc, page))}
     finally:
         doc.close()
-    return pages, text_chars
+    return pages, text_chars, form_fields
 
 
 def _extract(path: Path, pages: list[int]) -> list[dict]:
@@ -131,15 +167,28 @@ def _extract(path: Path, pages: list[int]) -> list[dict]:
         os.close(saved_fd)
 
 
-def _render(chunks: list[dict], pages: list[int]) -> str:
-    """Build page-marked markdown. ``## Page N`` is 1-based (what a PDF viewer shows)."""
+def _render(
+    chunks: list[dict], pages: list[int], form_fields: dict[int, list[tuple[str, str]]]
+) -> str:
+    """Build page-marked markdown. ``## Page N`` is 1-based (what a PDF viewer shows).
+
+    A page that carries filled form widgets gets a ``### Form fields`` subsection of
+    ``- name: value`` lines (widget order) inside its ``## Page N`` block. Pages without
+    filled widgets render exactly as before — the form map is keyed by the same 0-based
+    page index ``page_zero_based`` resolves to.
+    """
     parts: list[str] = []
     for index, chunk in enumerate(chunks):
         text = chunk.get("text", "").strip()
         page_zero_based = chunk.get("metadata", {}).get("page")
         if page_zero_based is None:
             page_zero_based = pages[index] if index < len(pages) else index
-        parts.append(f"## Page {page_zero_based + 1}\n\n{text}")
+        block = f"## Page {page_zero_based + 1}\n\n{text}"
+        fields = form_fields.get(page_zero_based)
+        if fields:
+            field_lines = "\n".join(f"- {name}: {value}" for name, value in fields)
+            block = f"{block}\n\n### Form fields\n\n{field_lines}"
+        parts.append(block)
     return "\n\n".join(parts)
 
 
@@ -244,7 +293,7 @@ def main() -> int:
         return _render_pages(path, pages, args.outdir, args.max_pages)
 
     try:
-        pages, text_chars = _resolve_pages(path, args.pages)
+        pages, text_chars, form_fields = _resolve_pages(path, args.pages)
     except ValueError as error:
         return _fail(f"Invalid --pages value {args.pages!r}: {error}")
 
@@ -257,7 +306,7 @@ def main() -> int:
     except Exception:
         return _fail(f"Could not extract text from PDF: {args.path}")
 
-    sys.stdout.write(_render(chunks, pages) + "\n")
+    sys.stdout.write(_render(chunks, pages, form_fields) + "\n")
     return 0
 
 
