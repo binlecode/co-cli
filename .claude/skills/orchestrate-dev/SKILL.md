@@ -37,6 +37,7 @@ Only modify files listed in `files:`. Announce any extra file: ⚠ Extra file: <
 No mocks, fakes, or patching in tests.
 Run pytest scoped to your affected test files. Fix failures before reporting.
 If a failure requires a design decision, escalate — do not continue past a broken result.
+If your task body still carries a hedged/conditional approach ("do X if …, otherwise Y") that planning left unresolved, escalate — do not silently pick a branch.
 Report: files changed, what was done, test outcome.
 ```
 
@@ -57,6 +58,7 @@ TL collects all Dev results before Phase 3. Scan Dev outputs for `⚠ Extra file
 
 ### Step 2 — Read before writing
 Read every file in `files:`. Note missing files (new).
+When the change couples to a third-party dependency's *internals* (subclassing/overriding an installed SDK type, accessing its private `_attr`, relying on its populated state), read that dependency's installed source under `.venv/lib/python*/site-packages/<pkg>/` first and ground the code in it — cite `path:LINE` in your report. Coding from API memory is the defect orchestrate-plan rule 7 prevents at plan time; it holds at write time too.
 
 ### Step 3 — Implement
 Write or edit only the files in `files:`. Announce any extra file touched.

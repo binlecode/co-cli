@@ -72,6 +72,7 @@ For every requirement in the task description and `done_when`:
 
 - **Find the exact file:line that confirms it is implemented.** Do not accept a description — read the code.
 - **Trace the call path** for every public function or method changed in this delivery: identify caller → callee chain. Confirm the chain exists in source, not just in comments or docs. Do not stop at functions that don't look like "integration points" — trace all of them.
+- **Verify third-party / internals coupling against installed source.** When the delivery subclasses or overrides an installed SDK/library type, accesses its private `_attr`, or relies on its populated state, confirm the coupling against the dependency's installed source under `.venv/lib/python*/site-packages/<pkg>/` — not just that the repo code exists and imports cleanly. A subclass that names the right method but mismatches the installed contract (wrong signature, unpopulated state, private coupling that breaks across versions) is a blocking finding. Cite the dep `path:LINE`. This is the diff-time completion of orchestrate-plan rule 7.
 - **Check for existing implementations** that already solve the stated problem. If the code was already there before this task, the implementation may be redundant or conflicting.
 - **Run `done_when` literally** — same standard as orchestrate-dev Step 5. Do not assume it passes because the delivery run verified it. Re-execute now.
 
