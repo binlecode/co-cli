@@ -430,3 +430,32 @@ def test_blocked_skill_env_key_filtered_at_load(tmp_path: Path) -> None:
     assert skill.skill_env.get("SAFE_KEY") == "safevalue", (
         "safe keys must be preserved in skill_env"
     )
+
+
+# ---------------------------------------------------------------------------
+# 10. /help renders bracketed usage/hints literally (Rich-markup escaping)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_help_renders_bracketed_usage_literally(tmp_path: Path) -> None:
+    """Descriptions/arg-hints containing [brackets] survive rendering verbatim.
+
+    /help cells are parsed as Rich markup, so an unescaped '[off|collapsed|full|next]'
+    or skill hint '[<task-type-name>]' is interpreted as a style tag and silently
+    dropped. Whitespace is squashed so the assertion is robust to column wrapping.
+
+    Regression guard: if the escape() is removed, the bracketed tokens disappear.
+    """
+    import re
+
+    from co_cli.commands.help import _cmd_help
+    from co_cli.display.core import console
+
+    ctx = _make_ctx(_make_deps(tmp_path))
+    with console.capture() as cap:
+        await _cmd_help(ctx, "")
+    squashed = re.sub(r"\s+", "", cap.get())
+
+    assert "[off|collapsed|full|next]" in squashed, "builtin /reasoning usage brackets were eaten"
+    assert "[<task-type-name>]" in squashed, "bundled skill arg-hint brackets were eaten"

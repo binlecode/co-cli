@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from rich.markup import escape
+
 from co_cli.commands.registry import (
     BUILTIN_COMMANDS,
     filter_namespace_conflicts,
@@ -28,8 +30,8 @@ def _cmd_skills_list(ctx: CommandContext) -> None:
             if skill.user_invocable
             else f"[dim]{glyphs().error}[/dim]",
             f"[accent]{i + 1}.[/accent]",
-            skill.name,
-            skill.description or "",
+            escape(skill.name),
+            escape(skill.description or ""),
         )
     console.print(table)
 

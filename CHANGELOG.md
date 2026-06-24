@@ -1,6 +1,10 @@
 # Changelog
 
-## [0.8.472]
+## [0.8.473]
+
+Fix `/help` (and `/skills`) mangling command descriptions and arg-hints that contain `[brackets]`.
+
+- **Escape Rich markup in list cells** — `/help` rendered each description/arg-hint straight into a Rich table cell, so any `[...]` was parsed as a style tag and silently dropped: `/tasks`, `/reasoning`, `/usage`, `/queue`, `/memory` lost their usage syntax and `/plan`'s hint collapsed to `[]`. `commands/help.py` and `commands/skills.py` now `rich.markup.escape()` the dynamic text (the intentional glyph/index markup in `/skills` is preserved). Added a wrap-robust regression test.
 
 Tighten the slash-command surface: skills no longer leak into `/help`, the human stdin command is dropped (peer-aligned), and the background-task commands consolidate under `/tasks`.
 
