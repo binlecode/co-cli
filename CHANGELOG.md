@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.477]
+
+Repair slash-command surface drift: remove the orphaned `/history` command and fix the phantom `/memory dream` subcommand.
+
+- **Removed `/history`** — built for a delegation sub-agent that was retired long ago; its only recognized tool (`task_start`) is a background-shell command that never emits the `role`/`requests`/`scope` fields the handler read, so 3 of its 5 columns could never populate. `/tasks` already covers live + status-filtered background tasks. Deleted `commands/history.py`, its registration, and import in `commands/core.py`; dropped the `tui.md` command-table row. Verified safe by a blind cold-read pass (no current tool emits those keys as tool-return content).
+- **Fixed phantom `/memory dream`** — the `/help` description and `tui.md` advertised a `dream` subcommand the handler doesn't implement (it errors with "Unknown /memory subcommand"). Dropped `dream` from the description in `commands/core.py` and the spec row; daemon control lives in `/dream`.
+- Live slash-command surface is now 17 built-ins (was 18) + 3 user-invocable skills; no description drift remains.
+
 ## [0.8.475]
 
 Surface the usage syntax for the remaining arg-taking `/help` commands.

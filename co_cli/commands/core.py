@@ -10,7 +10,6 @@ from co_cli.commands.compact import _cmd_compact
 from co_cli.commands.dream import handle_dream_slash
 from co_cli.commands.filescope import _cmd_filescope
 from co_cli.commands.help import _cmd_help
-from co_cli.commands.history import _cmd_history
 from co_cli.commands.memory import _cmd_memory
 from co_cli.commands.new import _cmd_new
 from co_cli.commands.queue import _cmd_queue
@@ -49,9 +48,6 @@ BUILTIN_COMMANDS["filescope"] = SlashCommand(
     "Show file search roots (read scope) and the workspace write anchor",
     _cmd_filescope,
 )
-BUILTIN_COMMANDS["history"] = SlashCommand(
-    "history", "Show delegation history (delegation agents + background tasks)", _cmd_history
-)
 BUILTIN_COMMANDS["compact"] = SlashCommand(
     "compact",
     "Summarize conversation via LLM to reduce context: /compact [focus]",
@@ -59,7 +55,7 @@ BUILTIN_COMMANDS["compact"] = SlashCommand(
 )
 BUILTIN_COMMANDS["memory"] = SlashCommand(
     "memory",
-    "Manage memory items — /memory list|count|forget|dream|restore|stats [args]",
+    "Manage memory items — /memory list|count|forget|restore|stats [args]",
     _cmd_memory,
 )
 BUILTIN_COMMANDS["dream"] = SlashCommand(
