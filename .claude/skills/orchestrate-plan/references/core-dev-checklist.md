@@ -7,6 +7,8 @@
 - Hidden coupling / migration gotchas
 - Tasks too large for a single agent session or missing `done_when`
 - "Hallucinated" success (outcomes assumed without validation steps)
+- **Hedged / deferred impl decisions (blocking):** any task whose approach is conditional ("do X if …, otherwise Y"), branches on something not yet checked, or defers a design choice to dev time. Planning must collapse it to the single real branch by reading source. Flag it and name the source file (repo or installed dep) that would settle the condition.
+- **Ungrounded third-party / internals claims (blocking):** any decision that turns on a library, SDK, or module's *internal* behavior (subclassing, overriding, private `_attr` coupling, populated state, contract shape) must cite the installed source (`.venv/lib/python*/site-packages/<pkg>/file.py:LINE`). A claim resting on API memory or the public surface alone is blocking.
 - Test coverage gaps
 - **Stale assertions in existing test files:** if the task adds to an existing test file, scan it for assertions that hardcode counts, sets, or enums the change affects (e.g. `assert set(COMMANDS.keys()) == {...}`). Unupdated stale assertions are blocking.
 - **Guard condition parity:** for tasks that mirror an existing tool, verify guard conditions (empty-string checks, range checks, `max_requests < 1`, etc.) match the nearest peer. Flag intentional divergences if undocumented.
