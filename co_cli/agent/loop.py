@@ -41,7 +41,8 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.usage import RunUsage
 
-from co_cli.agent.dispatch import dispatch_tools, resolve_auto_approvals
+from co_cli.agent.approval import collect_inline_approvals
+from co_cli.agent.dispatch import dispatch_tools
 from co_cli.agent.orchestrate import (
     _REASONING_OVERFLOW_MESSAGE,
     TOOL_CAP_NO_ANSWER_TEXT,
@@ -296,9 +297,14 @@ async def _orchestrator_step_loop(
             return _continue_result(state, turn_usage, output)
 
         state.history = [*state.history, response]
-        denials = resolve_auto_approvals(calls, deps)
+        resolution = await collect_inline_approvals(calls, deps, frontend)
         parts = await dispatch_tools(
-            calls, deps, cap_state=state.cap_state, frontend=frontend, denials=denials
+            calls,
+            deps,
+            cap_state=state.cap_state,
+            frontend=frontend,
+            denials=resolution.denials,
+            approved_ids=resolution.approved_ids,
         )
         state.history = [*state.history, ModelRequest(parts=parts)]
 

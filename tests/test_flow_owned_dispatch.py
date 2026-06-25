@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 
 import pytest
+from pydantic_ai import RunContext
 from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.toolsets import FunctionToolset
 from tests._settings import SETTINGS_NO_MCP
@@ -118,6 +119,40 @@ async def test_dispatch_executes_within_cap_and_sheds_the_rest(tmp_path: Path) -
     tool_spans = [r for r in _read_records(log) if r["kind"] == "tool"]
     assert len(tool_spans) == CAP, "one co.tool span per executed call"
     assert all(r["attributes"].get("co.tool.name") == "echo" for r in tool_spans)
+
+
+@pytest.mark.asyncio
+async def test_dispatch_marks_approved_call_tool_call_approved(tmp_path: Path) -> None:
+    inner: FunctionToolset = FunctionToolset()
+
+    async def probe(ctx: RunContext[CoDeps]) -> str:
+        return "APPROVED" if ctx.tool_call_approved else "UNAPPROVED"
+
+    inner.add_function(probe, requires_approval=False)
+    deps = CoDeps(
+        shell=ShellBackend(),
+        config=SETTINGS_NO_MCP,
+        session=CoSessionState(),
+        runtime=CoRuntimeState(),
+        tool_results_dir=tmp_path / "tool-results",
+        tool_catalog={
+            "probe": _info(
+                "probe", source=ToolSourceEnum.NATIVE, visibility=VisibilityPolicyEnum.ALWAYS
+            )
+        },
+        model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
+    )
+    deps.toolset = _CallSeamToolset(inner)
+
+    calls = [
+        ToolCallPart(tool_name="probe", args={}, tool_call_id="yes"),
+        ToolCallPart(tool_name="probe", args={}, tool_call_id="no"),
+    ]
+    parts = await dispatch_tools(calls, deps, cap_state=ToolCapState(), approved_ids={"yes"})
+
+    by_id = {p.tool_call_id: p.content for p in parts}
+    assert by_id["yes"] == "APPROVED", "call in approved_ids runs with tool_call_approved=True"
+    assert by_id["no"] == "UNAPPROVED", "call absent from approved_ids is unapproved"
 
 
 @pytest.mark.asyncio

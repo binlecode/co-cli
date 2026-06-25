@@ -12,10 +12,10 @@ loop reproduces all of that here:
   serialized), applies MCP spill, and emits the ``co.tool.*`` span per call.
 - It dispatches on the **unwrapped** routing toolset (``deps.toolset.wrapped``) so the folded
   span/cap/spill are not double-applied by the still-live ``_CallSeamToolset`` seam.
-- ``resolve_auto_approvals`` is the Phase-2 deny-placeholder: a call that needs approval and
-  is not auto-approved by config returns a denial ``ToolReturnPart`` (no interactive prompt —
-  that is Phase 3). Subagents register tools ``requires_approval=False``, so it is a no-op
-  for them.
+- Approval is resolved upstream by ``collect_inline_approvals`` (``agent/approval.py``),
+  which prompts the user before fan-out and passes ``denials`` (denied calls) +
+  ``approved_ids`` (the in-body raisers' gate) into ``dispatch_tools``. Subagents register
+  tools ``requires_approval=False``, so the collector is a no-op for them.
 
 Phase-2 simplifications (behind the default-off flag, read-only-tool gate): the args-retry
 loop is single-shot (a validation/``ModelRetry`` failure returns a ``RetryPromptPart`` the
@@ -40,7 +40,6 @@ from co_cli.deps import CoDeps, ToolSourceEnum
 from co_cli.fileio.spill import spill_with_span
 from co_cli.observability.serialize import serialize_tool_args, truncate_tool_result
 from co_cli.observability.tracing import current_span, pop_span, push_span
-from co_cli.tools.approvals import decode_tool_args, is_auto_approved, resolve_approval_subject
 from co_cli.tools.display import format_for_display, get_tool_start_args_display
 from co_cli.tools.tool_call_limit import make_exceeded_payload
 
@@ -52,23 +51,24 @@ if TYPE_CHECKING:
     from co_cli.display.core import Frontend
 
 
-DENY_PLACEHOLDER_TEXT = (
-    "This tool call requires approval, which is not available in the current "
-    "(owned-loop) mode — the call was not executed. Continue without it or ask the "
-    "user to run the action directly."
-)
-"""Phase-2 deny-placeholder result for a non-auto-approved sensitive call (no interactive
-prompt until Phase 3). Degraded-but-safe: the loop never executes an unapproved op."""
-
-
 def make_run_context(
-    deps: CoDeps, *, tool_name: str | None = None, tool_call_id: str = ""
+    deps: CoDeps,
+    *,
+    tool_name: str | None = None,
+    tool_call_id: str = "",
+    tool_call_approved: bool = False,
 ) -> RunContext[CoDeps]:
     """Build the synthetic ``RunContext`` the owned loop passes to toolset get/call.
 
     The graph supplied a real ``RunContext``; the owned loop owns the loop instead, so it
     constructs a minimal one (deps + raw model + fresh usage). ``model`` may be the raw
     provider model; the visibility filter and co's tools read ``ctx.deps``.
+
+    ``tool_call_approved`` is load-bearing only for the two in-body raisers — shell
+    (``execute.py``) and clarify (``user_input.py``) read it to decide whether to execute
+    or raise ``ApprovalRequired``/``QuestionRequired``. Catalog ``is_approval_required``
+    tools never read it on the owned path (``FunctionToolset.call_tool`` has no approval
+    gate), so for them the collector's denial entry is the gate, not this flag.
     """
     raw_model = deps.model.model if deps.model else None
     return RunContext(
@@ -77,6 +77,7 @@ def make_run_context(
         usage=RunUsage(),
         tool_name=tool_name,
         tool_call_id=tool_call_id,
+        tool_call_approved=tool_call_approved,
     )
 
 
@@ -99,32 +100,6 @@ async def get_visible_tools(
     tool set is identical to the graph's for the same ``deps`` state.
     """
     return await _routing_toolset(deps).get_tools(ctx)
-
-
-def resolve_auto_approvals(
-    tool_calls: list[ToolCallPart], deps: CoDeps
-) -> dict[str, ToolReturnPart]:
-    """Return denial parts for calls that need approval and are not auto-approved (Phase 2).
-
-    A call whose tool does not require approval, or whose subject is auto-approved by a
-    session/config rule, is absent from the result (it will execute). Every other approval-
-    requiring call maps to a denial ``ToolReturnPart`` — the deny-placeholder.
-    """
-    denials: dict[str, ToolReturnPart] = {}
-    for call in tool_calls:
-        info = deps.tool_catalog.get(call.tool_name)
-        if info is None or not info.is_approval_required:
-            continue
-        subject = resolve_approval_subject(call.tool_name, decode_tool_args(call.args), info)
-        if is_auto_approved(subject, deps):
-            continue
-        denials[call.tool_call_id] = ToolReturnPart(
-            tool_name=call.tool_name,
-            content=DENY_PLACEHOLDER_TEXT,
-            tool_call_id=call.tool_call_id,
-            outcome="denied",
-        )
-    return denials
 
 
 def _to_return_part(call: ToolCallPart, result: Any) -> ToolReturnPart:
@@ -208,6 +183,7 @@ async def _execute_one(
     routing: AbstractToolset[CoDeps],
     tool: ToolsetTool[CoDeps],
     frontend: Frontend | None,
+    tool_call_approved: bool = False,
 ) -> ToolReturnPart | RetryPromptPart:
     """Validate, dispatch, spill, and span one within-cap tool call (folded seam)."""
     name = call.tool_name
@@ -219,7 +195,9 @@ async def _execute_one(
             _tid, msg
         )
 
-    ctx = make_run_context(deps, tool_name=name, tool_call_id=tool_id)
+    ctx = make_run_context(
+        deps, tool_name=name, tool_call_id=tool_id, tool_call_approved=tool_call_approved
+    )
     push_span(
         f"tool {name}",
         kind="tool",
@@ -264,6 +242,7 @@ async def dispatch_tools(
     cap_state: ToolCapState,
     frontend: Frontend | None = None,
     denials: dict[str, ToolReturnPart] | None = None,
+    approved_ids: set[str] | None = None,
 ) -> list[ToolReturnPart | RetryPromptPart]:
     """Dispatch one model request's tool calls with the pre-fan-out cap, in original order.
 
@@ -272,8 +251,13 @@ async def dispatch_tools(
     denied (``denials``) get their denial part; the rest execute (concurrent tools in
     parallel under ``tool_dispatch_sem``, sequential tools serialized). Results preserve the
     input order.
+
+    A call whose ``tool_call_id`` is in ``approved_ids`` runs with
+    ``ctx.tool_call_approved=True`` so the in-body raisers (shell, clarify) execute instead
+    of raising. Catalog approval-gated tools ignore the flag (see ``make_run_context``).
     """
     denials = denials or {}
+    approved_ids = approved_ids or set()
     cap_state.note_calls(len(tool_calls))
     boundary = cap_state.shed_boundary(len(tool_calls))
 
@@ -305,7 +289,14 @@ async def dispatch_tools(
                 tool_call_id=call.tool_call_id,
             )
             return
-        results[i] = await _execute_one(call, deps, _routing_toolset(deps), tool, frontend)
+        results[i] = await _execute_one(
+            call,
+            deps,
+            _routing_toolset(deps),
+            tool,
+            frontend,
+            tool_call_approved=call.tool_call_id in approved_ids,
+        )
 
     concurrent = [i for i in within if not _is_sequential(tools, tool_calls[i])]
     sequential = [i for i in within if _is_sequential(tools, tool_calls[i])]

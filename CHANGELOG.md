@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.496]
+
+Loop-decoupling Phase 3 — inline approval on the owned loop, replacing the deny-placeholder (refactor, parity).
+
+- **Inline approval collector (`co_cli/agent/approval.py`)** — new `collect_inline_approvals` runs **before** the owned loop's parallel tool fan-out, strictly sequentially (one frontend prompt future, never `asyncio.gather`-ed). It prompts the user for every approval-gated call at parity with the graph path's `DeferredToolRequests` suspend/resume: catalog `is_approval_required=True` tools **and** `shell_exec`'s dynamic `REQUIRE_APPROVAL` policy gate (re-evaluated via the pure `evaluate_shell_command`). Honors auto-approval, remember-on-`a`, and headless (`frontend is None`) auto-deny.
+- **`clarify` inline on the owned path** — the collector asks each question, stashes answers in `deps.runtime.clarify_answers` keyed by `tool_call_id`, and marks the call approved so the unchanged clarify body returns them. Headless clarify approves-with-empty (not auto-deny), matching the graph asymmetry. Previously crashed the owned turn.
+- **`tool_call_approved` plumbing** — `make_run_context` + `dispatch_tools` gained `tool_call_approved`/`approved_ids`; an approved call's in-body raiser (shell, clarify) executes instead of raising. Deny → a `ToolReturnPart(outcome="denied")` fed back to the model; the turn continues (approved siblings still execute), at parity with the graph's `ToolDenied`.
+- **Removed the Phase-2 stand-ins** — `resolve_auto_approvals` + `DENY_PLACEHOLDER_TEXT` deleted (grep-zero).
+- **Parity gate** — `eval_approval_discipline` + `eval_bounded_autonomy` converted to `drive_turn` and verified green on the owned path against the still-live graph oracle. Graph path untouched; deletion of the deferred machinery is fenced to Phase 5, write-capable delegated children to Phase 3.5.
+
 ## [0.8.494]
 
 Loop-decoupling Phase 2.5 — in-turn agent-as-tool delegation, read-mostly child (feature).

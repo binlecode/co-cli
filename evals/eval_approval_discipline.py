@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from evals._deps import eval_deps
+from evals._deps import drive_turn, eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
@@ -44,8 +44,6 @@ from evals._settings import EVAL_WORKSPACE_DIR, apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S, TURN_BUDGET_S
 from evals._trace import record_turn, response_text
 from pydantic_ai.messages import ModelResponse, ToolCallPart
-
-from co_cli.agent.orchestrate import run_turn
 
 _SCRATCH_DIR = EVAL_WORKSPACE_DIR / "eval_w8_scratch"
 _SCRATCH_FILES = ("note_a.md", "note_b.md")
@@ -124,7 +122,7 @@ async def _drive_turns(
                 user_input=user_input,
                 prior_message_count=prior_len,
                 run_turn_callable=(
-                    lambda h=history, ui=user_input: run_turn(
+                    lambda h=history, ui=user_input: drive_turn(
                         agent=agent,
                         user_input=ui,
                         deps=deps,
