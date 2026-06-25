@@ -29,14 +29,14 @@ Every finding maps to one of these. Source of truth: `.agent_docs/review.md` *Cl
 |---|------|--------|------------------|
 | R1 | **One-sided member** — field/param/flag with only a write site OR only a read site | review.md:37 | grep both sites per field/flag; one missing = dead |
 | R2 | **Redundant same-lifecycle state** — two flags/paths written + cleared together = one concept | review.md:38 | read flag mutation sites; co-set/co-cleared pairs |
-| R3 | **Wrapper/bundle bag** — class/dataclass existing only as a return-value bag or eval one-liner | review.md:39 | classes whose only methods are `__init__`/field access, single caller |
+| R3 | **Wrapper/bundle bag or premature abstraction** — class/dataclass existing only as a return-value bag or eval one-liner; *or* an interface (ABC/Protocol/base class) / factory whose only concrete implementation is a single type | review.md:39 | classes whose only methods are `__init__`/field access, single caller; ABC/Protocol with one subclass, factory producing one product type |
 | R4 | **Wrong module home** — domain logic in a package that doesn't own the concern | review.md:40 | import-graph back-edges; domain code under generic layers (`context/`, `util/`) |
 | R5 | **Underscore visibility leak** — `_module`/`_symbol` imported across a package boundary | review.md:41 | the cross-package edge map filtered to private names — NOT a flat grep (same-package `_x` imports are legal) |
 | R6 | **Import-time side effect** — module-scope IO, config read, console/tracer build, singleton coupling | review.md:42 | module top-level non-def statements that call/construct |
 | R7 | **Optimistic flag** — `state.x = True` set before the operation it asserts commits | review.md:43 | read order of flag-set vs the awaited/returning op |
 | R8 | **Backward-compat residue** — alias, compat shim, `_legacy`/`_compat`/`_old`, migration reader | review.md:44 | grep `_legacy\|_compat\|_old`, alias assignments, dual-format readers |
 | R9 | **Naming drift** — wrong class suffix, missing numeric unit suffix, abbreviation, bare `created`/`updated` (should be `_at`) | code-conventions.md | section-by-section scan |
-| R10 | **Dead code** — helper/symbol with zero non-test callers; stale import | review.md:13 | grep caller count per private symbol; ruff for imports |
+| R10 | **Dead code** — helper/symbol with zero non-test callers; stale import; declared dependency with zero import sites | review.md:13 | grep caller count per private symbol; ruff for imports; `pyproject.toml` deps diffed against the import map |
 | R11 | **Duplication (DRY)** — near-identical block/logic in ≥2 homes | review.md:38 | clustered logic; same primitive reimplemented |
 | R12 | **Swallowed error** — broad `except`/empty handler/log-and-continue on a user-visible path | review.md:16 | grep `except Exception`/bare `except`; read the handler |
 
@@ -141,9 +141,13 @@ Every finding maps to one of these. Source of truth: `.agent_docs/review.md` *Cl
    # populated __init__ (R5/R6): AST, not grep — a multi-line docstring is not code.
    # flag a __init__.py only if ast.get_docstring()-stripped body has any non-docstring statement.
    uv run python tmp/check_inits.py                                  # emits only truly-populated __init__.py
+   # R10 unused deps: collect third-party top-level imports across co_cli/, diff against
+   # [project.dependencies] in pyproject.toml. A dep with no matching import is a CANDIDATE
+   # to confirm by reading, never an auto-flag — dist name ≠ import name for many packages.
+   uv run python tmp/unused_deps.py                                 # emits declared deps with no import site
    ```
 
-   Proof anchors for the two non-obvious filters above: the unbounded `_old` flags the local `t_old` in `tools/files/write.py`; a line-counter `__init__` check false-flags the docstring-only `index`/`session`/`personality.prompts` packages.
+   Proof anchors for the three non-obvious filters above: the unbounded `_old` flags the local `t_old` in `tools/files/write.py`; a line-counter `__init__` check false-flags the docstring-only `index`/`session`/`personality.prompts` packages; a bare dist-name diff false-flags packages whose import name differs from the distribution name (`pydantic-ai` → `pydantic_ai`, `python-dotenv` → `dotenv`), so each unmatched dep is resolved to its real import name before it counts.
 
 ---
 
@@ -152,7 +156,7 @@ Every finding maps to one of these. Source of truth: `.agent_docs/review.md` *Cl
 For a whole-`co_cli/` run, fan out to **read-only** audit subagents — declared tools `Read, Grep, Bash` (no Edit/Write). Group by **rule-class cluster**, not by file, so each agent holds one rule's full mental model across the tree:
 
 - **Agent A — boundaries & visibility:** R4 (consume `tmp/edges.txt`), R5, populated `__init__.py`.
-- **Agent B — subtraction:** R1, R2, R3, R10 (one-sided members, redundant state, wrapper bags, dead code).
+- **Agent B — subtraction:** R1, R2, R3, R10 (one-sided members, redundant state, wrapper bags + one-implementation abstractions, dead code + unused deps).
 - **Agent C — lifecycle & errors:** R6, R7, R12 (import-time side effects, optimistic flags, swallowed errors).
 - **Agent D — naming & compat:** R8, R9, R11 (compat residue, naming drift, duplication).
 
@@ -163,7 +167,7 @@ Each agent returns **only** a findings table — no narrative, no fixes:
 
 **Evidence is mandatory and must be a read, not a grep hit.** For R1: cite the write site AND the absent read site (grep returned 0). For R4: cite the importing line + the layer inversion. For R5: cite the cross-package `from ..._x import` + the defining module. A row without a read-confirmed `file:line` is dropped.
 
-Subagents systematically **over-flag** R1/R3/R10 (a "one-sided" field is often read via `getattr`/serialization; a "single-caller" wrapper may be a deliberate seam) and **under-flag** R2/R11 (judgment-heavy). Treat every DELETE/REMOVE proposal as a candidate; the orchestrator re-confirms against source before it enters the plan.
+Subagents systematically **over-flag** R1/R3/R10 (a "one-sided" field is often read via `getattr`/serialization; a "single-caller" wrapper may be a deliberate seam; a one-implementation Protocol/ABC may be a published extension contract or a test seam, not a dead abstraction) and **under-flag** R2/R11 (judgment-heavy). Treat every DELETE/REMOVE proposal as a candidate; the orchestrator re-confirms against source before it enters the plan.
 
 ---
 
@@ -198,14 +202,14 @@ Scope: <path>          Import edges scanned: N
 Violations found: N total (read-confirmed; M grep candidates dropped on read)
   R1 one-sided member:        N
   R2 redundant state:         N
-  R3 wrapper bag:             N
+  R3 wrapper / 1-impl abstraction: N
   R4 wrong module home:       N   ← back-edges: [list]
   R5 underscore leak:         N   ← [list pkg._x -> importer]
   R6 import-time side effect: N
   R7 optimistic flag:         N
   R8 backward-compat residue: N
   R9 naming drift:            N
-  R10 dead code:              N
+  R10 dead code / unused dep:  N
   R11 duplication:            N
   R12 swallowed error:        N
 
