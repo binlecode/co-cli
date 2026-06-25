@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.494]
+
+Loop-decoupling Phase 2.5 — in-turn agent-as-tool delegation, read-mostly child (feature).
+
+- **`delegate` tool (owned-path, ALWAYS visibility)** — the orchestrator can hand a multi-step read/search/gather subtask to a child agent mid-turn; the child runs in an isolated forked context with a read-mostly tool surface and returns only a distilled one-field summary. The child's intermediate tool transcript never enters the parent's history (the context-isolation contract) — a second, lossless context lever alongside compaction. New `co_cli/agent/delegation.py` (`DELEGATE_CHILD_SPEC`, `DelegationResult`, `delegate_to_child`, `DELEGATE_DEPTH_CAP=1`, `DELEGATE_CHILD_BUDGET`) and `co_cli/tools/system/delegate.py`.
+- **Own-sem fork (CD-M-1)** — `fork_deps(..., share_dispatch_sem=False)` gives the in-turn child its own `tool_dispatch_sem` so it never starves behind the parent slot held for the synchronous `delegate` call; `delegate` is `is_concurrent_safe=False` so dispatch runs it alone. Child usage rolls into the parent turn via the shared `usage_accumulator` (no new accounting).
+- **Bounded recursion** — depth cap = 1 via `agent_depth` backstop plus `delegate` absent from the child surface; a budget-exhausted child (`run_standalone_owned` → `None`) maps to a fixed fallback string, not an `AttributeError`.
+- **`run_standalone_owned` settings param** — now takes `settings` (defaults to `settings_noreason`, daemon path byte-for-byte unchanged); `delegate` passes the parent turn's foreground settings. When-to-delegate heuristic added as tool-presence-gated `DELEGATE_GUIDANCE` plus the tool docstring (under-firing mitigation).
+- Additive only — the graph path is untouched and no existing eval calls `delegate`.
+
 ## [0.8.492]
 
 Loop-decoupling Phase 2 — owned turn loop behind a flag, parallel to the graph (refactor).

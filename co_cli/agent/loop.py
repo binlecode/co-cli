@@ -389,7 +389,9 @@ def _subagent_instructions(spec: Any, deps: CoDeps) -> str:
     return instructions
 
 
-async def run_standalone_owned(spec: Any, deps: CoDeps, prompt: str) -> Any:
+async def run_standalone_owned(
+    spec: Any, deps: CoDeps, prompt: str, settings: ModelSettings | None = None
+) -> Any:
     """Run a task agent through the owned loop (OQ-4 option b — structured ``final_result``).
 
     Drives ``model_turn`` with the subagent's tool surface plus the ``final_result`` output
@@ -415,7 +417,8 @@ async def run_standalone_owned(spec: Any, deps: CoDeps, prompt: str) -> Any:
 
     function_defs = await build_tool_defs(deps)
 
-    settings = deps.model.settings_noreason
+    if settings is None:
+        settings = deps.model.settings_noreason
     request_limit = spec.default_budget
     stall_window = deps.config.llm.run_stall_timeout_secs
     cap_state = ToolCapState()

@@ -42,6 +42,7 @@ from co_cli.tools.session.recall import session_search  # noqa: F401
 from co_cli.tools.session.view import session_view  # noqa: F401
 from co_cli.tools.shell.execute import shell_exec  # noqa: F401
 from co_cli.tools.system.capabilities import capabilities_check  # noqa: F401
+from co_cli.tools.system.delegate import delegate  # noqa: F401
 from co_cli.tools.system.skills import (  # noqa: F401
     skill_create,
     skill_delete,

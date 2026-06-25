@@ -45,7 +45,11 @@ from co_cli.personality.prompts.loader import load_soul_critique
 # memory_search → bucket 17,808 → 20,016. Re-pinned consciously: the one-schema prefill cost is a
 # deliberate, reviewed trade against the misroute-to-wrong-tier failure for a common query class
 # (its concept-expansion docstring is what elicits the cascade; trimming it would defeat the fix).
-ALWAYS_BUCKET_CEILING = 20_100
+# 2026-06-25: loop-decoupling Phase 2.5 added the `delegate` tool at ALWAYS visibility (+970 chars)
+# → bucket 20,016 → 21,068. Re-pinned consciously: ALWAYS (not DEFERRED) is the reviewed decision —
+# a flagship in-turn-delegation capability under-fires if hidden behind a tool_view reveal, so the
+# one-schema prefill cost buys discoverability (its when-to-delegate cue is what counters under-firing).
+ALWAYS_BUCKET_CEILING = 21_100
 # Per-tool tripwire against UNINTENDED docstring bloat — pinned just above the
 # largest ALWAYS tool, not a first-principle budget (the principled cap is the
 # cumulative ALWAYS_BUCKET_CEILING: every ALWAYS schema ships in every turn's

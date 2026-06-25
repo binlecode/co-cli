@@ -402,7 +402,7 @@ def resolve_workspace_paths(config: Settings) -> dict[str, Any]:
     }
 
 
-def fork_deps(base: CoDeps) -> CoDeps:
+def fork_deps(base: CoDeps, *, share_dispatch_sem: bool = True) -> CoDeps:
     """Create an isolated CoDeps copy for a delegation tool agent.
 
     Shares handles, registries, config, and paths by reference.
@@ -416,6 +416,11 @@ def fork_deps(base: CoDeps) -> CoDeps:
       usage_accumulator   — turn-scoped token tally; subagent tokens roll into parent's turn
       degradations        — read-only after bootstrap
     These are safe to share because per-turn mutable state (CoRuntimeState) is always fresh.
+
+    share_dispatch_sem=False gives the child its own tool_dispatch_sem. In-turn delegation
+    needs this: the @agent_tool wrapper holds a parent sem slot for the whole synchronous
+    delegate call, so a child drawing from the same pool would starve/deadlock behind the
+    held slot. A daemon fork (top-level, no parent slot held) keeps the default shared sem.
 
     toolset is intentionally excluded — task agents wire their own minimal
     tool surface via TaskAgentSpec.tool_names resolved by build_task_agent.
@@ -434,7 +439,11 @@ def fork_deps(base: CoDeps) -> CoDeps:
         config=base.config,
         resource_locks=base.resource_locks,
         file_tracker=base.file_tracker,
-        tool_dispatch_sem=base.tool_dispatch_sem,
+        tool_dispatch_sem=(
+            base.tool_dispatch_sem
+            if share_dispatch_sem
+            else asyncio.Semaphore(MAX_TOOL_DISPATCH_WORKERS)
+        ),
         index_store=base.index_store,
         memory_store=base.memory_store,
         session_store=base.session_store,

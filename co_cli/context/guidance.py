@@ -17,6 +17,13 @@ call `capabilities_check` before answering. It reports the current tool surface,
 approval-gated actions, unavailable or limited components, and active fallbacks.
 Pair it with `tool_view` when the question is also about deferred tools."""
 
+DELEGATE_GUIDANCE = """\
+## Delegating subtasks
+When a subtask needs several read/search/gather steps whose intermediate results you
+won't need to retain, call `delegate` with a self-contained task description — a focused
+sub-agent gathers in its own isolated context and returns only a concise summary, keeping
+your working context clean. Do small one-shot lookups inline yourself."""
+
 
 def build_toolset_guidance(tool_catalog: dict[str, ToolInfo]) -> str:
     """Emit tool-specific guidance for tools actually present in the session."""
@@ -25,5 +32,7 @@ def build_toolset_guidance(tool_catalog: dict[str, ToolInfo]) -> str:
 
     if "capabilities_check" in tool_names:
         parts.append(CAPABILITIES_GUIDANCE)
+    if "delegate" in tool_names:
+        parts.append(DELEGATE_GUIDANCE)
 
     return "\n\n".join(parts)
