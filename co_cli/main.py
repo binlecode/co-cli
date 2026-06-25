@@ -54,6 +54,7 @@ from co_cli.display.core import (
 )
 from co_cli.dream_queue import write_review_kick
 from co_cli.observability.setup import setup_observability
+from co_cli.observability.tracing import set_session_context
 from co_cli.session.browser import extract_title
 from co_cli.session.persistence import persist_session_history
 from co_cli.session.usage import ORIGIN_SESSION, append_turn
@@ -189,6 +190,9 @@ async def _run_foreground_turn(
     cleanup_skill_run_state is guaranteed via finally.
     Returns next_message_history.
     """
+    session_path = deps.session.session_path
+    if session_path is not None:
+        set_session_context(session_path.stem[-8:])
     try:
         turn_result = await run_turn(
             agent=agent,

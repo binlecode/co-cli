@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.487]
+
+Wire the active session id into emitted trace spans (bugfix).
+
+- **Span session attribution (fix)** — every span emitted through the tracing stack now carries the active short session id. The `set_session_context` → `_SESSION_ID` → `_emit` bridge shipped at v0.8.206 but was never called by the harness, so spans recorded `session_id=None` ever since. `_run_foreground_turn` now sets the contextvar from `deps.session.session_path` at turn entry — the span emitter has no `deps` in scope, so the contextvar is the only path to thread the id down to it. Other session-id consumers (usage ledger, dream kicks, status) read `deps` directly and were unaffected.
+
 ## [0.8.486]
 
 Refactor the agent loop onto pydantic-ai's intended `agent.iter()` tier, and make the model-generation stall timeout operator-tunable.
