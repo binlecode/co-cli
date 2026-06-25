@@ -1,7 +1,7 @@
-"""Tests for syntactic tool-call arg repair, relocated into SurrogateRecoveryModel.
+"""Tests for syntactic tool-call arg repair, homed in co_cli.llm._json_repair.
 
 Two layers:
-  - _repair_json_args / _repair_response: the syntactic repair, applied to each
+  - repair_json_args / repair_response: the syntactic repair, applied to each
     string ToolCallPart.args on a ModelResponse before pydantic validation.
   - SurrogateRecoveryModel.request gating: repair runs on the Ollama-backed model
     (repair_tool_args=True) and is a no-op on the Gemini path (default False).
@@ -20,63 +20,60 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 
-from co_cli.llm.surrogate_recovery_model import (
-    SurrogateRecoveryModel,
-    _repair_json_args,
-    _repair_response,
-)
+from co_cli.llm._json_repair import repair_json_args, repair_response
+from co_cli.llm.surrogate_recovery_model import SurrogateRecoveryModel
 
 # ---------------------------------------------------------------------------
-# _repair_json_args — syntactic repair passes
+# repair_json_args — syntactic repair passes
 # ---------------------------------------------------------------------------
 
 
 def test_clean_json_passes_through():
-    result = _repair_json_args('{"cmd": "ls"}')
+    result = repair_json_args('{"cmd": "ls"}')
     assert json.loads(result) == {"cmd": "ls"}
 
 
 def test_empty_string_becomes_empty_object():
-    assert _repair_json_args("") == "{}"
+    assert repair_json_args("") == "{}"
 
 
 def test_none_literal_becomes_empty_object():
-    assert _repair_json_args("None") == "{}"
+    assert repair_json_args("None") == "{}"
 
 
 def test_trailing_comma_stripped():
-    result = _repair_json_args('{"a": 1,}')
+    result = repair_json_args('{"a": 1,}')
     assert json.loads(result) == {"a": 1}
 
 
 def test_control_chars_escaped():
     raw = '{"cmd": "git\tstatus"}'
-    result = _repair_json_args(raw)
+    result = repair_json_args(raw)
     assert json.loads(result)["cmd"] == "git\tstatus"
 
 
 def test_unclosed_brace_balanced():
-    result = _repair_json_args('{"a": 1')
+    result = repair_json_args('{"a": 1')
     assert json.loads(result) == {"a": 1}
 
 
 def test_nested_unclosed_brace_balanced():
-    result = _repair_json_args('{"a": {"b": 2')
+    result = repair_json_args('{"a": {"b": 2')
     assert json.loads(result) == {"a": {"b": 2}}
 
 
 def test_excess_closing_delimiters_trimmed():
-    result = _repair_json_args('{"a": 1}}}')
+    result = repair_json_args('{"a": 1}}}')
     assert json.loads(result) == {"a": 1}
 
 
 def test_combined_trailing_comma_and_unclosed():
-    result = _repair_json_args('{"a": 1,')
+    result = repair_json_args('{"a": 1,')
     assert json.loads(result) == {"a": 1}
 
 
 # ---------------------------------------------------------------------------
-# _repair_response — repair must not corrupt already-valid tool calls
+# repair_response — repair must not corrupt already-valid tool calls
 # ---------------------------------------------------------------------------
 
 
@@ -89,7 +86,7 @@ def test_repair_response_leaves_valid_and_dict_args_intact():
         ],
         model_name="fn",
     )
-    repaired = _repair_response(response)
+    repaired = repair_response(response)
     parts = [p for p in repaired.parts if isinstance(p, ToolCallPart)]
     assert json.loads(parts[0].args) == {"x": 1}
     assert parts[1].args == {"y": 2}
@@ -137,7 +134,7 @@ async def test_gemini_path_leaves_args_untouched():
 # SurrogateRecoveryModel.request_stream — gated repair on the streaming path
 #
 # The agent graph validates streamed tool args from StreamedResponse.get(), so
-# _RepairingStreamedResponse must repair that assembled response. These tests pin
+# RepairingStreamedResponse must repair that assembled response. These tests pin
 # that seam: a future SDK change that bypasses it turns them red instead of
 # silently crashing every malformed-JSON tool call on the Ollama streaming path.
 # ---------------------------------------------------------------------------

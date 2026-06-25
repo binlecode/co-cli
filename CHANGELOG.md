@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.490]
+
+Loop-decoupling Phase 1 — graph-free `model_turn` provider client (refactor).
+
+- **New `model_turn` client** — `co_cli/llm/model_turn.py` exposes `model_turn(...)`, an async-context client that drives pydantic-ai's `direct.model_request_stream` itself (no `WrapperModel`, no graph) and applies co's three model-boundary concerns inline: surrogate-retry around stream open, the `chat` span, and gated JSON arg repair. It is the foundation the owned loop (later phases) sits on; dead-code-until-Phase-2 by design.
+- **Repair primitives extracted** — `repair_json_args`, `repair_response`, `RepairingStreamedResponse` (+ module-private helpers) moved out of `surrogate_recovery_model.py` into the package-private `co_cli/llm/_json_repair.py`, shared by both the still-live wrapper and the new client (no duplication). The span-close helpers (`model_span_close_attributes`, `close_model_span`) now home in `model_turn.py`.
+- **Graph path unchanged** — `SurrogateRecoveryModel` keeps identical behavior (now importing the relocated primitives) and remains the default driver; the wrapper is deleted in a later phase.
+
 ## [0.8.488]
 
 Remove the duplicate todo-enrichment feed to the compaction summarizer (refactor).
