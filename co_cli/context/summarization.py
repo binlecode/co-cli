@@ -36,7 +36,7 @@ from co_cli.config.tuning import (
     SUMMARY_FIT_SAFETY_MARGIN,
     SUMMARY_NOREASON_CEILING_FALLBACK,
 )
-from co_cli.context.timeouts import LLM_RUN_TIMEOUT_SECS
+from co_cli.context.timeouts import SUMMARIZE_CALL_TIMEOUT_SECS
 from co_cli.deps import CoDeps
 from co_cli.llm.call import llm_call
 from co_cli.observability.tracing import current_span
@@ -431,7 +431,7 @@ async def summarize_messages(
 
     # Needed only for the /compact command path, which has no outer run timeout.
     # On the proactive path the run timeout already caps this call.
-    async with asyncio.timeout(LLM_RUN_TIMEOUT_SECS):
+    async with asyncio.timeout(SUMMARIZE_CALL_TIMEOUT_SECS):
         summary = await llm_call(
             deps,
             user_message,

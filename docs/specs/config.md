@@ -172,6 +172,7 @@ Ollama floor/ceiling contract above is unchanged.
 | `llm.judge_model` | — | `None` | Optional pinned-distinct judge model name. Used by phase-1 judge cases (W1.A coherence, W4.A skill body) AND all phase-2 behavioral evals. Inherits provider/host/api_key from `llm.*`; only the model name differs. When unset, the judge falls back to `llm.model` and `CaseResult.reason` carries `[judge_model_same_as_agent]` — a single-model regression can mask itself in the judge. Pick a model with comparable capability but a different family/training data than `model` when possible (e.g. `qwen` agent + `llama` judge) so single-family regressions don't mask. |
 | `llm.max_context_tokens` | — | profile-derived | Context budget; default resolves from the model profile (`weak_local`/Ollama → `65536`; `frontier`/Gemini → `524288`). An explicit value overrides the profile default. Ollama caps it by the probed `num_ctx`. |
 | `llm.max_model_requests_per_turn` | `CO_LLM_MAX_MODEL_REQUESTS_PER_TURN` | `40` | Max LLM calls (ModelResponses) per user turn; `0` disables the cap. Doom-loop circuit breaker, not a work limit — see [core-loop.md](core-loop.md) §1 for the sizing rationale |
+| `llm.run_stall_timeout_secs` | `CO_LLM_RUN_STALL_TIMEOUT_SECS` | `120` | Model-generation stall window (seconds, > 0): max wall-time the run waits for model progress before `TurnResult(outcome='error')`. Tunable because local-model latency varies by model/hardware — see [core-loop.md](core-loop.md) §1.4 |
 | `llm.api_key` | `GEMINI_API_KEY` (gemini), else `CO_LLM_API_KEY` | `None` | Provider API key |
 
 Inference knobs (temperature, top_p, max_tokens, extra_body, thinking_config) are not
@@ -285,7 +286,7 @@ Default redaction patterns: `sk-*` API keys, `Bearer` tokens, `ghp_` GitHub toke
 | `url` | `None` | Remote URL for HTTP transport; mutually exclusive with `command` |
 | `args` | `[]` | CLI arguments (stdio only) |
 | `connect_timeout_seconds` | `5` | Connection/tool-discovery timeout in seconds (1–60); does not bound tool-call execution |
-| `call_timeout_seconds` | `120` | Per-tool-call response timeout in seconds (1–600); mirrors the 120s model-progress stall window |
+| `call_timeout_seconds` | `120` | Per-tool-call response timeout in seconds (1–600); mirrors the model-progress stall window (`llm.run_stall_timeout_secs`) |
 | `env` | `{}` | Extra env vars for subprocess (stdio only) |
 | `approval` | `"ask"` | Tool approval policy: `ask` or `auto` |
 | `prefix` | `None` | Optional tool name prefix for this server |

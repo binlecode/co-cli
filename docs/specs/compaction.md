@@ -19,7 +19,7 @@ run_turn() (orchestrate.py:run_turn)
   └── while True:
         await _execute_run(...)
           │
-          ▼  pydantic-ai Agent.run_stream_events
+          ▼  pydantic-ai Agent.iter
           │
           ┌── ModelRequestNode (pre-flight) ──────────────────────────────────┐
           │   history_processors run IN ORDER:                                │
@@ -202,7 +202,7 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Per-turn fields a
 |---|---|---|---|
 | `compaction_applied_this_turn` | `commit_compaction` (sole writer; called by `proactive_window_processor`, `recover_overflow_history` both paths, `/compact`) | `main.py` (session-branching via `TurnResult.history_compacted`); `proactive_window_processor` (OTEL span attr only) | `reset_for_turn` |
 | `current_request_tokens_estimate` | `spill_largest_tool_results` (always — even fast paths); `commit_compaction` (every commit path — proactive, both recovery paths, `/compact` — writes the post-compaction size) | `proactive_window_processor` (OTEL only, no logic branch); `main.py` `_build_status_snapshot` (status-line context %) | `reset_for_turn`; `/new`, `/clear` |
-| `tool_call_limit_run_step`, `tool_calls_in_model_request` | `_CallSeamToolset.call_tool` per call | L0 cap check + consecutive-violation streak | `_CallSeamToolset.call_tool` on `ctx.run_step` change |
+| `tool_calls_in_model_request` | `_CallSeamToolset.call_tool` (increment per call); orchestrator (zero at the model-request node boundary) | L0 cap check + consecutive-violation streak | orchestrator `_execute_run` on entering each model-request node |
 | `compaction_skip_count` | `_summarization_gate_open` (block path), `_gated_summarize_or_none` (failure paths) | `_summarization_gate_open` (probe cadence) | `_gated_summarize_or_none` (success → 0) |
 | `consecutive_low_yield_proactive_compactions` | `proactive_window_processor` (++ on low yield) | proactive gate; anti-thrash static-marker demotion (`summarize=False`) | proactive on good savings; `_reset_thrash_state` from `recover_overflow_history`; `/compact` |
 
@@ -222,7 +222,7 @@ L0 caps how many tool calls a single `ModelResponse` can issue (the first row of
 
 **Trigger surface.** `_CallSeamToolset.call_tool` (`co_cli/agent/toolset.py`) — the routing toolset's per-call wrapper, invoked once per `ToolCallPart` as the agent loop dispatches it.
 
-**Counter mechanics.** `ctx.run_step` increments once per `ModelRequestNode`, so all tool calls from one assistant message share the same `run_step`. When `run_step` changes, `runtime.tool_calls_in_model_request` resets to 0; each call increments before the cap check. The first 3 calls execute normally; calls 4+ are **rejected without running** — the rejection payload is returned as the tool's "result," appended to message history as a `ToolReturnPart`, and seen by the model on the next turn:
+**Counter mechanics.** The orchestrator zeros `runtime.tool_calls_in_model_request` on entering each model-request node (`_execute_run` — the real per-request boundary) and finalizes the prior request's consecutive-violation streak there; `_CallSeamToolset.call_tool` then increments the counter before the cap check. The first 3 calls execute normally; calls 4+ are **rejected without running** — the rejection payload is returned as the tool's "result," appended to message history as a `ToolReturnPart`, and seen by the model on the next turn:
 
 ```json
 {
@@ -851,7 +851,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `spill_largest_tool_results` accumulator: ≥3 spills landing under threshold classified `below_threshold` (single floor-division, no per-item drift) | `tests/test_flow_compaction_spill_largest_tool_results.py` |
 | `spill_largest_tool_results` `spill_errors`: many ≤`SPILL_PREVIEW_CHARS` returns emit `spill_errors == 0` (too-small excluded, not counted as I/O failures) | `tests/test_flow_compaction_spill_largest_tool_results.py` |
 | L0 tool-call cap: `MAX_TOOL_CALLS_PER_MODEL_REQUEST` constant pinned; allow up to cap; reject above cap with JSON payload | `tests/test_flow_tool_call_limit.py` |
-| L0 run_step counter: resets on `ctx.run_step` transition | `tests/test_flow_tool_call_limit.py` |
+| L0 per-request counter: resets at the model-request node boundary | `tests/test_flow_tool_call_limit.py` |
 | `dedup_tool_results`: identical return collapses to back-reference; short content and distinct content pass through | `tests/test_flow_compaction_history_processors.py` |
 | `evict_old_tool_results`: clears oldest when over keep limit; keeps all at limit; protects last-turn returns | `tests/test_flow_compaction_history_processors.py` |
 | `evict_old_tool_results` + `is_cleared_marker`: cleared markers recognized; recent returns left untouched | `tests/test_flow_compaction_history_processors.py` |

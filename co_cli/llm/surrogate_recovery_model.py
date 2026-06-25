@@ -39,6 +39,8 @@ log = logging.getLogger(__name__)
 _CLOSE_FOR: dict[str, str] = {"{": "}", "[": "]"}
 _OPEN_FOR: dict[str, str] = {v: k for k, v in _CLOSE_FOR.items()}
 _TRAILING_COMMA = re.compile(r",\s*([}\]])")
+_JSON_REPAIR_MAX_TRIM_STEPS = 50
+"""Max trailing-delimiter trim passes in JSON arg repair (bounds the trim loop)."""
 
 
 def _try_parse(s: str) -> str | None:
@@ -105,8 +107,8 @@ def _repair_json_args(raw: str) -> str:
     if result is not None:
         return result
 
-    # Trim excess trailing closing delimiters (bounded to 50 steps).
-    for _ in range(50):
+    # Trim excess trailing closing delimiters (bounded — see _JSON_REPAIR_MAX_TRIM_STEPS).
+    for _ in range(_JSON_REPAIR_MAX_TRIM_STEPS):
         s = s.rstrip()
         if not s or s[-1] not in ("}", "]"):
             break
@@ -140,13 +142,23 @@ def _repair_response(response: ModelResponse) -> ModelResponse:
 
 
 class _RepairingStreamedResponse:
-    """Thin StreamedResponse proxy that repairs tool-call args on ``get()``.
+    """StreamedResponse proxy that repairs tool-call args on the assembled ``get()``.
 
-    The agent graph validates and dispatches tools from ``StreamedResponse.get()``
-    (``_agent_graph.py`` ``_streaming_handler``), so repairing that assembled
-    response lands the fix before pydantic validation. All other access —
-    iteration, ``usage()``, ``final_result_event``, ``timestamp`` — delegates to
-    the wrapped stream verbatim.
+    Explicit read-surface contract — what the agent graph actually touches:
+    - ``get()`` — the graph validates and dispatches tools from the assembled
+      ``StreamedResponse.get()`` (``_agent_graph.py`` ``_streaming_handler``, :637),
+      so repairing here lands the fix before pydantic validation.
+    - ``__aiter__`` / ``usage()`` — delegate to the wrapped stream verbatim.
+
+    ``__getattr__`` stays as the catch-all for every other member the graph or
+    instrumentation reads (``model_name``, ``timestamp``, ``provider_*``,
+    ``close_stream``, and the stream passed to ``_build_agent_stream``). It is
+    deliberately NOT replaced by an enumerated member list — the SDK reads the
+    streamed response beyond the hot members above, so enumerate-and-drop would
+    ``AttributeError`` on any unlisted access. Subclassing ``StreamedResponse`` is
+    not viable: its ``get()``/``usage()`` read ``self._parts_manager``/``self._usage``,
+    which are populated from raw provider chunks the inner stream has already
+    consumed — a subclass could fill them only by privately coupling to the inner.
     """
 
     def __init__(self, inner: StreamedResponse) -> None:
@@ -168,6 +180,17 @@ class _RepairingStreamedResponse:
         return getattr(self._inner, name)
 
 
+def _model_span_close_attributes(response: ModelResponse, usage: Any) -> dict[str, Any]:
+    """Build the ``chat`` span close attributes shared by the stream and non-stream paths."""
+    return {
+        "co.model.output": serialize_response(response),
+        "co.model.tokens.input": getattr(usage, "input_tokens", 0),
+        "co.model.tokens.output": getattr(usage, "output_tokens", 0),
+        "co.model.name": response.model_name,
+        "co.model.finish_reason": str(response.finish_reason) if response.finish_reason else None,
+    }
+
+
 def _close_model_span(stream: Any) -> None:
     """Pop the ``chat`` span, populating close attributes from the assembled stream."""
     try:
@@ -177,17 +200,7 @@ def _close_model_span(stream: Any) -> None:
         log.debug("model span close: could not read assembled stream: %s", exc)
         pop_span()
         return
-    pop_span(
-        attributes={
-            "co.model.output": serialize_response(response),
-            "co.model.tokens.input": getattr(usage, "input_tokens", 0),
-            "co.model.tokens.output": getattr(usage, "output_tokens", 0),
-            "co.model.name": response.model_name,
-            "co.model.finish_reason": str(response.finish_reason)
-            if response.finish_reason
-            else None,
-        },
-    )
+    pop_span(attributes=_model_span_close_attributes(response, usage))
 
 
 class SurrogateRecoveryModel(WrapperModel):
@@ -229,17 +242,7 @@ class SurrogateRecoveryModel(WrapperModel):
         if self.repair_tool_args:
             response = _repair_response(response)
         usage = response.usage
-        pop_span(
-            attributes={
-                "co.model.output": serialize_response(response),
-                "co.model.tokens.input": getattr(usage, "input_tokens", 0),
-                "co.model.tokens.output": getattr(usage, "output_tokens", 0),
-                "co.model.name": response.model_name,
-                "co.model.finish_reason": str(response.finish_reason)
-                if response.finish_reason
-                else None,
-            },
-        )
+        pop_span(attributes=_model_span_close_attributes(response, usage))
         return response
 
     @asynccontextmanager

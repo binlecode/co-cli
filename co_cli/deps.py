@@ -182,8 +182,8 @@ class CoRuntimeState:
       consecutive_low_yield_proactive_compactions, persisted_message_count
     """
 
-    # Per-model-request brake counter; resets implicitly on ctx.run_step transition.
-    tool_call_limit_run_step: int = -1
+    # Tool calls counted in the current model request; zeroed by the orchestrator at
+    # each model-request node boundary (agent/orchestrate.py).
     tool_calls_in_model_request: int = 0
     # Consecutive model requests where tool_calls_in_model_request exceeded the cap.
     # Reset to 0 per turn by reset_for_turn(); also reset to 0 when a non-violating
@@ -251,7 +251,6 @@ class CoRuntimeState:
         self.current_request_tokens_estimate = None
         self.consecutive_tool_cap_violations = 0
         self.tool_cap_hard_stop = False
-        self.tool_call_limit_run_step = -1
         self.tool_calls_in_model_request = 0
 
 

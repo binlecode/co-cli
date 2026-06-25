@@ -15,61 +15,56 @@ from co_cli.deps import ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
 logger = logging.getLogger(__name__)
 
 
-class _SanitizingMCPServer:
-    """Thin MCPServer proxy that sanitizes inputSchema on list_tools()."""
-
-    def __init__(self, inner: Any) -> None:
-        self._inner = inner
-
-    async def list_tools(self) -> list:
-        from co_cli.tools.mcp_schema import sanitize_mcp_schema
-
-        tools = await self._inner.list_tools()
-        for t in tools:
-            t.inputSchema = sanitize_mcp_schema(t.inputSchema or {})
-        return tools
-
-    async def __aenter__(self) -> "_SanitizingMCPServer":
-        await self._inner.__aenter__()
-        return self
-
-    async def __aexit__(self, *args: Any) -> None:
-        await self._inner.__aexit__(*args)
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._inner, name)
-
-
 @dataclass
 class _SequentialMCPToolset(WrapperToolset):
-    """Patches ToolDefinition.sequential from tool_catalog.is_concurrent_safe for MCP tools.
+    """Sanitizes MCP tool schemas and patches ToolDefinition.sequential at the toolset seam.
 
-    Holds a mutable reference to tool_catalog — populated by discover_mcp_tools()
-    before the first get_tools() call, so the patch is always current at step time.
+    Schema sanitization happens here — on the converted ``tool_def.parameters_json_schema``
+    in the ``get_tools`` output (WrapperToolset.get_tools, toolsets/wrapper.py:60) — rather
+    than on the raw ``inputSchema`` before conversion. The SDK assigns the raw MCP
+    ``inputSchema`` verbatim to ``parameters_json_schema`` (pydantic_ai/mcp.py:667), so
+    sanitizing the converted schema is lossless: it operates on the same dict structure
+    ``sanitize_mcp_schema`` expects.
+
+    ``sequential`` is patched from tool_catalog.is_concurrent_safe. tool_catalog is a mutable
+    reference — populated by discover_mcp_tools() before the first get_tools() call, so the
+    patch is always current at step time.
     """
 
     tool_catalog: dict[str, ToolInfo]
 
     async def get_tools(self, ctx: RunContext[Any]) -> dict[str, ToolsetTool[Any]]:
+        from co_cli.tools.mcp_schema import sanitize_mcp_schema
+
         tools = await self.wrapped.get_tools(ctx)
-        return {
-            name: replace(
-                tool,
-                tool_def=replace(tool.tool_def, sequential=not info.is_concurrent_safe),
+        result: dict[str, ToolsetTool[Any]] = {}
+        for name, tool in tools.items():
+            sequential = (
+                not info.is_concurrent_safe
+                if (info := self.tool_catalog.get(name)) is not None
+                else tool.tool_def.sequential
             )
-            if (info := self.tool_catalog.get(name)) is not None
-            else tool
-            for name, tool in tools.items()
-        }
+            sanitized_schema = sanitize_mcp_schema(tool.tool_def.parameters_json_schema or {})
+            result[name] = replace(
+                tool,
+                tool_def=replace(
+                    tool.tool_def,
+                    parameters_json_schema=sanitized_schema,
+                    sequential=sequential,
+                ),
+            )
+        return result
 
 
 @dataclass(frozen=True)
 class MCPToolsetEntry:
     """MCP toolset paired with its build-time policy and direct server reference.
 
-    ``server`` is a ``_SanitizingMCPServer`` wrapping the raw MCPServer (before
-    ``approval_required()`` wrapping) so ``list_tools()`` returns sanitized schemas
-    and can be called directly without walking the wrapper chain.
+    ``server`` is the raw MCPServer (before ``approval_required()`` wrapping) — a thin
+    direct handle for discovery's ``list_tools()`` call, bypassing the wrapper chain.
+    Discovery reads only ``t.name`` / ``t.description`` (not ``inputSchema``), so it does
+    not need sanitized schemas; sanitization lives at the toolset seam
+    (``_SequentialMCPToolset.get_tools``), on the converted ``parameters_json_schema``.
     ``is_approval_required``, ``prefix``, and ``connect_timeout_seconds`` are recorded at
     build time; connection and discovery read them without inspecting wrapper topology.
     ``connect_timeout_seconds`` bounds connection/discovery (pydantic-ai ``timeout``).
@@ -122,10 +117,7 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
                 tool_prefix=cfg.prefix or name,
             )
         is_approval_required = cfg.approval == "ask"
-        sanitizing_server = _SanitizingMCPServer(mcp_server)
-        inner = (
-            sanitizing_server.approval_required() if is_approval_required else sanitizing_server
-        )
+        inner = mcp_server.approval_required() if is_approval_required else mcp_server
         # No DeferredLoadingToolset: it stamps defer_loading=True, which would re-engage
         # the SDK's search_tools loader. MCP tools are DEFERRED in tool_catalog, so co's
         # per-turn visibility filter (agent/toolset.py) hides them until loaded via
@@ -133,7 +125,7 @@ def _build_mcp_toolsets(config: Settings) -> list[MCPToolsetEntry]:
         entries.append(
             MCPToolsetEntry(
                 toolset=inner,
-                server=sanitizing_server,
+                server=mcp_server,
                 is_approval_required=is_approval_required,
                 prefix=cfg.prefix or name,
                 connect_timeout_seconds=cfg.connect_timeout_seconds,
@@ -147,6 +139,9 @@ async def _discover_one(
 ) -> tuple[list[tuple[str, ToolInfo]], str | None]:
     prefix = entry.prefix
     try:
+        # Thin direct handle: list_tools() on the raw server, bypassing the wrapper chain.
+        # Discovery reads only t.name / t.description below — never inputSchema — so it
+        # does not need the sanitized schema (that lives at the _SequentialMCPToolset seam).
         async with asyncio.timeout(entry.connect_timeout_seconds):
             tools = await entry.server.list_tools()
         hits: list[tuple[str, ToolInfo]] = []

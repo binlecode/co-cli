@@ -37,6 +37,8 @@ FRONTIER_MAX_CONTEXT_TOKENS = 524_288
 
 MAX_MODEL_REQUESTS_PER_TURN: int = 40
 
+RUN_STALL_TIMEOUT_SECS: float = 120.0
+
 
 class ModelProfile(StrEnum):
     """Binary model class driving context budget (and, later, prompt overlays).
@@ -198,6 +200,7 @@ LLM_ENV_MAP: dict[str, str] = {
     "host": "CO_LLM_HOST",
     "model": "CO_LLM_MODEL",
     "max_model_requests_per_turn": "CO_LLM_MAX_MODEL_REQUESTS_PER_TURN",
+    "run_stall_timeout_secs": "CO_LLM_RUN_STALL_TIMEOUT_SECS",
 }
 
 _PROVIDER_API_KEY_VARS: dict[str, str] = {
@@ -298,6 +301,10 @@ class LlmSettings(BaseModel):
     max_context_tokens: int = Field(default=MAX_CONTEXT_TOKENS)
     # 0 = disabled (no cap on model requests per turn).
     max_model_requests_per_turn: int = Field(default=MAX_MODEL_REQUESTS_PER_TURN, ge=0)
+    # Model-generation stall window (seconds): max wall-time the run waits for model
+    # progress before giving up. Tunable because local-model latency varies widely by
+    # model size and hardware; a fixed window risks false stalls on slow local setups.
+    run_stall_timeout_secs: float = Field(default=RUN_STALL_TIMEOUT_SECS, gt=0)
 
     @model_validator(mode="after")
     def _default_model_per_provider(self) -> LlmSettings:

@@ -1,10 +1,11 @@
 """Tests for the per-model-request tool-call cap at the routing wrapper.
 
-The cap lives in _CallSeamToolset.call_tool: calls within a run_step past the cap
-get the rejection payload (the tool never executes), and a run_step transition
-resets the per-request counter so each model request gets a fresh budget. The
-consecutive-violation streak and its hard-stop are verified behaviorally end-to-end
-in test_flow_model_request_cap (a turn that does / does not hard-stop).
+The cap's counting lives in _CallSeamToolset.call_tool: calls within one model
+request past the cap get the rejection payload (the tool never executes). The
+per-request counter RESET and the consecutive-violation streak/hard-stop are owned
+by the orchestrator at the model-request node boundary and verified behaviorally
+end-to-end in test_flow_model_request_cap (a turn that does / does not hard-stop,
+and the fresh-budget reset between model requests).
 """
 
 import json
@@ -64,16 +65,3 @@ async def test_calls_up_to_cap_execute_then_excess_rejected():
         payload = json.loads(rejected)
         assert payload["error"] == "max_tool_calls_per_model_request_exceeded"
         assert str(CAP) in payload["guidance"]
-
-
-@pytest.mark.asyncio
-async def test_run_step_transition_resets_per_request_counter():
-    deps = _make_deps()
-    routing, tool = await _build_routing_toolset(deps)
-
-    for step in (1, 2):
-        ctx = _ctx(deps, run_step=step)
-        results = [await routing.call_tool("echo", {"x": i}, ctx, tool) for i in range(CAP)]
-        assert results == [f"ok{i}" for i in range(CAP)], (
-            f"all {CAP} calls must execute at run_step={step} after the counter resets"
-        )

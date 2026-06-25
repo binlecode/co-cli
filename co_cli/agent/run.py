@@ -63,11 +63,6 @@ async def run_standalone(
             deps=deps,
             usage_limits=UsageLimits(request_limit=request_limit),
             model_settings=settings,
-            metadata={
-                "session_id": deps.session.session_path.stem[-8:],
-                "role": spec.name,
-                "request_limit": request_limit,
-            },
         )
     except BaseException as exc:
         pop_span(status="ERROR", status_msg=str(exc))

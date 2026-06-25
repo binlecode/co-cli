@@ -27,7 +27,6 @@ class QuestionRequired(ApprovalRequired):
 
     def __init__(self, *, questions: list[dict]) -> None:
         super().__init__(metadata={"questions": questions})
-        self.questions = questions
 
 
 def _build_file_write_preview(content: str | None) -> str | None:

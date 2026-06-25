@@ -145,9 +145,10 @@ class _CallSeamToolset(WrapperToolset[CoDeps]):
     Co-locates the three concerns that can only live at the per-call boundary, as
     straight-line ordered code (no LIFO invariant, no cross-component global-span
     bridge): the ``tool`` span with ``co.tool.*`` attributes, the per-model-request
-    tool-call cap, and MCP-result spill. ``ctx.run_step`` and ``ctx.deps`` are
-    available here. This replaces the per-tool hooks of the former pydantic-ai
-    lifecycle middleware — span, cap, and spill, co-located as linear code.
+    tool-call cap (counting only — the orchestrator zeros the counter at the
+    model-request node boundary), and MCP-result spill. ``ctx.deps`` is available
+    here. This replaces the per-tool hooks of the former pydantic-ai lifecycle
+    middleware — span, cap, and spill, co-located as linear code.
     """
 
     async def call_tool(
@@ -160,19 +161,10 @@ class _CallSeamToolset(WrapperToolset[CoDeps]):
         runtime = ctx.deps.runtime
         cap = MAX_TOOL_CALLS_PER_MODEL_REQUEST
 
-        # Per-model-request cap accounting. One ctx.run_step == one model request;
-        # all tools of one assistant message share it. Immediate increment of the
-        # consecutive-violation streak at the (cap+1)-th call, delayed reset on the
-        # next request when the prior request stayed within the cap. The orchestrator
-        # finalizes the last request's reset at the run boundary.
-        if ctx.run_step != runtime.tool_call_limit_run_step:
-            if (
-                runtime.tool_call_limit_run_step != -1
-                and runtime.tool_calls_in_model_request <= cap
-            ):
-                runtime.consecutive_tool_cap_violations = 0
-            runtime.tool_call_limit_run_step = ctx.run_step
-            runtime.tool_calls_in_model_request = 0
+        # Per-model-request cap accounting. The orchestrator zeros the counter and
+        # finalizes the prior request's streak at the model-request node boundary
+        # (agent/orchestrate.py); here we only count this request's calls and latch
+        # the hard-stop once the consecutive-violation streak reaches the threshold.
         runtime.tool_calls_in_model_request += 1
         if runtime.tool_calls_in_model_request == cap + 1:
             runtime.consecutive_tool_cap_violations += 1

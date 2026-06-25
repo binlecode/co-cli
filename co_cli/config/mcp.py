@@ -38,7 +38,7 @@ class MCPServerSettings(BaseModel):
         default=120,
         ge=1,
         le=600,
-        description="Max seconds to wait for a single tool call to respond. Mirrors the model-progress stall window (LLM_RUN_TIMEOUT_SECS=120) so a tool call never blocks the run longer than model generation would.",
+        description="Max seconds to wait for a single tool call to respond. Mirrors the model-progress stall window (llm.run_stall_timeout_secs, default 120) so a tool call never blocks the run longer than model generation would.",
     )
     env: dict[str, str] = Field(
         default_factory=dict,

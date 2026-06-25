@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.486]
+
+Refactor the agent loop onto pydantic-ai's intended `agent.iter()` tier, and make the model-generation stall timeout operator-tunable.
+
+- **Loop-control refactor (zero behavior change)** — `_execute_run` drives the loop via `agent.iter()` + per-node `node.stream()` instead of `run_stream_events`, reading the real `ModelRequestNode`/`CallToolsNode` boundary the stall timer and tool cap key on rather than reconstructing it from a flat event stream. Stall timer re-armed per model-node event / disarmed on the call-tools node; the per-request tool-cap reset relocated to the model-request node boundary (dropped the `ctx.run_step` inference, a runtime field, and the cross-module finalize); final result read from `run.result`; the dual-mode approval-resume collapsed into the one loop.
+- **MCP schema sanitization** moved to the `WrapperToolset.get_tools` seam; the `_SanitizingMCPServer` `__getattr__` proxy removed (the SDK assigns `inputSchema` verbatim to `parameters_json_schema`, so post-conversion sanitize is identical — one wrapper, not two).
+- **Tunable stall timeout (new feature)** — `llm.run_stall_timeout_secs` (default `120`, env `CO_LLM_RUN_STALL_TIMEOUT_SECS`): the model-generation stall window is no longer hardcoded (peer-aligned; fits local-model latency variance). Split from the renamed `SUMMARIZE_CALL_TIMEOUT_SECS` (the `/compact` call ceiling).
+- **Cleanup** — removed the write-only `metadata=` run mirror, the `AgentRunResultEvent` capture, and a one-sided `self.questions` field; DRYed the model-span close attributes; named two magic numbers.
+- Behavior-preserving throughout except the deliberate tunable-stall config knob; full suite green (847 passed).
+
 ## [0.8.484]
 
 Rename the bundled `documents` skill to `pdf`, and ship interactive PDF form-field extraction (the Tier-A read gap from the document-parity audit).

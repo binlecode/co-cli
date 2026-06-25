@@ -7,7 +7,7 @@ For top-level architecture and startup sequencing, see [01-system.md](01-system.
 
 This doc describes one complete foreground turn, from prompt input to post-turn finalization.
 
-**Vocabulary — `turn ⊇ run ⊇ model request`.** A **turn** (one user message) contains one or more **runs**; a **run** (one `agent.run_stream_events()` call → one `AgentRunResult`) contains one or more model **requests** (one request/response exchange with the LLM); a model request may carry one or more **tool calls**. A turn spans multiple runs only at two boundaries — tool approval (a run ends with `DeferredToolRequests` and resumes in a fresh run) and length-continuation retry; a run spans multiple model requests whenever the model emits tool calls and the SDK loops to feed results back. This three-level containment is pydantic-ai's own model (see [pydantic-ai-integration.md](pydantic-ai-integration.md)).
+**Vocabulary — `turn ⊇ run ⊇ model request`.** A **turn** (one user message) contains one or more **runs**; a **run** (one `agent.iter()` call → one `AgentRunResult`) contains one or more model **requests** (one request/response exchange with the LLM); a model request may carry one or more **tool calls**. A turn spans multiple runs only at two boundaries — tool approval (a run ends with `DeferredToolRequests` and resumes in a fresh run) and length-continuation retry; a run spans multiple model requests whenever the model emits tool calls and the SDK loops to feed results back. This three-level containment is pydantic-ai's own model (see [pydantic-ai-integration.md](pydantic-ai-integration.md)).
 
 **Bounds at each layer.** Each level of the hierarchy has its own ceiling:
 
@@ -33,7 +33,7 @@ flowchart TD
     C --> E["run_turn()"]
     D --> E
 
-    E --> F["agent.run_stream_events"]
+    E --> F["agent.iter"]
     F --> G["SDK appends ModelRequest + resolves instruction parts<br/>(static + @agent.instructions)"]
     G --> H["history processors 1..4<br/>(dedup → evict → spill_largest_tool_results → proactive_window)"]
     H --> I["provider HTTP"]
@@ -74,7 +74,7 @@ flowchart TD
 
     F --> H
     H --> I["run_turn(): deps.runtime.reset_for_turn(); frontend.on_status('Co is thinking...'); init _TurnState; start co.turn span"]
-    I --> J["_execute_run() via agent.run_stream_events(...)"]
+    I --> J["_execute_run() via agent.iter(...)"]
     J --> K{"run result / exception"}
 
     K -->|DeferredToolRequests| L["_run_approval_loop()"]
@@ -106,7 +106,7 @@ Execution owners:
 | `_chat_loop()` | prompt input, blank/exit handling, slash dispatch, transcript replacement, and skill-env setup |
 | `_run_foreground_turn()` | `run_turn()`, guaranteed skill-env cleanup, and post-turn finalization |
 | `run_turn()` | one orchestrated LLM turn, including status updates, retries, approval resumes, output checks, and interrupt handling |
-| `_execute_run()` | one `agent.run_stream_events(...)` run plus frontend event delivery and usage merge |
+| `_execute_run()` | one `agent.iter(...)` run plus per-node frontend event delivery and usage merge |
 | `_run_approval_loop()` | same-turn approval-resume cycle until output is no longer `DeferredToolRequests` |
 | `_finalize_turn()` | transcript persistence/branching and generic error banner |
 
@@ -160,7 +160,7 @@ Cross-cutting turn state that lives on `deps.runtime` instead:
 
 ### 2.2 Run Contract
 
-`_execute_run()` owns exactly one `agent.run_stream_events(...)` call.
+`_execute_run()` owns exactly one `agent.iter(...)` call, iterating its graph nodes (`async for node in run`) and streaming each via `node.stream(run.ctx)`.
 
 Inputs:
 
@@ -168,20 +168,21 @@ Inputs:
 - `turn_state.current_history`
 - `turn_state.tool_approval_decisions`
 - `turn_state.latest_usage`
-- selected agent surface: main agent for all passes (SDK skips `ModelRequestNode` on resume, so zero additional tokens)
+- selected agent surface: main agent for all passes (on resume the first node is the approved tool's call-tools node, so zero tokens are sent to re-decide the deferred call; any following model-request node is the model answering from the tool result)
 
-Per-event handling:
+Per-node-stream event handling — `async for node in run` dispatches each node to its own `node.stream(run.ctx)`: model-request nodes (`Agent.is_model_request_node`) yield the text/thinking events, call-tools nodes (`Agent.is_call_tools_node`) yield the tool events. The renderer is correspondingly split into `_handle_model_request_event` and `_handle_tool_event`:
 
-| Event type | Behavior |
-| --- | --- |
-| `PartStartEvent` with `TextPart` / `ThinkingPart` | append buffered content into `StreamRenderer` |
-| `PartDeltaEvent` with `TextPartDelta` / `ThinkingPartDelta` | append streamed deltas |
-| `FinalResultEvent` / `PartEndEvent` | ignored for rendering; completion is defined by `AgentRunResultEvent` |
-| `FunctionToolCallEvent` | flush buffered text/thinking, optionally show tool-start annotation, install progress callback |
-| `FunctionToolResultEvent` | flush buffers, clear progress callback, render tool result panel when a `ToolReturnPart` exists |
-| `AgentRunResultEvent` | store the final `AgentRunResult` object |
+| Node | Event type | Behavior |
+| --- | --- | --- |
+| model-request | `PartStartEvent` with `TextPart` / `ThinkingPart` | append buffered content into `StreamRenderer` |
+| model-request | `PartDeltaEvent` with `TextPartDelta` / `ThinkingPartDelta` | append streamed deltas |
+| model-request | `FinalResultEvent` / `PartEndEvent` | ignored for rendering; text may continue after `FinalResultEvent` |
+| call-tools | `FunctionToolCallEvent` | flush buffered text/thinking, optionally show tool-start annotation, install progress callback |
+| call-tools | `FunctionToolResultEvent` | flush buffers, clear progress callback, render tool result panel when a `ToolReturnPart` exists |
 
-The event loop is wrapped in `asyncio.timeout(LLM_RUN_TIMEOUT_SECS)` used as a model-generation **stall timeout**, not an absolute run deadline. The timeout is re-armed on each stream event and **disarmed while any tool is executing** (no events flow between a `FunctionToolCallEvent` and its `FunctionToolResultEvent`, tracked by outstanding-tool count). It therefore fires only when the model produces no progress for `LLM_RUN_TIMEOUT_SECS` with no tool in flight; tool execution is bounded by each tool's own timeout, not this loop. A `TimeoutError` from the guard propagates to `run_turn()`, which returns `TurnResult(outcome='error')` — no retry is attempted.
+The final `AgentRunResult` is read from `run.result` after the node loop completes — `AgentRunResultEvent` is **not** emitted under `agent.iter()` (only the higher-level `run_stream_events` synthesizes it).
+
+The node loop is wrapped in `asyncio.timeout(llm.run_stall_timeout_secs)` used as a model-generation **stall timeout**, not an absolute run deadline. The window is operator-tunable (`llm.run_stall_timeout_secs`, default 120; local-model latency varies widely by model/hardware, so a fixed window risks false stalls). The timeout is **armed** on entering a model-request node and re-armed on every event streamed from it (so the deadline measures time since the last model token), and **disarmed** on entering a call-tools node — the tool boundary is the node itself, not an outstanding-tool count over the flat event stream. It re-arms when the tool node completes. It therefore fires only when the model produces no progress for the configured window; tool execution is bounded by each tool's own timeout, not this loop. A `TimeoutError` from the guard propagates to `run_turn()`, which returns `TurnResult(outcome='error')` — no retry is attempted.
 
 Normal-exit contract:
 

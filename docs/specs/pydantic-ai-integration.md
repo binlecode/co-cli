@@ -23,13 +23,12 @@ flowchart TD
 
     subgraph SDKwrap["co wrappers over SDK types"]
         SRM["SurrogateRecoveryModel(WrapperModel)<br/>surrogate retry · chat span · JSON repair"]
-        CST["_CallSeamToolset(WrapperToolset)<br/>tool span · per-request cap · MCP spill"]
-        SMT["_SequentialMCPToolset(WrapperToolset)<br/>patch ToolDefinition.sequential"]
-        SMS["_SanitizingMCPServer<br/>sanitize inputSchema"]
+        CST["_CallSeamToolset(WrapperToolset)<br/>tool span · per-request cap count · MCP spill"]
+        SMT["_SequentialMCPToolset(WrapperToolset)<br/>patch ToolDefinition.sequential · sanitize schema"]
     end
 
     subgraph Runtime["Turn runtime (co_cli/context, co_cli/agent)"]
-        ORC["orchestrate.run_turn<br/>run_stream_events loop"]
+        ORC["orchestrate.run_turn<br/>agent.iter() per-node loop"]
         APR["deferred-tool approval loop"]
         RUN["run_standalone (task agents)<br/>agent.run"]
         CALL["llm_call (direct)<br/>pydantic_ai.direct.model_request"]
@@ -38,7 +37,6 @@ flowchart TD
     FAC --> SRM
     NTS --> ASM
     MCP --> SMT
-    SMT --> SMS
     ASM --> CST
     NTS --> SB
     ASM --> BLD
@@ -55,13 +53,13 @@ co touches the SDK across **eight layers**:
 
 | # | Layer | SDK surface | co's seam | Home |
 |---|-------|-------------|-----------|------|
-| 1 | Agent + run lifecycle | `Agent`, `AgentRunResult`, `run_stream_events`, `run`, `.output`/`.usage()`/`.new_messages()`, `RunUsage`, `UsageLimits` | `build_orchestrator`, `build_task_agent`, `run_turn`, `run_standalone` | `agent/build.py`, `agent/run.py`, `agent/orchestrate.py` |
+| 1 | Agent + run lifecycle | `Agent`, `AgentRunResult`, `iter` (+ `is_model_request_node`/`is_call_tools_node`/`node.stream`/`run.result`), `run`, `.output`/`.usage()`/`.new_messages()`, `RunUsage`, `UsageLimits` | `build_orchestrator`, `build_task_agent`, `run_turn`, `run_standalone` | `agent/build.py`, `agent/run.py`, `agent/orchestrate.py` |
 | 2 | Message/part types | `pydantic_ai.messages` (~22 part types, 6 stream events), `ModelMessagesTypeAdapter` | pattern-match / build / serialize / rewrite | `context/`, `observability/serialize.py`, `session/persistence.py` |
 | 3 | Toolset composition | `FunctionToolset`, `CombinedToolset`, `WrapperToolset`, `AbstractToolset`, `.filtered()`, `ToolDefinition`, `ToolsetTool` | `_CallSeamToolset`, `assemble_routing_toolset`, `_tool_visibility_filter` | `agent/toolset.py`, `agent/core.py` |
 | 4 | Tool registration + RunContext | `RunContext`, `prepare_tool_def`, `add_function` | `@agent_tool` registry → `ToolInfo` catalog; schema-budget measurement | `agent/toolset.py`, `deps.py`, `bootstrap/schema_budget.py` |
 | 5 | Deferred-tool / approval | `DeferredToolRequests`, `DeferredToolResults`, `ApprovalRequired`, `ToolApproved`, `ToolDenied` | approval loop drives pause/resume | `agent/orchestrate.py`, `tools/approvals.py` |
 | 6 | Model wrapping + providers | `WrapperModel`, `StreamedResponse`, `ModelRequestParameters`, `ModelSettings`, `OpenAIChatModel`+`OllamaProvider`, `GoogleModel`+`GoogleProvider` | `SurrogateRecoveryModel`, `_RepairingStreamedResponse` | `llm/factory.py`, `llm/surrogate_recovery_model.py` |
-| 7 | MCP | `MCPServerSSE`/`Stdio`/`StreamableHTTP`, `.approval_required()` | `_SanitizingMCPServer`, `_SequentialMCPToolset`, `discover_mcp_tools` | `agent/mcp.py` |
+| 7 | MCP | `MCPServerSSE`/`Stdio`/`StreamableHTTP`, `.approval_required()` | `_SequentialMCPToolset` (sequential patch + schema sanitize), `discover_mcp_tools` | `agent/mcp.py` |
 | 8 | Direct inference + exceptions | `pydantic_ai.direct.model_request`, `ModelHTTPError`, `ModelAPIError`, `UnexpectedModelBehavior`, `ModelRetry` | `llm_call`; orchestrator error taxonomy; tool retries | `llm/call.py`, `context/`, `tools/` |
 
 co holds **no private-module imports** (`pydantic_ai._*`) — verified zero. The one synthetic-internal *assumption* that remains (the streaming-repair seam, §2.6) is pinned by a regression test, not an import.
@@ -137,12 +135,11 @@ One explicit seam at the routing `call_tool` boundary, hosting three concerns as
 
 ```
 call_tool(name, args, ctx, tool):
-    # 1. Per-model-request cap accounting (one ctx.run_step == one model request)
-    if ctx.run_step != runtime.tool_call_limit_run_step:
-        reset streak if prior request stayed within cap
-        runtime.tool_call_limit_run_step = ctx.run_step; reset per-request count
+    # 1. Per-model-request cap accounting — counting only. The orchestrator zeros
+    #    the counter and finalizes the prior request's streak at the model-request
+    #    node boundary (agent/orchestrate.py); call_tool does not infer boundaries.
     increment per-request count
-    if count == cap+1: increment consecutive-violation streak
+    if count == cap+1: increment consecutive-violation streak (latch hard-stop at threshold)
 
     # 2. tool span (co.tool.* attributes)
     push_span("tool {name}", kind=tool, attrs={name, args, args_chars})
@@ -157,7 +154,7 @@ call_tool(name, args, ctx, tool):
     return result
 ```
 
-The cap streak feeds the orchestrator's hard-stop (`TOOL_CAP_HARD_STOP_CONSECUTIVE`); the run boundary finalizes the last request's reset.
+The cap streak feeds the orchestrator's hard-stop (`TOOL_CAP_HARD_STOP_CONSECUTIVE`); the orchestrator zeros the counter and finalizes the prior request's streak at the model-request node boundary (`_execute_run`, §2.5) — `call_tool` no longer infers the boundary from `ctx.run_step`.
 
 ### 2.5 Agent build & run lifecycle — `agent/build.py`, `agent/orchestrate.py`, `agent/run.py`
 
@@ -176,7 +173,7 @@ build_orchestrator(spec, deps) -> SessionAgent:          # SessionAgent = Agent[
     for per_turn in spec.per_turn_instructions: agent.instructions(per_turn)   # dynamic InstructionPart
 ```
 
-**Orchestrator run** (`run_turn` → `_execute_run`): streams via `async with agent.run_stream_events(...) as stream:` then `async for event in stream:` — the context-manager form guarantees stream cleanup on cancellation (required since 1.92; direct iteration is deprecated). Uses `usage_limits=UsageLimits(request_limit=resolve_request_limit(deps.config.llm))` — the turn-cumulative model-request cap (`max_model_requests_per_turn`, default 40; `0` resolves to `None` = unbounded). This is the turn-spanning circuit breaker (see [core-loop.md](core-loop.md) §1): co threads one `RunUsage` across all runs so the SDK's before-request check bounds the whole turn and fires mid-run. The sibling `metadata={"request_limit": …}` mirrors the resolved value for observability. Stream events (`PartStart/Delta/End`, `FunctionToolCall/ResultEvent`, `FinalResultEvent`, `AgentRunResultEvent`) drive rendering; the final `AgentRunResult.output` (str or `DeferredToolRequests`) drives the approval branch.
+**Orchestrator run** (`run_turn` → `_execute_run`): drives the loop via `async with agent.iter(...) as run:` then `async for node in run:`, streaming each node via `async with node.stream(run.ctx) as s:` — the per-node form gives co the real `ModelRequestNode`/`CallToolsNode` boundary that the stall timer and tool-cap reset key on, instead of inferring it from a flat event stream. Uses `usage_limits=UsageLimits(request_limit=resolve_request_limit(deps.config.llm))` — the turn-cumulative model-request cap (`max_model_requests_per_turn`, default 40; `0` resolves to `None` = unbounded). This is the turn-spanning circuit breaker (see [core-loop.md](core-loop.md) §1): co threads one `RunUsage` across all runs so the SDK's before-request check bounds the whole turn and fires mid-run. Per node, model-request nodes yield `PartStart/Delta/End` + `FinalResultEvent` and call-tools nodes yield `FunctionToolCall/ResultEvent`; the final `AgentRunResult` is read from `run.result` (`AgentRunResultEvent` is **not** emitted under `iter()`), and its `.output` (str or `DeferredToolRequests`) drives the approval branch.
 
 **Task agents** (`build_task_agent` + `run_standalone`): a fresh `FunctionToolset` (selected tools, all `requires_approval=False`) wrapped in its own `_CallSeamToolset` for span/cap/spill parity. `output_type = spec.output_type` (genuinely variable per spec — stays `Agent[CoDeps, Any]`). Run via `agent.run(prompt, usage_limits=UsageLimits(request_limit=budget))` — task agents keep a **real** request limit (unlike the orchestrator). The budget resolves as `budget if budget else spec.default_budget` (`run.py`), so `0` and `None` both fall back to the spec default — task agents have **no unbounded path**, deliberately unlike the orchestrator where `0` resolves to `None` (§2.5, §3). The `0`-as-falsy sentinel diverges from `resolve_request_limit`'s `0`-as-unbounded.
 
@@ -262,16 +259,15 @@ The caller (`bootstrap/core.py`) passes the `native_toolset` it already holds fr
 _build_mcp_toolsets(config):
     for each configured server:
         raw = MCPServerSSE | MCPServerStreamableHTTP | MCPServerStdio   # transport by config shape
-        sanitizing = _SanitizingMCPServer(raw)                          # sanitize inputSchema on list_tools()
-        inner = sanitizing.approval_required() if is_approval_required else sanitizing
-        record MCPToolsetEntry(toolset=inner, server=sanitizing, is_approval_required, prefix, connect_timeout_seconds)   # call_timeout_seconds → read_timeout, held by the server
+        inner = raw.approval_required() if is_approval_required else raw
+        record MCPToolsetEntry(toolset=inner, server=raw, is_approval_required, prefix, connect_timeout_seconds)   # call_timeout_seconds → read_timeout, held by the server
 
-build_mcp_entries: wrap each entry.toolset in _SequentialMCPToolset(toolset, tool_catalog)   # patch sequential
-discover_mcp_tools: connect all servers concurrently; list_tools(); register names as DEFERRED ToolInfo
+build_mcp_entries: wrap each entry.toolset in _SequentialMCPToolset(toolset, tool_catalog)   # patch sequential + sanitize schema
+discover_mcp_tools: connect all servers concurrently via entry.server (raw); list_tools() reads name/description only; register names as DEFERRED ToolInfo
 ```
 
-- `_SanitizingMCPServer` proxies the raw server and rewrites each `Tool.inputSchema` through `sanitize_mcp_schema` on `list_tools()` (raw MCP-protocol layer).
-- `_SequentialMCPToolset` patches `ToolDefinition.sequential` from `tool_catalog[name].is_concurrent_safe` at `get_tools` time (pydantic-ai `ToolDefinition` layer — a *different object at a later layer* than `inputSchema`, hence two distinct wrappers, §7).
+- `_SequentialMCPToolset.get_tools` does both at the `ToolsetTool` layer: it patches `ToolDefinition.sequential` from `tool_catalog[name].is_concurrent_safe`, and rewrites `ToolDefinition.parameters_json_schema` through `sanitize_mcp_schema`. The SDK's MCP toolset assigns the raw `Tool.inputSchema` **verbatim** to `parameters_json_schema` (`pydantic_ai/mcp.py`), so sanitizing post-conversion at this seam is identical to the former pre-conversion sanitize — **one wrapper, not two** (§7).
+- The raw server handle (`MCPToolsetEntry.server`) is kept only for discovery: `discover_mcp_tools` → `entry.server.list_tools()` reads `name`/`description` only, never the schema, so the discovery path needs no sanitization.
 - MCP tool results are plain strings that bypass `tool_output()`, so spill happens in the call-seam (§2.4).
 
 ### 2.11 Direct inference — `llm/call.py`
@@ -298,6 +294,7 @@ discover_mcp_tools: connect all servers concurrently; list_tools(); register nam
 | HTTP timeouts (connect/read/write/pool) | `llm/factory.py` constants | Ollama `httpx.AsyncClient` |
 | `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `TOOL_CAP_HARD_STOP_CONSECUTIVE` | `config/tuning.py` | Call-seam cap + hard-stop |
 | `llm.max_model_requests_per_turn` | `config/llm.py` | Orchestrator `UsageLimits(request_limit=…)` via `resolve_request_limit` (40; `0` → unbounded); wrap-up nudge trigger (§2.13) |
+| `llm.run_stall_timeout_secs` | `config/llm.py` | `_execute_run` `asyncio.timeout(...)` + `_StallTimer` window (default 120; model-generation stall, not a run deadline) |
 | `SPILL_THRESHOLD_CHARS` | `config/tuning.py` | MCP-result spill threshold default |
 
 Orchestrator `usage_limits` **is** config-driven — `request_limit` resolves from `max_model_requests_per_turn` via `resolve_request_limit` (default 40; `0` → `None` = unbounded). Task-agent `request_limit` comes from `spec.default_budget` or a per-call override, resolved as `budget if budget else spec.default_budget` — `0`/`None` both fall back to the default (no unbounded path), an intentional asymmetry with the orchestrator's `0 → None`.
@@ -322,7 +319,7 @@ Orchestrator `usage_limits` **is** config-driven — `request_limit` resolves fr
 | `SessionAgent` / `SessionRunResult` | `Agent[CoDeps, str \| DeferredToolRequests]` / `AgentRunResult[...]` | Orchestrator type aliases |
 | `ToolInfo` | frozen dataclass | Canonical per-tool metadata (is_approval_required, visibility, source, retries, check_fn, …) |
 
-Package-private (not callable cross-package, listed for the map): `_CallSeamToolset`, `_SequentialMCPToolset`, `_SanitizingMCPServer`, `_RepairingStreamedResponse`, `_tool_visibility_filter`, `_build_native_toolset`, `_build_mcp_toolsets`.
+Package-private (not callable cross-package, listed for the map): `_CallSeamToolset`, `_SequentialMCPToolset`, `_RepairingStreamedResponse`, `_tool_visibility_filter`, `_build_native_toolset`, `_build_mcp_toolsets`.
 
 ---
 
@@ -335,7 +332,7 @@ Package-private (not callable cross-package, listed for the map): `_CallSeamTool
 | `co_cli/llm/call.py` | `llm_call` direct prompt→response via `pydantic_ai.direct.model_request` |
 | `co_cli/agent/core.py` | `build_native_toolset`, `build_mcp_entries`, `assemble_routing_toolset` |
 | `co_cli/agent/toolset.py` | Native registry import, `_tool_visibility_filter`, `_build_native_toolset`, `_CallSeamToolset` |
-| `co_cli/agent/mcp.py` | `_SanitizingMCPServer`, `_SequentialMCPToolset`, transport build, `discover_mcp_tools` |
+| `co_cli/agent/mcp.py` | `_SequentialMCPToolset` (sequential patch + schema sanitize), transport build, `discover_mcp_tools` |
 | `co_cli/agent/build.py` | `build_orchestrator`, `build_task_agent` |
 | `co_cli/agent/run.py` | `run_standalone` task-agent runner with real `UsageLimits` |
 | `co_cli/bootstrap/schema_budget.py` | `measure_always_schema_budget` (synthetic `RunContext` + `prepare_tool_def`) |
@@ -374,8 +371,8 @@ Load-bearing, intentional, or rejected couplings — recorded so they are not re
 - **Orchestrator `usage_limits=UsageLimits(request_limit=resolve_request_limit(...))`** is load-bearing, not ceremony — passing the resolved cap (default 40) is co's deliberate circuit breaker, set *tighter* than the SDK's default 50 so an in-cap doom-loop is bounded (rationale in [core-loop.md](core-loop.md) §1). Dropping the arg would silently fall back to the SDK's 50; setting `max_model_requests_per_turn=0` resolves to `None` for a genuinely unbounded run. Task agents pass their own per-spec limit (`agent/run.py`).
 
 **Minimum-necessary wrappers (do not merge or remove):**
-- **`_CallSeamToolset` + `_SequentialMCPToolset`** — two `WrapperToolset` subclasses for two distinct boundaries: call-time (span/cap/spill) vs list-time (`sequential` patch). Textbook usage.
-- **Do not fold `_SequentialMCPToolset` into `_SanitizingMCPServer.list_tools()`** — they operate on different object layers: raw MCP `Tool.inputSchema` vs pydantic-ai `ToolDefinition.sequential` produced *later* by the SDK's MCP toolset. Cannot be merged.
+- **`_CallSeamToolset` + `_SequentialMCPToolset`** — two `WrapperToolset` subclasses for two distinct boundaries: call-time (span/cap-count/spill) vs list-time (`get_tools`: `sequential` patch + schema sanitize). Textbook usage.
+- **MCP schema sanitization lives in `_SequentialMCPToolset.get_tools`, not a separate server proxy.** The SDK's MCP toolset assigns the raw `Tool.inputSchema` **verbatim** to `ToolDefinition.parameters_json_schema` (`pydantic_ai/mcp.py`), so the former separate `_SanitizingMCPServer.list_tools()` proxy was redundant — sanitizing the converted schema at the existing `get_tools` seam is identical and removes a wrapper. (This supersedes an earlier "cannot be merged — different object layers" note: the layers carry the *same dict*, so they can.) The raw server handle survives only for discovery (name/description, no schema).
 - **`SurrogateRecoveryModel`** isolates the two ugliest Ollama realities (lone surrogates, malformed tool-arg JSON) in one `WrapperModel` instead of polluting the agent loop. JSON repair lives entirely here, independent of any approval/capability surface.
 
 **Required synthetic construction:**
@@ -391,7 +388,7 @@ Load-bearing, intentional, or rejected couplings — recorded so they are not re
 - Non-mutating history processors (never mutate the input list/objects); the single `_rewrite_tool_returns` contract; identity-preserving `replace(...)`. All registered processors are rewrite-only — there is no additive processor. The final-request wrap-up nudge (§2.13) is a dynamic instruction (`wrap_up_prompt`), not a history processor, so it requires no strip step.
 - Intra-call `id(part)` locality in `evict_old_tool_results` and `spill_largest_tool_results` (`history_processors.py`): each builds and consumes its id-set entirely within a single processor invocation, over the same `messages` list the processor receives (list slicing preserves element identity by Python guarantee). The id-set never crosses a processor boundary, so SDK message-copying between processors cannot affect it — each processor rebuilds from its own input. Preserve this build-and-consume-within-one-call locality under refactor. (`dedup_tool_results` keys on `tool_call_id` strings, not `id()`, and is unaffected either way.)
 - Frozen registration metadata (`ToolInfo`, `AlwaysSchemaBudget`, `MCPToolsetEntry`).
-- Thin proxies over deep subclassing (`_SanitizingMCPServer`, `_RepairingStreamedResponse` delegate via `__getattr__`, override one method).
+- Thin proxies over deep subclassing (`_RepairingStreamedResponse` delegates via `__getattr__`, overriding only `get()`/`usage()` — its read surface is an explicit documented contract, §2.6).
 
 **Latent risks (recorded, not addressed):**
 - String-based part fallbacks (`getattr(part, "part_kind", part.__class__.__name__)` in `serialize.py`) duck-type instead of `isinstance` — defensive, but signals the part taxonomy isn't fully trusted.

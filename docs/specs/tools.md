@@ -208,12 +208,12 @@ Tool-arg JSON repair runs one level out, on the model response in `SurrogateReco
 call_tool(name, args, ctx, tool)
       │
       ▼
-cap accounting  [per ctx.run_step == per model request]
+cap accounting  [count only; per-request reset owned by the
+                 orchestrator at the model-request node boundary]
   ┌──────────────────────────────────────────────────────┐
-  │  run_step changed? reset per-request count;           │
-  │    if prior request stayed ≤ cap → reset streak       │
   │  count += 1                                            │
-  │  count == cap+1 ? streak += 1  (immediate, once)      │
+  │  count == cap+1 ? streak += 1  (immediate, once;      │
+  │    latch hard-stop at the threshold)                  │
   └──────────────────────────────────────────────────────┘
       │
       ▼

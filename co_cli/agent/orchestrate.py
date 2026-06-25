@@ -17,7 +17,6 @@ import httpx
 from pydantic_ai import (
     Agent,
     AgentRunResult,
-    AgentRunResultEvent,
     DeferredToolRequests,
     DeferredToolResults,
     RunContext,
@@ -37,14 +36,12 @@ from pydantic_ai.exceptions import (
 )
 from pydantic_ai.messages import (
     BinaryContent,
-    FinalResultEvent,
     FunctionToolCallEvent,
     FunctionToolResultEvent,
     ModelMessage,
     ModelRequest,
     ModelResponse,
     PartDeltaEvent,
-    PartEndEvent,
     PartStartEvent,
     TextPart,
     TextPartDelta,
@@ -72,10 +69,15 @@ _LENGTH_RETRY_BOOST = 2
 
 assert _LENGTH_RETRY_BOOST > 1, "boost must strictly increase max_tokens for retry to terminate"
 
-# pydantic-ai raises UnexpectedModelBehavior with this clause when finish_reason
+_HTTP_400_REFLECT_BACKOFF_SECS = 0.5
+"""Backoff before reflecting an HTTP 400 tool-call rejection back to the model."""
+
+# pydantic-ai raises a bare UnexpectedModelBehavior with this clause when finish_reason
 # is 'length' and the response is empty or thinking-only — i.e. reasoning consumed
 # the whole output budget before any answer token (see pydantic-ai
-# _agent_graph.py:1012). Match is tied to that message; re-verify on pydantic-ai upgrade.
+# _agent_graph.py:1059-1060). No typed exception exists, so this message substring is the
+# only signal; it is matched at exactly one site (the HTTP-error branch in run_turn).
+# Match is tied to that message; re-verify on pydantic-ai upgrade.
 _REASONING_OVERFLOW_SIGNATURE = "exceeded before any response was generated"
 
 _REASONING_OVERFLOW_MESSAGE = (
@@ -89,7 +91,6 @@ from co_cli.config.tuning import (
     TOOL_CAP_HARD_STOP_CONSECUTIVE,
 )
 from co_cli.context.compaction import is_context_overflow, recover_overflow_history
-from co_cli.context.timeouts import LLM_RUN_TIMEOUT_SECS
 from co_cli.deps import CoDeps
 from co_cli.display.core import Frontend, QuestionPrompt
 from co_cli.display.stream_renderer import StreamRenderer
@@ -221,6 +222,7 @@ async def _collect_deferred_tool_approvals(
         if "questions" in meta:
             answers: list[str] = []
             for q in meta["questions"]:
+                # output.metadata is the SDK's untyped dict[str, Any]; read defensively.
                 raw_opts = q.get("options")
                 # options may be list[{label, description}] or list[str] depending on model output
                 labels = (
@@ -288,34 +290,31 @@ async def _collect_deferred_tool_approvals(
 
 
 class _StallTimer:
-    """Drives the run's stall timeout: re-arm on model progress, disarm during tools.
+    """Drives the run's model-progress stall timeout, keyed on real node boundaries.
 
-    LLM_RUN_TIMEOUT_SECS bounds wall-time the run waits for *model progress* while
-    no tool is in flight — it is not an absolute run deadline. note() is called for
-    every stream event: a fresh window is armed on each event seen with zero tools
-    outstanding, and the timer is disarmed while one or more tools execute (no stream
-    events flow between a tool call and its result, so a long legit tool is bounded
-    by its own timeout, not by this loop — for MCP tools that bound is the per-server
-    call_timeout_seconds, plumbed to pydantic-ai read_timeout, default 120s). Parallel
-    tool calls stay disarmed until the outstanding count returns to zero.
+    The configured stall window (``llm.run_stall_timeout_secs``, passed in as ``window``)
+    bounds wall-time the run waits for *model progress* — it is not an absolute run
+    deadline. The orchestrator ``arm()``s a fresh window on entering a model-request node
+    and on every event it streams from that node, so the deadline measures time since the
+    last model token. It ``disarm()``s on entering a call-tools node (a long legit tool is
+    bounded by its own timeout, not this window — for MCP tools that bound is the
+    per-server call_timeout_seconds, plumbed to pydantic-ai read_timeout, default 120s),
+    and re-arms when the tool node completes so the gap until the next model request is
+    still covered.
     """
 
-    def __init__(self, timeout_cm: asyncio.Timeout, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(
+        self, timeout_cm: asyncio.Timeout, loop: asyncio.AbstractEventLoop, window: float
+    ) -> None:
         self._timeout_cm = timeout_cm
         self._loop = loop
-        self._outstanding_tools = 0
+        self._window = window
 
-    def note(self, event: object) -> None:
-        if isinstance(event, FunctionToolCallEvent):
-            self._outstanding_tools += 1
-            if self._outstanding_tools == 1:
-                self._timeout_cm.reschedule(None)
-        elif isinstance(event, FunctionToolResultEvent):
-            self._outstanding_tools -= 1
-            if self._outstanding_tools == 0:
-                self._timeout_cm.reschedule(self._loop.time() + LLM_RUN_TIMEOUT_SECS)
-        elif self._outstanding_tools == 0:
-            self._timeout_cm.reschedule(self._loop.time() + LLM_RUN_TIMEOUT_SECS)
+    def arm(self) -> None:
+        self._timeout_cm.reschedule(self._loop.time() + self._window)
+
+    def disarm(self) -> None:
+        self._timeout_cm.reschedule(None)
 
 
 def _handle_tool_call_event(
@@ -334,35 +333,40 @@ def _handle_tool_call_event(
     )
 
 
-def _handle_stream_event(
-    event: object,
-    renderer: StreamRenderer,
-    deps: CoDeps,
-    frontend: Frontend,
-) -> SessionRunResult | None:
-    """Process one stream event. Returns AgentRunResult when found, else None."""
+def _handle_model_request_event(event: object, renderer: StreamRenderer) -> None:
+    """Render one event from a model-request node stream.
+
+    ``ModelRequestNode.stream()`` yields PartStartEvent/PartDeltaEvent/PartEndEvent
+    and FinalResultEvent only. PartEnd/FinalResult are side-effect free for rendering;
+    text may continue after FinalResultEvent.
+    """
     if isinstance(event, PartStartEvent):
         if isinstance(event.part, ThinkingPart):
             renderer.append_thinking(event.part.content)
         elif isinstance(event.part, TextPart):
             renderer.append_text(event.part.content)
-        return None
+        return
 
     if isinstance(event, PartDeltaEvent):
         if isinstance(event.delta, ThinkingPartDelta):
             renderer.append_thinking(event.delta.content_delta or "")
         elif isinstance(event.delta, TextPartDelta):
             renderer.append_text(event.delta.content_delta)
-        return None
 
-    # Readiness/meta events are intentionally side-effect free for
-    # rendering; text may continue after FinalResultEvent.
-    if isinstance(event, (FinalResultEvent, PartEndEvent)):
-        return None
 
+def _handle_tool_event(
+    event: object,
+    renderer: StreamRenderer,
+    deps: CoDeps,
+    frontend: Frontend,
+) -> None:
+    """Render one event from a call-tools node stream.
+
+    ``CallToolsNode.stream()`` yields FunctionToolCallEvent/FunctionToolResultEvent only.
+    """
     if isinstance(event, FunctionToolCallEvent):
         _handle_tool_call_event(event, renderer, deps, frontend)
-        return None
+        return
 
     if isinstance(event, FunctionToolResultEvent):
         renderer.flush_for_tool_output()
@@ -372,14 +376,8 @@ def _handle_stream_event(
             # RetryPromptPart: tool raised ModelRetry or validation failed.
             # Close the tool surface cleanly — no result to display.
             frontend.on_tool_complete(tool_id, None)
-            return None
+            return
         frontend.on_tool_complete(tool_id, format_for_display(event.result.content))
-        return None
-
-    if isinstance(event, AgentRunResultEvent):
-        return event.result
-
-    return None
 
 
 async def _execute_run(
@@ -392,9 +390,9 @@ async def _execute_run(
 ) -> None:
     """Execute one run and update turn state in-place.
 
-    Uses ``message_history`` when provided (preflight-extended history from
-    _run_model_preflight); falls back to turn_state.current_history for
-    approval-resume runs. Reads turn_state.current_input,
+    Uses ``message_history`` when the caller (``run_turn``) provides it; falls
+    back to turn_state.current_history for approval-resume runs. Reads
+    turn_state.current_input,
     tool_approval_decisions, and latest_usage. After the call:
     - latest_result holds the AgentRunResult
     - latest_streamed_text reflects whether text was streamed
@@ -422,12 +420,13 @@ async def _execute_run(
     )
     try:
         try:
-            # LLM_RUN_TIMEOUT_SECS is a model-generation STALL window, not an
-            # absolute run deadline — see _StallTimer.
+            # Model-generation STALL window (operator-tunable), not an absolute run
+            # deadline — see _StallTimer.
+            stall_window = deps.config.llm.run_stall_timeout_secs
             loop = asyncio.get_running_loop()
-            async with asyncio.timeout(LLM_RUN_TIMEOUT_SECS) as timeout_cm:
-                stall_timer = _StallTimer(timeout_cm, loop)
-                async with agent.run_stream_events(
+            async with asyncio.timeout(stall_window) as timeout_cm:
+                stall_timer = _StallTimer(timeout_cm, loop, stall_window)
+                async with agent.iter(
                     turn_state.current_input,
                     deps=deps,
                     message_history=message_history
@@ -443,17 +442,32 @@ async def _execute_run(
                     # max_model_requests_per_turn=0 disables (request_limit=None).
                     usage_limits=UsageLimits(request_limit=request_limit),
                     deferred_tool_results=turn_state.tool_approval_decisions,
-                    metadata={
-                        "session_id": deps.session.session_path.stem[-8:],
-                        "role": "orchestrator",
-                        "request_limit": request_limit,
-                    },
-                ) as stream:
-                    async for event in stream:
-                        stall_timer.note(event)
-                        event_result = _handle_stream_event(event, renderer, deps, frontend)
-                        if event_result is not None:
-                            result = event_result
+                ) as run:
+                    async for node in run:
+                        if Agent.is_model_request_node(node):
+                            # Per-model-request tool-cap boundary (replaces the toolset's
+                            # ctx.run_step inference): entering a model-request node IS the
+                            # request boundary. Finalize the just-completed request — clear
+                            # the consecutive-violation streak if it stayed within cap — then
+                            # zero the counter for the new request.
+                            if (
+                                deps.runtime.tool_calls_in_model_request
+                                <= MAX_TOOL_CALLS_PER_MODEL_REQUEST
+                            ):
+                                deps.runtime.consecutive_tool_cap_violations = 0
+                            deps.runtime.tool_calls_in_model_request = 0
+                            stall_timer.arm()
+                            async with node.stream(run.ctx) as request_stream:
+                                async for event in request_stream:
+                                    stall_timer.arm()
+                                    _handle_model_request_event(event, renderer)
+                        elif Agent.is_call_tools_node(node):
+                            stall_timer.disarm()
+                            async with node.stream(run.ctx) as tool_stream:
+                                async for event in tool_stream:
+                                    _handle_tool_event(event, renderer, deps, frontend)
+                            stall_timer.arm()
+                    result = run.result
                 renderer.finish()
         finally:
             renderer.close()
@@ -467,9 +481,9 @@ async def _execute_run(
         logger.warning("LLM run slow: %.1fs (warn threshold %ds)", elapsed, _LLM_RUN_WARN_SECS)
 
     if result is None:
-        pop_span(status="ERROR", status_msg="run ended without AgentRunResultEvent")
+        pop_span(status="ERROR", status_msg="agent.iter() ended without a result")
         raise RuntimeError(
-            "_execute_run: stream ended without AgentRunResultEvent — run contract violated"
+            "_execute_run: agent.iter() ended without run.result — run contract violated"
         )
     turn_state.latest_result = result
     turn_state.model_requests += sum(
@@ -490,12 +504,6 @@ async def _execute_run(
         },
     )
 
-    # Run-boundary cap finalize (idempotent with the in-wrapper transition reset):
-    # if the last model request of this run stayed within the cap, clear the streak
-    # so the orchestrate.py hard-stop check sees only genuinely-consecutive violations.
-    if deps.runtime.tool_calls_in_model_request <= MAX_TOOL_CALLS_PER_MODEL_REQUEST:
-        deps.runtime.consecutive_tool_cap_violations = 0
-
 
 async def _run_approval_loop(
     turn_state: _TurnState,
@@ -506,11 +514,13 @@ async def _run_approval_loop(
 ) -> None:
     """Run approval-resume runs until no deferred tool requests remain.
 
-    Each iteration: collect approvals → prepare resume → execute run.
-    Resume runs run on the main agent directly — the SDK skips
-    ModelRequestNode entirely on the deferred_tool_results path, so zero
-    tokens are sent to the model regardless of which agent runs.
-    Exits when latest_result.output is no longer DeferredToolRequests.
+    Each iteration: collect approvals → prepare resume → execute run through the SAME
+    unified ``_execute_run`` (``agent.iter()``) loop — there is no separate resume-only
+    apparatus. On the ``deferred_tool_results`` path the resume's first node is the
+    call-tools node executing the approved call; the SDK sends zero tokens to re-decide
+    it, so the stall window is never armed for a model request that does not happen. Any
+    model-request node that follows is the model answering FROM the tool result (normal
+    continuation). Exits when latest_result.output is no longer DeferredToolRequests.
     """
     assert turn_state.latest_result is not None
 
@@ -686,6 +696,8 @@ def _check_output_limits(
         frontend.on_status(
             "Response truncated at output token ceiling — use /compact to free context."
         )
+    # Overflow is about the LIVE context window, so use the last response's input_tokens
+    # (the current prompt size), not the turn-cumulative RunUsage the turn records elsewhere.
     latest_input = latest_result.response.usage.input_tokens or 0
     if latest_input > 0:
         ratio = latest_input / deps.model_max_context_tokens
@@ -879,7 +891,7 @@ async def _handle_model_http_error(
         return _build_error_turn_result(turn_state)
     if code == 400 and _apply_400_reformulation(turn_state, e):
         frontend.on_status("Tool call rejected (HTTP 400), reflecting to model...")
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(_HTTP_400_REFLECT_BACKOFF_SECS)
         return None
     frontend.on_status(f"Provider error (HTTP {code}): {e.body}")
     turn_state.outcome = "error"
@@ -1077,7 +1089,7 @@ async def run_turn(
         # Record the turn's FINAL cumulative usage exactly once, here at the sole
         # point that catches every return path (success, cap hard-stop, HTTP/API/
         # malformed errors, interrupt). RunUsage is cumulative within a turn — the
-        # orchestrator carries prior runs forward via run_stream_events(usage=...),
+        # orchestrator carries prior runs forward via agent.iter(usage=...),
         # so recording per-run would double-count; recording latest_usage once
         # does not. Forked subagent/summarizer tokens roll into the same accumulator
         # via their own once-per-run boundaries.
