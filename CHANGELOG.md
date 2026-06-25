@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.488]
+
+Remove the duplicate todo-enrichment feed to the compaction summarizer (refactor).
+
+- **De-duplicate todo carry (refactor)** — active session todos no longer enter post-compaction context twice. The lossy enrichment feed (`gather_compaction_context` → `summarize_messages(context=…)` → `=== ADDITIONAL CONTEXT ===` block) is removed; active todos are now carried solely by the durable verbatim `build_todo_snapshot`, and the `in_progress` todo still reaches the summarizer via the compaction `focus`.
+- **Dead plumbing removed** — dropped `gather_compaction_context`, the orphaned `_gather_session_todos` helper and `_TODOS_MAX_CHARS` constant, the now-unused `RunContext`/`CoDeps` imports in `_compaction_markers.py`, and the `context` parameter from `summarize_messages`/`_build_summarizer_prompt`. `build_todo_snapshot`/`_active_todos`/`_format_active_todos` unchanged.
+- **Specs synced** — `self-planning.md`, `compaction.md`, `core-loop.md` updated to drop the enrichment-path diagrams, callstack, config caps, and prose.
+
 ## [0.8.487]
 
 Wire the active session id into emitted trace spans (bugfix).

@@ -15,7 +15,6 @@ flowchart TD
     end
 
     subgraph Compaction["Compaction"]
-        ENRICH["_gather_session_todos\n(LLM enrichment context)\nactive · ≤10 items · ≤1,500 chars"]
         SNAPSHOT["build_todo_snapshot\n(post-compaction marker)\nactive · ≤10 items"]
         MARKER["compacted history\nhead | marker | [todo_snapshot] | tail"]
     end
@@ -26,7 +25,6 @@ flowchart TD
 
     WRITE -->|"replace or update"| STATE
     READ --> STATE
-    STATE --> ENRICH
     STATE --> SNAPSHOT --> MARKER
     MARKER -->|"/resume"| REHYDRATE --> STATE
 ```
@@ -39,7 +37,6 @@ flowchart TD
 | `CoSessionState.session_todos` | `co_cli/deps.py` | In-memory list; runtime source of truth |
 | `todo_write` | `co_cli/tools/todo/rw.py` | Write surface — fresh replace or merge-by-id |
 | `todo_read` | `co_cli/tools/todo/rw.py` | Read surface — returns current list verbatim |
-| `_gather_session_todos` | `co_cli/context/_compaction_markers.py` | Active-todo enrichment block fed to the compaction LLM |
 | `build_todo_snapshot` | `co_cli/context/_compaction_markers.py` | Serializes active items into the post-compaction marker |
 | `_rehydrate_todos` | `co_cli/commands/resume.py` | Restores `session_todos` from history on `/resume` |
 
@@ -102,16 +99,7 @@ All errors are collected and returned together; no partial writes occur on any e
 
 ### 2.4 Compaction Integration
 
-Active items (status not in `{completed, cancelled}`) survive compaction via two mechanisms:
-
-**Enrichment context** — fed to the LLM summarizer so it can reference outstanding work in the summary:
-
-```
-active := [t for t in session_todos if t.status not in {completed, cancelled}]
-block  := "Active tasks:\n" + "\n".join(format_active_todos(active))
-result := block[:1,500 chars]
-result is None when active list is empty
-```
+Active items (status not in `{completed, cancelled}`) survive compaction via the durable post-compaction snapshot. The single `in_progress` item additionally reaches the summarizer as the compaction `focus` (see [compaction.md](compaction.md)), so the active task is reflected in the summary recap.
 
 **Post-compaction snapshot** — a `ModelRequest` marker inserted after the compaction marker so the plan survives into the compacted history:
 
@@ -149,10 +137,9 @@ Fields **not** inherited by delegation agents (reset to defaults on fork): `sess
 
 | Constant | File | Value | Purpose |
 |----------|------|-------|---------|
-| `_TODOS_MAX_CHARS` | `co_cli/context/_compaction_markers.py` | `1,500` | Hard cap on the active-todo enrichment block fed to the LLM summarizer |
 | Snapshot item limit | `co_cli/context/_compaction_markers.py` | `10` | Max active items serialized into the post-compaction snapshot (`_format_active_todos` slices `active[:10]`) |
 
-No user-configurable settings. Both limits are hard-coded internal caps.
+No user-configurable settings. The limit is a hard-coded internal cap.
 
 ## 4. Public Interface
 
@@ -174,8 +161,7 @@ No user-configurable settings. Both limits are hard-coded internal caps.
 
 | Symbol | Source | Contract |
 |--------|--------|----------|
-| `_gather_session_todos(deps) -> str \| None` | `co_cli/context/_compaction_markers.py` | Returns the active-todo enrichment block (≤10 items, ≤1,500 chars) fed to the compaction LLM; `None` when no active items |
-| `build_todo_snapshot(deps) -> str \| None` | `co_cli/context/_compaction_markers.py` | Returns the post-compaction `UserPromptPart` content carrying active items into the compacted history; `None` when no active items |
+| `build_todo_snapshot(todos: list) -> ModelRequest \| None` | `co_cli/context/_compaction_markers.py` | Returns the post-compaction `ModelRequest` (a `UserPromptPart` carrying active items) inserted into the compacted history; `None` when no active items |
 | `TODO_SNAPSHOT_PREFIX` | `co_cli/context/_compaction_markers.py` | Constant prefix used to identify the snapshot marker in compacted history |
 
 ### Rehydration
@@ -190,7 +176,7 @@ No user-configurable settings. Both limits are hard-coded internal caps.
 |------|---------|
 | `co_cli/deps.py` | `TodoItem` TypedDict; `CoSessionState.session_todos` field; `fork_deps` delegation reset |
 | `co_cli/tools/todo/rw.py` | `todo_write` + `todo_read` tool implementations; fresh/merge logic; all-or-nothing validation |
-| `co_cli/context/_compaction_markers.py` | `_gather_session_todos`, `build_todo_snapshot`, `_active_todos`, `_format_active_todos`, `TODO_SNAPSHOT_PREFIX` |
+| `co_cli/context/_compaction_markers.py` | `build_todo_snapshot`, `_active_todos`, `_format_active_todos`, `TODO_SNAPSHOT_PREFIX` |
 | `co_cli/commands/resume.py` | `_rehydrate_todos`; `/resume` command integration |
 
 ## 6. Test Gates

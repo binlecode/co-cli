@@ -842,8 +842,8 @@ async def test_prior_summary_partitioned_into_dedicated_slot() -> None:
     assert "real assistant turn in the dropped middle" in serialized
 
     # (b) the slot-referencing carry-forward clause appears iff a prior summary is present
-    with_clause = _build_summarizer_prompt(None, False, 2000, None, prior_summary)
-    without_clause = _build_summarizer_prompt(None, False, 2000, None, None)
+    with_clause = _build_summarizer_prompt(False, 2000, None, prior_summary)
+    without_clause = _build_summarizer_prompt(False, 2000, None, None)
     assert "PRIOR SUMMARY block above" in with_clause
     assert "PRIOR SUMMARY block above" not in without_clause
 

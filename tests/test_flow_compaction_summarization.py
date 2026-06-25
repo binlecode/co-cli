@@ -298,7 +298,7 @@ def test_resolve_summary_budget_grows_with_region_in_mid_range():
 
 def test_build_summarizer_prompt_carries_target_line():
     """The assembled prompt states the concrete token target so the model has a goal."""
-    prompt = _build_summarizer_prompt(None, personality_active=False, budget=3500)
+    prompt = _build_summarizer_prompt(personality_active=False, budget=3500)
     assert "Target ~3500 tokens" in prompt
 
 

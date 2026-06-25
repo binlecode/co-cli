@@ -1,4 +1,4 @@
-"""Marker builders and enrichment-context gathering for compaction.
+"""Marker builders for compaction.
 
 The summarizer path chooses a ``summary_marker`` when the LLM produced a
 summary; otherwise the structurally-equivalent ``static_marker`` stands in
@@ -8,15 +8,10 @@ compaction boundary so downstream turns don't re-propose completed tasks.
 
 from __future__ import annotations
 
-from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelRequest,
     UserPromptPart,
 )
-
-from co_cli.deps import CoDeps
-
-_TODOS_MAX_CHARS = 1_500
 
 STATIC_MARKER_PREFIX = "[CONTEXT COMPACTION — STATIC MARKER] "
 """Sentinel prefix for static (no-LLM) compaction markers.
@@ -155,15 +150,6 @@ def _format_active_todos(active: list) -> list[str]:
     ]
 
 
-def _gather_session_todos(todos: list) -> str | None:
-    """Format pending session todos for compaction context."""
-    active = _active_todos(todos)
-    if not active:
-        return None
-    result = "Active tasks:\n" + "\n".join(_format_active_todos(active))
-    return result[:_TODOS_MAX_CHARS]
-
-
 def build_todo_snapshot(todos: list) -> ModelRequest | None:
     """Build a durable post-compaction ModelRequest carrying active todos.
 
@@ -176,16 +162,3 @@ def build_todo_snapshot(todos: list) -> ModelRequest | None:
         return None
     content = TODO_SNAPSHOT_PREFIX + "\n" + "\n".join(_format_active_todos(active))
     return ModelRequest(parts=[UserPromptPart(content=content)])
-
-
-def gather_compaction_context(ctx: RunContext[CoDeps]) -> str | None:
-    """Side-channel context the summarizer can't recover from dropped messages.
-
-    Session todos live on ``ctx.deps.session``, not in the conversation
-    history, so the summarizer cannot infer them from message content alone.
-    File paths are recoverable LLM-side and intentionally omitted. The prior
-    summary is handled separately — ``compact_messages`` extracts it via
-    ``_partition_dropped`` and feeds it through the dedicated ``prior_summary``
-    slot, not through this enrichment channel.
-    """
-    return _gather_session_todos(ctx.deps.session.session_todos)

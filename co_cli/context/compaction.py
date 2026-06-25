@@ -2,13 +2,13 @@
 
 Imported outside ``co_cli/context/`` (agent/, commands/, prompts/)
 so this module is package-public. Implementation details — turn grouping,
-boundary planning, marker builders, enrichment gathering, and history
-processors — live in package-private siblings and are re-exported here so
-external callers have a single import surface.
+boundary planning, marker builders, and history processors — live in
+package-private siblings and are re-exported here so external callers have a
+single import surface.
 
 Submodule map:
     _compaction_boundaries  — TurnGroup, group_by_turn, plan_compaction_boundaries
-    _compaction_markers     — static/summary/todo markers, enrichment context
+    _compaction_markers     — static/summary/todo markers
     history_processors     — dedup_tool_results, evict_old_tool_results
 """
 
@@ -42,7 +42,6 @@ from co_cli.context._compaction_markers import (
     build_compaction_marker,
     build_todo_snapshot,
     extract_summary_body,
-    gather_compaction_context,
     is_compaction_marker,
     static_marker,
     summary_marker,
@@ -73,7 +72,6 @@ __all__ = [
     "compact_messages",
     "estimate_message_tokens",
     "find_first_run_end",
-    "gather_compaction_context",
     "group_by_turn",
     "groups_to_messages",
     "is_cleared_marker",
@@ -210,12 +208,10 @@ async def summarize_dropped_messages(
     when present, is the recovered recap of a previous compaction pass; it is fed
     to the summarizer in a dedicated slot rather than inline in the turns block.
     """
-    enrichment = gather_compaction_context(ctx)
     return await summarize_messages(
         ctx.deps,
         dropped,
         personality_active=bool(ctx.deps.config.personality),
-        context=enrichment,
         focus=focus,
         prior_summary=prior_summary,
     )

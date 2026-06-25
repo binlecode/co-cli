@@ -108,10 +108,7 @@ flowchart TD
     COMPACT(["/compact"])
 
     subgraph SUM["LLM summarization"]
-        direction LR
-        GC["gather_compaction_context"]
-        GC --> GC2["active session todos\n(pending/in_progress, ≤10, ≤1.5K chars)"]
-        GC2 --> SUMM["summarize_messages\n(LLM, no tools)"]
+        SUMM["summarize_messages\n(LLM, no tools)"]
     end
 
     UPN --> C0
@@ -121,9 +118,9 @@ flowchart TD
     RTYPE -->|ToolCallPart| TCALL
     RTYPE -->|TextPart| FINAL
     NEXT -.->|"re-enter MRN"| C0
-    C2 -.->|"threshold trip"| GC
-    OV7 -.->|"strip+summarize path"| GC
-    COMPACT -.->|"compact_messages"| GC
+    C2 -.->|"threshold trip"| SUMM
+    OV7 -.->|"strip+summarize path"| SUMM
+    COMPACT -.->|"compact_messages"| SUMM
 
     classDef hook fill:#ede0f5,stroke:#9c6fc7
     classDef term fill:#d4edda,stroke:#74c476
@@ -501,7 +498,7 @@ proactive_window_processor — full path
       anti-thrash static path (summarize=False) flows through this same guard.
 ```
 
-All STEPs above live inside `proactive_window_processor` — the trigger gates (threshold + anti-thrash gate), trigger-check OTEL span, and the post-compaction policy (savings, status callback, OTEL execution attributes, thrash counter, commit) are co-located. STEP 4 calls `compact_messages` — the shared assembly primitive also used by recovery PATH 2 and `/compact`. STEPs 5–6 are bundled in the private helper `_record_proactive_outcome` (which returns `tokens_after`), proactive-only (recovery and `/compact` skip it: they don't track savings, don't fire the closing callback, and `/compact` resets the thrash counter unconditionally upstream). STEP 7's no-progress guard lives in `proactive_window_processor` itself, reading the returned `tokens_after` to decide escalation. See §2.6 for the assembly logic, enrichment helper, summarizer LLM call, and circuit breaker.
+All STEPs above live inside `proactive_window_processor` — the trigger gates (threshold + anti-thrash gate), trigger-check OTEL span, and the post-compaction policy (savings, status callback, OTEL execution attributes, thrash counter, commit) are co-located. STEP 4 calls `compact_messages` — the shared assembly primitive also used by recovery PATH 2 and `/compact`. STEPs 5–6 are bundled in the private helper `_record_proactive_outcome` (which returns `tokens_after`), proactive-only (recovery and `/compact` skip it: they don't track savings, don't fire the closing callback, and `/compact` resets the thrash counter unconditionally upstream). STEP 7's no-progress guard lives in `proactive_window_processor` itself, reading the returned `tokens_after` to decide escalation. See §2.6 for the assembly logic, summarizer LLM call, and circuit breaker.
 
 **Single-writer atomicity.** STEPs 4 and 5 happen *before* STEP 6's `commit_compaction` call, and STEP 5 no longer writes runtime — its `tokens_after` is local, used only for the savings basis, span attributes, and the no-progress return. If anything between STEP 4 and STEP 6 raises (e.g. `estimate_message_tokens` on malformed content, savings calc edge cases), the exception propagates with runtime untouched; `proactive_window_processor`'s bare `except` returns the original `messages` reference. `commit_compaction` itself computes the token estimate before its first write, so a token-estimator failure inside the helper also leaves runtime untouched. Partial-commit state cannot leak across turns.
 
@@ -526,7 +523,7 @@ Edge cases: returns `None` when `len(groups) < 2` or when the backward walk prod
 
 All three callers use the same primitive `compact_messages(ctx, messages, bounds, focus)` and follow it with `commit_compaction(ctx, result)` to write the three runtime "applied" fields atomically. Proactive layers additional policy on top (savings, closing status callback, OTEL execution attributes, thrash counter) via the private helper `_record_proactive_outcome`.
 
-The pipeline has four stages: assemble (`compact_messages`) → gate (`_summarization_gate_open` + circuit breaker) → enrich (`gather_compaction_context`) → summarize (`summarize_messages`). Static-marker fallback short-circuits the LLM call but reuses the same assembly.
+The pipeline has three stages: assemble (`compact_messages`) → gate (`_summarization_gate_open` + circuit breaker) → summarize (`summarize_messages`). Static-marker fallback short-circuits the LLM call but reuses the same assembly.
 
 ```
 proactive_window_processor          recover_overflow_history          /compact slash command
@@ -544,10 +541,6 @@ proactive_window_processor          recover_overflow_history          /compact s
                     │        ├── _summarization_gate_open      ← False if model=None or circuit breaker tripped
                     │        │     announces "Compacting conversation…" on gate-open paths
                     │        └── summarize_dropped_messages
-                    │                 ├── gather_compaction_context
-                    │                 │        └── _gather_session_todos   ← active only (≤10, ≤1.5K chars)
-                    │                 │              session-orthogonal; file paths recoverable
-                    │                 │              from history, so handled LLM-side
                     │                 └── summarize_messages    ← llm_call(), no tools; _SUMMARIZE_PROMPT
                     │                       prior_summary fed in a dedicated "PRIOR SUMMARY" slot
                     │                       above the opaque TURNS TO SUMMARIZE: block; carry-forward
@@ -755,12 +748,6 @@ so a single module holds every fixed sizing knob; the consuming module is named 
 | `SPILL_PREVIEW_CHARS` | `co_cli/config/tuning.py` | `1,500` | Preview chars included in the `<persisted-output>` placeholder (`fileio/spill.py`) |
 | `ESTIMATE_CHARS_PER_TOKEN` | `co_cli/config/tuning.py` | `4` | Fast chars→tokens proxy used by `spill_largest_tool_results` aggregate estimate (`tokens.py`) |
 
-**Enrichment char caps** (module-level; not user-configurable; see §2.6 callstack diagram for usage):
-
-| Constant | Source | Value | Purpose |
-|---|---|---|---|
-| `_TODOS_MAX_CHARS` | `co_cli/context/_compaction_markers.py` | `1,500` | Hard cap on the active-todos enrichment block |
-
 Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_threshold_chars=...)` in each tool's own file — see the table in §2.2.
 
 ## 4. Public Interface
@@ -815,7 +802,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `co_cli/config/compaction.py` | `CompactionSettings` — ratios, thresholds, and anti-thrashing knobs. |
 | `co_cli/context/compaction.py` | Public entry surface: `compact_messages` (shared assembly primitive), `commit_compaction` (sole runtime-field writer), `proactive_window_processor` (trigger + proactive policy via `_record_proactive_outcome`), `recover_overflow_history`, summarizer gate, re-exports. |
 | `co_cli/context/_compaction_boundaries.py` | Boundary planner: `TurnGroup`, `group_by_turn`, `plan_compaction_boundaries`, active-user anchoring. |
-| `co_cli/context/_compaction_markers.py` | Marker builders, `gather_compaction_context` enrichment helper, `SUMMARY_MARKER_PREFIX`. |
+| `co_cli/context/_compaction_markers.py` | Marker builders, `build_todo_snapshot` active-todo carry, `SUMMARY_MARKER_PREFIX`. |
 | `co_cli/context/_dedup_tool_results.py` | `dedup_tool_results` helpers: content hash, eligibility predicate (`is_dedup_candidate`), back-reference builder (`build_dedup_part`). |
 | `co_cli/context/history_processors.py` | Pure history processors (registered): `dedup_tool_results`, `evict_old_tool_results`, `spill_largest_tool_results`. Recovery helper (unregistered): `strip_all_tool_returns`. |
 | `co_cli/agent/toolset.py` | `_CallSeamToolset.call_tool`: L0 per-call cap brake + consecutive-violation streak, MCP-only fallback spill, and `co.tool.*` span enrichment. |

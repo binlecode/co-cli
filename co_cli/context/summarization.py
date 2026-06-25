@@ -318,17 +318,16 @@ def serialize_messages(
 
 
 def _build_summarizer_prompt(
-    context: str | None,
     personality_active: bool,
     budget: int,
     focus: str | None = None,
     prior_summary: str | None = None,
 ) -> str:
-    """Assemble the final summarizer prompt from _SUMMARIZE_PROMPT + optional context + personality.
+    """Assemble the final summarizer prompt from _SUMMARIZE_PROMPT + optional personality.
 
     Assembly order: focus → template → prior-summary clause → length target →
-    context addendum → personality addendum.
-    Personality is always last (tone modifier); context provides factual input.
+    personality addendum.
+    Personality is always last (tone modifier).
     Focus narrows scope and leads the prompt so the LLM prioritises it.
     ``budget`` sets the ``Target ~N tokens`` line so the model aims at a length
     proportional to the compacted region. The prior-summary carry-forward clause
@@ -347,8 +346,6 @@ def _build_summarizer_prompt(
     if prior_summary:
         parts.append(_PRIOR_SUMMARY_CLAUSE)
     parts.append(_length_priority_tail(budget))
-    if context:
-        parts.append(f"\n\n=== ADDITIONAL CONTEXT ===\n{context}\n=== END ADDITIONAL CONTEXT ===")
     if personality_active:
         parts.append(_PERSONALITY_COMPACTION_ADDENDUM)
     return "".join(parts)
@@ -359,7 +356,6 @@ async def summarize_messages(
     messages: list[ModelMessage],
     *,
     personality_active: bool = False,
-    context: str | None = None,
     focus: str | None = None,
     prior_summary: str | None = None,
 ) -> str:
@@ -398,9 +394,7 @@ async def summarize_messages(
     # guarantee. Surfaced so a focus-active cap-bound pass is identifiable in traces.
     span.set_attribute("co.compaction.summary.focus", bool(focus))
 
-    task_prompt = _build_summarizer_prompt(
-        context, personality_active, budget, focus, prior_summary
-    )
+    task_prompt = _build_summarizer_prompt(personality_active, budget, focus, prior_summary)
     serialized = serialize_messages(messages, deps.config.observability.redact_patterns)
     settings = cap_output_tokens(deps.model.settings_noreason, cap)
     # The prior summary is seated in a dedicated, trusted slot ABOVE the opaque
