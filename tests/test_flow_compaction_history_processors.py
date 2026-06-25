@@ -61,7 +61,7 @@ def test_dedup_replaces_older_identical_return_with_back_reference():
         ModelResponse(parts=[TextPart(content="same")]),
         ModelRequest(parts=[UserPromptPart(content="pending")]),
     ]
-    result = dedup_tool_results(_ctx(), messages)
+    result = dedup_tool_results(_ctx().deps, messages)
 
     older = next(
         p
@@ -92,7 +92,7 @@ def test_dedup_passes_through_short_content():
         ModelResponse(parts=[TextPart(content="same")]),
         ModelRequest(parts=[UserPromptPart(content="pending")]),
     ]
-    result = dedup_tool_results(_ctx(), messages)
+    result = dedup_tool_results(_ctx().deps, messages)
     for msg in result:
         if isinstance(msg, ModelRequest):
             for part in msg.parts:
@@ -109,7 +109,7 @@ def test_dedup_distinct_content_not_replaced():
         ModelResponse(parts=[TextPart(content="different")]),
         ModelRequest(parts=[UserPromptPart(content="pending")]),
     ]
-    result = dedup_tool_results(_ctx(), messages)
+    result = dedup_tool_results(_ctx().deps, messages)
     returns = [
         p
         for msg in result
@@ -134,7 +134,7 @@ def test_evict_clears_oldest_when_over_keep_limit():
         messages.append(ModelResponse(parts=[TextPart(content="ok")]))
     messages.append(ModelRequest(parts=[UserPromptPart(content="pending")]))
 
-    result = evict_old_tool_results(_ctx(), messages)
+    result = evict_old_tool_results(_ctx().deps, messages)
 
     returns = [
         p
@@ -161,7 +161,7 @@ def test_evict_keeps_all_when_at_limit():
         messages.append(ModelResponse(parts=[TextPart(content="ok")]))
     messages.append(ModelRequest(parts=[UserPromptPart(content="pending")]))
 
-    result = evict_old_tool_results(_ctx(), messages)
+    result = evict_old_tool_results(_ctx().deps, messages)
 
     returns = [
         p
@@ -204,7 +204,7 @@ def test_evict_clears_unknown_tool_via_generic_fallback():
         )
     messages.append(ModelRequest(parts=[UserPromptPart(content="pending")]))
 
-    result = evict_old_tool_results(_ctx(), messages)
+    result = evict_old_tool_results(_ctx().deps, messages)
 
     returns = [
         p
@@ -239,7 +239,7 @@ def test_evict_protects_tool_returns_in_last_turn():
         )
     )
 
-    result = evict_old_tool_results(_ctx(), messages)
+    result = evict_old_tool_results(_ctx().deps, messages)
 
     protected = next(
         p
@@ -264,7 +264,7 @@ def test_dedup_tolerates_lone_surrogate_content():
         ModelResponse(parts=[TextPart(content="done")]),
         *_file_read_exchange("call2", surrogate_content),
     ]
-    result = dedup_tool_results(_ctx(), messages)
+    result = dedup_tool_results(_ctx().deps, messages)
     call1 = next(
         p
         for msg in result

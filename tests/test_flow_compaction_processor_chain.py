@@ -59,10 +59,10 @@ def _ctx(deps: CoDeps) -> RunContext:
 
 async def _run_chain(ctx: RunContext, messages: list[ModelMessage]) -> list[ModelMessage]:
     """Run the four registered history processors in their registered order."""
-    out = dedup_tool_results(ctx, messages)
-    out = evict_old_tool_results(ctx, out)
-    out = spill_largest_tool_results(ctx, out)
-    return await proactive_window_processor(ctx, out)
+    out = dedup_tool_results(ctx.deps, messages)
+    out = evict_old_tool_results(ctx.deps, out)
+    out = spill_largest_tool_results(ctx.deps, out)
+    return await proactive_window_processor(ctx.deps, out)
 
 
 def _user(text: str) -> ModelRequest:

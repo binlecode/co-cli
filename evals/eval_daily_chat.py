@@ -29,7 +29,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from evals._deps import eval_deps
+from evals._deps import drive_turn, eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
@@ -45,7 +45,6 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 
-from co_cli.agent.orchestrate import run_turn
 from co_cli.daemons.dream._housekeeping import merge_memory
 from co_cli.daemons.dream.state import HousekeepingState
 from co_cli.memory.frontmatter import render_frontmatter
@@ -213,7 +212,7 @@ async def _drive_turns(
                 user_input=user_input,
                 prior_message_count=prior_len,
                 run_turn_callable=(
-                    lambda h=history, ui=user_input: run_turn(
+                    lambda h=history, ui=user_input: drive_turn(
                         agent=agent,
                         user_input=ui,
                         deps=deps,

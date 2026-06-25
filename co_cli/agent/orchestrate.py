@@ -19,7 +19,6 @@ from pydantic_ai import (
     AgentRunResult,
     DeferredToolRequests,
     DeferredToolResults,
-    RunContext,
     ToolApproved,
 )
 from pydantic_ai.settings import ModelSettings
@@ -51,7 +50,6 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.usage import RunUsage
 
 # Typed return value from run_turn() to chat loop
 TurnOutcome = Literal["continue", "error"]
@@ -842,7 +840,6 @@ def _history_after_successful_run(
 
 async def _attempt_overflow_recovery(
     turn_state: "_TurnState",
-    agent: "SessionAgent",
     deps: "CoDeps",
     frontend: "Frontend",
 ) -> bool:
@@ -855,13 +852,8 @@ async def _attempt_overflow_recovery(
         frontend.on_status("Context overflow — unrecoverable.")
         return False
     turn_state.overflow_recovery_attempted = True
-    recovery_ctx = RunContext(
-        deps=deps,
-        model=agent.model,
-        usage=turn_state.latest_usage or RunUsage(),
-    )
     recovery_history = _history_with_pending_user_input(turn_state)
-    compacted = await recover_overflow_history(recovery_ctx, recovery_history)
+    compacted = await recover_overflow_history(deps, recovery_history)
     if compacted is None:
         frontend.on_status("Context overflow — unrecoverable.")
         return False
@@ -874,7 +866,6 @@ async def _attempt_overflow_recovery(
 async def _handle_model_http_error(
     e: ModelHTTPError,
     turn_state: _TurnState,
-    agent: SessionAgent,
     deps: CoDeps,
     frontend: Frontend,
 ) -> TurnResult | None:
@@ -885,7 +876,7 @@ async def _handle_model_http_error(
     """
     code = e.status_code
     if is_context_overflow(e):
-        if await _attempt_overflow_recovery(turn_state, agent, deps, frontend):
+        if await _attempt_overflow_recovery(turn_state, deps, frontend):
             return None
         turn_state.outcome = "error"
         return _build_error_turn_result(turn_state)
@@ -1042,7 +1033,7 @@ async def run_turn(
                 return _build_error_turn_result(turn_state)
 
             except ModelHTTPError as e:
-                http_result = await _handle_model_http_error(e, turn_state, agent, deps, frontend)
+                http_result = await _handle_model_http_error(e, turn_state, deps, frontend)
                 if http_result is None:
                     continue
                 return http_result

@@ -14,7 +14,6 @@ import hashlib
 import json
 import logging
 
-from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -89,10 +88,12 @@ def _count_consecutive_shell_errors(messages: list[ModelMessage]) -> int:
     return count
 
 
-def safety_prompt_text(ctx: RunContext[CoDeps]) -> str:
-    """Per-turn dynamic instruction: doom loop and shell reflection warnings. Empty string when no condition is active."""
-    deps = ctx.deps
-    messages = ctx.messages
+def safety_prompt_text(deps: CoDeps, messages: list[ModelMessage]) -> str:
+    """Per-turn dynamic instruction: doom loop and shell reflection warnings. Empty string when no condition is active.
+
+    Takes ``deps`` + ``messages`` explicitly: the owned loop sources ``messages`` from the
+    turn history, the graph path from ``ctx.messages`` (via the ``safety_prompt`` shim).
+    """
     doom_threshold = deps.config.doom_loop_threshold
     max_refl = deps.config.max_reflections
 

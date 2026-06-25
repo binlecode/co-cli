@@ -9,11 +9,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from co_cli.agent._instructions import (
-    current_time_prompt,
-    deferred_tool_awareness_prompt,
-    safety_prompt,
-    skill_manifest_prompt,
-    wrap_up_prompt,
+    current_time_prompt_ctx,
+    deferred_tool_awareness_prompt_ctx,
+    safety_prompt_ctx,
+    skill_manifest_prompt_ctx,
+    wrap_up_prompt_ctx,
 )
 from co_cli.agent.spec import OrchestratorSpec
 from co_cli.context.compaction import proactive_window_processor
@@ -85,11 +85,11 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
         _personality_critique_provider,
     ),
     per_turn_instructions=(
-        safety_prompt,
-        wrap_up_prompt,
-        current_time_prompt,
-        deferred_tool_awareness_prompt,
-        skill_manifest_prompt,
+        safety_prompt_ctx,
+        wrap_up_prompt_ctx,
+        current_time_prompt_ctx,
+        deferred_tool_awareness_prompt_ctx,
+        skill_manifest_prompt_ctx,
     ),
     history_processors=(
         elide_old_multimodal_prompts,

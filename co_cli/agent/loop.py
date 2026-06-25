@@ -1,0 +1,496 @@
+"""Owned (graph-free) turn loop — drives the Phase-1 ``model_turn`` client.
+
+``run_turn_owned`` is the orchestrator turn loop selected by ``config.llm.use_owned_loop``;
+it reproduces the graph's per-turn control flow as straight-line code: materialize the user
+prompt, then per step run the history processors, assemble instructions, build the request
+params from the tool-def schema source, drive ``model_turn`` (rendering deltas), classify the
+assembled response, dispatch tool calls through co's owned ``dispatch_tools``, and repeat
+until the model emits no tool call (final text) — or a typed terminal condition fires
+(tool-cap hard stop, request cap, reasoning overflow, provider error, interrupt).
+
+``_drive_model_request`` is the shared per-step model-request primitive (also used by the
+owned subagent driver in ``run_standalone_owned``). The two drivers share preflight,
+dispatch, and this primitive; they differ only in instruction assembly, request params
+(``output_tools``), termination predicate, rendering, and approval — realizing the
+milestone's "single driver core for both" without duplicating the request mechanics.
+
+Phase 2 is the no-approval / no-recovery slice: a provider error / overflow / interrupt ends
+the turn as a clean terminal ``TurnResult`` (compact-and-retry and length-continuation are
+Phase 4). The graph path stays default and byte-for-byte unchanged.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import TYPE_CHECKING, Any
+
+import httpx
+from pydantic_ai.exceptions import (
+    ModelAPIError,
+    ModelHTTPError,
+    UnexpectedModelBehavior,
+)
+from pydantic_ai.messages import (
+    InstructionPart,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    UserPromptPart,
+)
+from pydantic_ai.usage import RunUsage
+
+from co_cli.agent.dispatch import dispatch_tools, resolve_auto_approvals
+from co_cli.agent.orchestrate import (
+    _REASONING_OVERFLOW_MESSAGE,
+    TOOL_CAP_NO_ANSWER_TEXT,
+    TurnResult,
+    _handle_model_request_event,
+    _last_assistant_text,
+)
+from co_cli.agent.preflight import (
+    assemble_instructions,
+    build_output_toolset,
+    build_request_params,
+    build_static_instructions,
+    build_tool_defs,
+    clean_message_history,
+    run_history_processors,
+)
+from co_cli.agent.turn_state import ToolCapState, TurnExit, TurnState
+from co_cli.config.llm import resolve_request_limit
+from co_cli.config.tuning import TOOL_CAP_HARD_STOP_CONSECUTIVE
+from co_cli.display.stream_renderer import StreamRenderer
+from co_cli.llm.model_turn import model_turn
+from co_cli.observability.tracing import current_span, trace
+from co_cli.observability.usage import record_usage
+
+if TYPE_CHECKING:
+    from pydantic_ai.messages import BinaryContent, ModelMessage
+    from pydantic_ai.models import ModelRequestParameters
+    from pydantic_ai.settings import ModelSettings
+
+    from co_cli.deps import CoDeps
+    from co_cli.display.core import Frontend
+
+logger = logging.getLogger(__name__)
+
+
+def _unwrap_model(deps: CoDeps) -> Any:
+    """Return the raw provider model for ``model_turn`` (strip the SurrogateRecoveryModel).
+
+    ``deps.model.model`` is the ``SurrogateRecoveryModel`` wrapper, whose concerns
+    (surrogate retry, chat span, JSON repair) ``model_turn`` re-applies itself — so the
+    owned loop must pass the raw inner model to avoid double-application.
+    """
+    return getattr(deps.model.model, "wrapped", deps.model.model)
+
+
+def _is_reasoning_overflow(response: ModelResponse) -> bool:
+    """True when reasoning consumed the whole output budget before any answer token.
+
+    The typed replacement for the graph's string-matched ``_REASONING_OVERFLOW_SIGNATURE``:
+    ``finish_reason == 'length'`` and the response carries no answer content (empty or
+    thinking-only). Text-present + ``length`` is a length truncation (continuation retry is
+    Phase 4), not a reasoning overflow.
+    """
+    if response.finish_reason != "length":
+        return False
+    has_answer = any(isinstance(p, TextPart | ToolCallPart) for p in response.parts)
+    return not has_answer
+
+
+def _final_text(response: ModelResponse) -> str:
+    return "".join(p.content for p in response.parts if isinstance(p, TextPart)).strip()
+
+
+async def _drive_model_request(
+    deps: CoDeps,
+    request_messages: list[ModelMessage],
+    params: ModelRequestParameters,
+    settings: ModelSettings | None,
+    renderer: StreamRenderer | None,
+    stall_window: float,
+) -> tuple[ModelResponse, RunUsage]:
+    """Drive one streamed model request, rendering deltas, under the stall window.
+
+    Re-arms the model-progress stall timeout on every streamed event (time-since-last-token,
+    not an absolute deadline). Returns the assembled (repaired, when Ollama) response and a
+    ``RunUsage`` carrying this request's token counts.
+    """
+    raw_model = _unwrap_model(deps)
+    repair = deps.config.llm.uses_ollama()
+    loop = asyncio.get_running_loop()
+    async with asyncio.timeout(stall_window) as stall:
+        async with model_turn(
+            raw_model, request_messages, params, settings, repair=repair
+        ) as stream:
+            stall.reschedule(loop.time() + stall_window)
+            async for event in stream:
+                stall.reschedule(loop.time() + stall_window)
+                if renderer is not None:
+                    _handle_model_request_event(event, renderer)
+            response = stream.get()
+            usage = stream.usage()
+    turn_usage = RunUsage()
+    turn_usage.incr(usage)
+    return response, turn_usage
+
+
+def _tool_calls(response: ModelResponse) -> list[ToolCallPart]:
+    return [p for p in response.parts if isinstance(p, ToolCallPart)]
+
+
+def _materialize_history(
+    message_history: list[ModelMessage],
+    user_input: str | list[str | BinaryContent] | None,
+) -> list[ModelMessage]:
+    """Append the in-flight user prompt to the working history (graph ``agent.iter`` parity)."""
+    history = list(message_history)
+    if user_input is not None:
+        history.append(ModelRequest(parts=[UserPromptPart(content=user_input)]))
+    return history
+
+
+def _instruction_parts_for_step(
+    deps: CoDeps,
+    static_instructions: str,
+    processed: list[ModelMessage],
+    requests_completed: int,
+) -> list[InstructionPart]:
+    return assemble_instructions(
+        deps,
+        static_instructions=static_instructions,
+        messages=processed,
+        request_count=requests_completed,
+    )
+
+
+@trace("co.turn", new_trace=True)
+async def run_turn_owned(
+    *,
+    user_input: str | list[str | BinaryContent],
+    deps: CoDeps,
+    message_history: list[ModelMessage],
+    model_settings: ModelSettings | None = None,
+    frontend: Frontend,
+) -> TurnResult:
+    """Execute one orchestrator turn through the owned loop (flag-on path).
+
+    Mirrors ``run_turn``'s contract — returns a ``TurnResult`` the chat loop pattern-matches
+    on — for the no-approval / no-recovery slice. Provider errors / overflow / interrupt end
+    the turn as a clean terminal result (Phase 4 owns recovery).
+    """
+    deps.runtime.reset_for_turn()
+    deps.usage_accumulator.reset()
+    deps.runtime.status_callback = frontend.on_status
+    frontend.begin_waiting()
+
+    settings = model_settings if model_settings is not None else deps.model.settings
+    static_instructions = build_static_instructions(deps)
+    state = TurnState(
+        history=_materialize_history(message_history, user_input),
+        cap_state=ToolCapState(),
+    )
+    request_limit = resolve_request_limit(deps.config.llm)
+    stall_window = deps.config.llm.run_stall_timeout_secs
+    renderer = StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)
+    turn_usage = RunUsage()
+    span = current_span()
+
+    try:
+        result = await _orchestrator_step_loop(
+            deps=deps,
+            state=state,
+            settings=settings,
+            static_instructions=static_instructions,
+            request_limit=request_limit,
+            stall_window=stall_window,
+            renderer=renderer,
+            frontend=frontend,
+            turn_usage=turn_usage,
+        )
+        return result
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        return _interrupted_result(state, turn_usage)
+    except (ModelHTTPError, ModelAPIError, httpx.ReadError, TimeoutError) as exc:
+        frontend.on_status(f"Provider error — turn ended: {exc}")
+        span.add_event("provider_error", {"error.type": type(exc).__name__})
+        return _terminal_result(
+            state, turn_usage, outcome="error", exit_reason=TurnExit.PROVIDER_ERROR
+        )
+    except UnexpectedModelBehavior as exc:
+        frontend.on_status(f"Model returned malformed output: {exc}")
+        span.add_event("malformed_output", {"error.type": type(exc).__name__})
+        return _terminal_result(
+            state, turn_usage, outcome="error", exit_reason=TurnExit.PROVIDER_ERROR
+        )
+    finally:
+        renderer.close()
+        frontend.cleanup()
+        if turn_usage.input_tokens or turn_usage.output_tokens:
+            record_usage(deps, turn_usage)
+        span.set_attribute(
+            "turn.outcome", state.exit_reason.name if state.exit_reason else "error"
+        )
+        span.set_attribute("turn.model_requests", state.model_requests)
+        span.set_attribute("turn.input_tokens", turn_usage.input_tokens)
+        span.set_attribute("turn.output_tokens", turn_usage.output_tokens)
+        deps.runtime.tool_progress_callback = None
+
+
+async def _orchestrator_step_loop(
+    *,
+    deps: CoDeps,
+    state: TurnState,
+    settings: ModelSettings | None,
+    static_instructions: str,
+    request_limit: int | None,
+    stall_window: float,
+    renderer: StreamRenderer,
+    frontend: Frontend,
+    turn_usage: RunUsage,
+) -> TurnResult:
+    """Run the per-step orchestrator loop until a terminal condition, returning a TurnResult."""
+    requests_completed = 0
+    while True:
+        if request_limit is not None and requests_completed >= request_limit:
+            frontend.on_status(
+                f"Model-request cap reached ({request_limit} LLM calls) — stopping."
+            )
+            return _terminal_result(
+                state, turn_usage, outcome="error", exit_reason=TurnExit.REQUEST_CAP
+            )
+
+        processed = await run_history_processors(state.history, deps)
+        state.history = processed
+        instr = _instruction_parts_for_step(
+            deps, static_instructions, processed, requests_completed
+        )
+        tool_defs = await build_tool_defs(deps)
+        params = build_request_params(instruction_parts=instr, function_tools=tool_defs)
+        request_messages = clean_message_history(processed)
+
+        response, step_usage = await _drive_model_request(
+            deps, request_messages, params, settings, renderer, stall_window
+        )
+        requests_completed += 1
+        state.model_requests += 1
+        turn_usage.incr(step_usage)
+
+        calls = _tool_calls(response)
+        if not calls:
+            renderer.finish()
+            state.history = [*state.history, response]
+            if _is_reasoning_overflow(response):
+                frontend.on_status(_REASONING_OVERFLOW_MESSAGE)
+                state.exit_reason = TurnExit.REASONING_OVERFLOW
+                return _terminal_result(
+                    state, turn_usage, outcome="error", exit_reason=TurnExit.REASONING_OVERFLOW
+                )
+            output = _final_text(response)
+            if not renderer.streamed_text and output:
+                frontend.on_final_output(output)
+            state.exit_reason = TurnExit.FINAL_TEXT
+            return _continue_result(state, turn_usage, output)
+
+        state.history = [*state.history, response]
+        denials = resolve_auto_approvals(calls, deps)
+        parts = await dispatch_tools(
+            calls, deps, cap_state=state.cap_state, frontend=frontend, denials=denials
+        )
+        state.history = [*state.history, ModelRequest(parts=parts)]
+
+        if state.cap_state.hard_stop:
+            frontend.on_status(
+                f"Tool-call cap exceeded {TOOL_CAP_HARD_STOP_CONSECUTIVE} consecutive"
+                " model requests — stopping."
+            )
+            salvaged = _last_assistant_text(state.history) or TOOL_CAP_NO_ANSWER_TEXT
+            if not renderer.streamed_text:
+                frontend.on_final_output(salvaged)
+            state.exit_reason = TurnExit.TOOL_CAP
+            return _continue_result(state, turn_usage, salvaged)
+
+
+def _continue_result(state: TurnState, turn_usage: RunUsage, output: Any) -> TurnResult:
+    return TurnResult(
+        outcome="continue",
+        interrupted=False,
+        messages=state.history,
+        output=output,
+        usage=turn_usage,
+        model_requests=state.model_requests,
+    )
+
+
+def _terminal_result(
+    state: TurnState, turn_usage: RunUsage, *, outcome: str, exit_reason: TurnExit
+) -> TurnResult:
+    state.exit_reason = exit_reason
+    return TurnResult(
+        outcome=outcome,  # type: ignore[arg-type]
+        interrupted=False,
+        messages=state.history,
+        output=None,
+        usage=turn_usage,
+        model_requests=state.model_requests,
+    )
+
+
+def _interrupted_result(state: TurnState, turn_usage: RunUsage) -> TurnResult:
+    state.exit_reason = TurnExit.INTERRUPTED
+    return TurnResult(
+        outcome="continue",
+        interrupted=True,
+        messages=state.history,
+        output=None,
+        usage=turn_usage,
+        model_requests=state.model_requests,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Owned subagent driver (OQ-4 option b) — structured final_result output.
+# ---------------------------------------------------------------------------
+
+
+def _build_subagent_toolset(spec: Any) -> Any:
+    """Build the subagent's tool surface (mirror ``build_task_agent``) and route dispatch to it.
+
+    Task agents wire their own minimal tool surface from ``spec.tool_names`` (all
+    ``requires_approval=False``); the forked deps carry no ``deps.toolset``. Setting it to the
+    subagent toolset lets the owned ``dispatch_tools`` / ``build_tool_defs`` operate on it
+    exactly as they do for the orchestrator's toolset.
+    """
+    from pydantic_ai.toolsets import FunctionToolset
+
+    from co_cli.agent.toolset import _CallSeamToolset
+    from co_cli.tools.agent_tool import TOOL_REGISTRY_BY_NAME
+
+    toolset: FunctionToolset[CoDeps] = FunctionToolset()
+    for name in spec.tool_names:
+        fn = TOOL_REGISTRY_BY_NAME.get(name)
+        if fn is None:
+            raise ValueError(f"{spec.name}: unknown tool {name!r}")
+        toolset.add_function(fn, requires_approval=False)
+    return _CallSeamToolset(toolset)
+
+
+def _subagent_instructions(spec: Any, deps: CoDeps) -> str:
+    instructions = spec.instructions(deps)
+    if spec.include_skill_manifest:
+        from co_cli.skills.manifest import render_skill_manifest
+
+        manifest = render_skill_manifest(deps.skill_catalog, deps.skills_dir, deps.user_skills_dir)
+        if manifest:
+            instructions = f"{manifest}\n\n{instructions}"
+    return instructions
+
+
+async def run_standalone_owned(spec: Any, deps: CoDeps, prompt: str) -> Any:
+    """Run a task agent through the owned loop (OQ-4 option b — structured ``final_result``).
+
+    Drives ``model_turn`` with the subagent's tool surface plus the ``final_result`` output
+    tool (``allow_text_output=False``), dispatches the subagent's real tool calls (the work),
+    and on a ``final_result`` call validates its args into the ``spec.output_type`` instance
+    (re-prompting on validation failure, bounded by ``spec.default_budget``). Returns the
+    validated model (``run_standalone`` discards it — daemons consume the tool side effects);
+    the return lets the parity test assert the structured output.
+    """
+    from pydantic import ValidationError as _ValidationError
+    from pydantic_ai.messages import RetryPromptPart
+
+    from co_cli.observability.tracing import pop_span, push_span
+
+    if deps.model is None:
+        raise ValueError(f"{spec.name}: run_standalone_owned requires deps.model to be set.")
+
+    deps.toolset = _build_subagent_toolset(spec)
+    instructions = _subagent_instructions(spec, deps)
+    instr_parts = [InstructionPart(content=instructions, dynamic=False)] if instructions else []
+    output_defs, processor = build_output_toolset(spec.output_type)
+    output_name = output_defs[0].name
+
+    function_defs = await build_tool_defs(deps)
+
+    settings = deps.model.settings_noreason
+    request_limit = spec.default_budget
+    stall_window = deps.config.llm.run_stall_timeout_secs
+    cap_state = ToolCapState()
+    turn_usage = RunUsage()
+
+    push_span(
+        f"invoke_agent {spec.name}",
+        kind="agent",
+        attributes={
+            "co.agent.role": spec.name,
+            "co.agent.model": getattr(deps.model.model, "model_name", str(deps.model.model)),
+            "co.agent.request_limit": request_limit,
+        },
+    )
+    history: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart(content=prompt)])]
+    result_model: Any = None
+    try:
+        requests = 0
+        while requests < request_limit:
+            params = build_request_params(
+                instruction_parts=instr_parts,
+                function_tools=function_defs,
+                output_tools=output_defs,
+                allow_text_output=False,
+            )
+            request_messages = clean_message_history(history)
+            response, step_usage = await _drive_model_request(
+                deps, request_messages, params, settings, None, stall_window
+            )
+            requests += 1
+            turn_usage.incr(step_usage)
+
+            calls = _tool_calls(response)
+            final = [c for c in calls if c.tool_name == output_name]
+            if final:
+                history = [*history, response]
+                try:
+                    result_model = processor.validate(final[0].args)
+                    break
+                except _ValidationError as exc:
+                    history = [
+                        *history,
+                        ModelRequest(
+                            parts=[
+                                RetryPromptPart(
+                                    content=str(exc),
+                                    tool_name=output_name,
+                                    tool_call_id=final[0].tool_call_id,
+                                )
+                            ]
+                        ),
+                    ]
+                    continue
+            if not calls:
+                history = [
+                    *history,
+                    response,
+                    ModelRequest(
+                        parts=[
+                            UserPromptPart(
+                                content="Call the final_result tool with your structured result."
+                            )
+                        ]
+                    ),
+                ]
+                continue
+            history = [*history, response]
+            parts = await dispatch_tools(calls, deps, cap_state=cap_state, frontend=None)
+            history = [*history, ModelRequest(parts=parts)]
+            if cap_state.hard_stop:
+                break
+    except BaseException as exc:
+        pop_span(status="ERROR", status_msg=str(exc))
+        raise
+    if turn_usage.input_tokens or turn_usage.output_tokens:
+        record_usage(deps, turn_usage)
+    pop_span(attributes={"co.agent.final_result": str(result_model)})
+    return result_model

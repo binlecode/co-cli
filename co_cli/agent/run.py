@@ -43,6 +43,12 @@ async def run_standalone(
 
     if deps.model is None:
         raise ValueError(f"{spec.name}: run_standalone requires deps.model to be set.")
+
+    if deps.config.llm.use_owned_loop:
+        from co_cli.agent.loop import run_standalone_owned
+
+        await run_standalone_owned(spec, deps, prompt)
+        return
     request_limit = spec.default_budget
     settings = deps.model.settings_noreason
     agent = build_task_agent(spec, deps, deps.model.model)

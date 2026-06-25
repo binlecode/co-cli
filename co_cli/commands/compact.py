@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from co_cli.commands.types import CommandContext, ReplaceTranscript
 from co_cli.display.core import console
-
-if TYPE_CHECKING:
-    from co_cli.deps import CoDeps
 
 
 async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | None:
@@ -18,10 +13,8 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     provider fails, the model is absent, or the circuit breaker is tripped,
     falls back to a static marker rather than leaving history unchanged.
     """
-    from pydantic_ai import RunContext
     from pydantic_ai.messages import ModelResponse
     from pydantic_ai.messages import TextPart as _TextPart
-    from pydantic_ai.usage import RunUsage
 
     from co_cli.context.compaction import (
         commit_compaction,
@@ -37,16 +30,14 @@ async def _cmd_compact(ctx: CommandContext, args: str) -> ReplaceTranscript | No
     pre_tokens = estimate_message_tokens(ctx.message_history)
     old_len = len(ctx.message_history)
 
-    raw_model = ctx.deps.model.model if ctx.deps.model else None
-    run_ctx: RunContext[CoDeps] = RunContext(deps=ctx.deps, model=raw_model, usage=RunUsage())
     console.print("[dim]Compacting conversation...[/dim]")
     new_history, summary, _ = await compact_messages(
-        run_ctx,
+        ctx.deps,
         ctx.message_history,
         (0, old_len, old_len),
         focus=args.strip() or None,
     )
-    commit_compaction(run_ctx, new_history)
+    commit_compaction(ctx.deps, new_history)
     new_history.append(
         ModelResponse(
             parts=[_TextPart(content="Understood. I have the conversation context.")],

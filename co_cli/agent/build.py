@@ -2,15 +2,40 @@
 
 from __future__ import annotations
 
+import inspect
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from pydantic_ai import Agent, DeferredToolRequests
+from pydantic_ai import Agent, DeferredToolRequests, RunContext
+from pydantic_ai.messages import ModelMessage
 
 from co_cli.deps import CoDeps
 
 if TYPE_CHECKING:
     from co_cli.agent.orchestrate import SessionAgent
     from co_cli.agent.spec import OrchestratorSpec, TaskAgentSpec
+
+
+def _history_processor_shim(
+    proc: Callable[..., Any],
+) -> Callable[[RunContext[CoDeps], list[ModelMessage]], Any]:
+    """Adapt a deps-signature history processor to pydantic-ai's ``(ctx, messages)`` contract.
+
+    Phase-2 S6 converted the processors to take ``deps`` directly (so the owned loop
+    can call ``proc(deps, msgs)`` without a ``RunContext``). The graph path still drives
+    them through the SDK's ``ProcessHistory`` capability, which calls ``(ctx, messages)``
+    — so this shim threads ``ctx.deps`` through. The shim is always async (the SDK detects
+    coroutine-ness via ``is_async_callable``); sync processors run inline, async ones are
+    awaited, preserving each processor's original behavior. Deleted with the graph at Phase 5.
+    """
+
+    async def shim(ctx: RunContext[CoDeps], messages: list[ModelMessage]) -> list[ModelMessage]:
+        result = proc(ctx.deps, messages)
+        if inspect.isawaitable(result):
+            return await result
+        return result
+
+    return shim
 
 
 def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> SessionAgent:
@@ -45,7 +70,7 @@ def build_orchestrator(spec: OrchestratorSpec, deps: CoDeps) -> SessionAgent:
         model_settings=llm_settings,
         tool_retries=deps.config.tool_retries,
         output_type=[str, DeferredToolRequests],
-        history_processors=list(spec.history_processors),
+        history_processors=[_history_processor_shim(p) for p in spec.history_processors],
         toolsets=[deps.toolset],
     )
 

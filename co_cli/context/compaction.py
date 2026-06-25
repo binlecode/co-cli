@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 from enum import StrEnum
 
-from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -90,7 +89,7 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
-def _reset_thrash_state(ctx: RunContext[CoDeps]) -> None:
+def _reset_thrash_state(deps: CoDeps) -> None:
     """Reset proactive-compaction thrash counters after a forced overflow recovery.
 
     Recovery paths reset these unconditionally — overflow already proves the
@@ -100,7 +99,7 @@ def _reset_thrash_state(ctx: RunContext[CoDeps]) -> None:
     proactive path: it must NOT reset on every successful compaction (the
     thrash gate is there to suppress repeated low-yield runs).
     """
-    ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+    deps.runtime.consecutive_low_yield_proactive_compactions = 0
 
 
 class CompactionFallbackReason(StrEnum):
@@ -128,7 +127,7 @@ def _emit_compaction_fallback(reason: CompactionFallbackReason) -> None:
     current_span().add_event("compaction_fallback", {"reason": reason.value})
 
 
-def _summarization_gate_open(ctx: RunContext[CoDeps]) -> tuple[bool, bool]:
+def _summarization_gate_open(deps: CoDeps) -> tuple[bool, bool]:
     """Decide whether the LLM summarizer may run for the next compaction pass.
 
     Read-only; never mutates runtime. Returns ``(gate_open, is_probe)``.
@@ -137,12 +136,12 @@ def _summarization_gate_open(ctx: RunContext[CoDeps]) -> tuple[bool, bool]:
     attempt at the current skip count. The caller owns all writes to
     ``compaction_skip_count``.
     """
-    if not ctx.deps.model:
+    if not deps.model:
         log.info("Compaction: model absent, using static marker")
         _emit_compaction_fallback(CompactionFallbackReason.MODEL_ABSENT)
         return (False, False)
 
-    count = ctx.deps.runtime.compaction_skip_count
+    count = deps.runtime.compaction_skip_count
     # skips_since_trip == 0 blocks the initial trip; probes fire every PROBE_EVERY skips after that
     skips_since_trip = count - BREAKER_TRIP
     if count < BREAKER_TRIP:
@@ -194,7 +193,7 @@ def _partition_dropped(
 
 
 async def summarize_dropped_messages(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     dropped: list[ModelMessage],
     *,
     focus: str | None = None,
@@ -202,16 +201,16 @@ async def summarize_dropped_messages(
 ) -> str:
     """Pure summarizer call over ``dropped`` — no gate, no fallback.
 
-    Callers must call ``_summarization_gate_open(ctx)`` first; this function assumes
+    Callers must call ``_summarization_gate_open(deps)`` first; this function assumes
     a model is configured and the circuit breaker permits the LLM call. Raises on
     summarizer failure (including ``asyncio.CancelledError``). ``prior_summary``,
     when present, is the recovered recap of a previous compaction pass; it is fed
     to the summarizer in a dedicated slot rather than inline in the turns block.
     """
     return await summarize_messages(
-        ctx.deps,
+        deps,
         dropped,
-        personality_active=bool(ctx.deps.config.personality),
+        personality_active=bool(deps.config.personality),
         focus=focus,
         prior_summary=prior_summary,
     )
@@ -223,7 +222,7 @@ def _is_valid_summary(text: str | None) -> bool:
 
 
 async def _gated_summarize_or_none(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     dropped: list[ModelMessage],
     *,
     focus: str | None,
@@ -242,21 +241,21 @@ async def _gated_summarize_or_none(
     caller uses it to report a non-failure status, distinct from a genuine
     ``SUMMARIZER_ERROR`` (which leaves it False).
     """
-    gate_open, is_probe = _summarization_gate_open(ctx)
+    gate_open, is_probe = _summarization_gate_open(deps)
     if not gate_open:
-        ctx.deps.runtime.compaction_skip_count += 1
+        deps.runtime.compaction_skip_count += 1
         return None, False
     if is_probe:
         log.info(
-            "Compaction: circuit breaker probe (count=%d)", ctx.deps.runtime.compaction_skip_count
+            "Compaction: circuit breaker probe (count=%d)", deps.runtime.compaction_skip_count
         )
 
-    if (cb := ctx.deps.runtime.status_callback) is not None:
+    if (cb := deps.runtime.status_callback) is not None:
         cb("Compacting conversation...")
 
     try:
         summary_text = await summarize_dropped_messages(
-            ctx, dropped, focus=focus, prior_summary=prior_summary
+            deps, dropped, focus=focus, prior_summary=prior_summary
         )
     except SummarizerInputTooLargeError:
         log.warning(
@@ -270,21 +269,21 @@ async def _gated_summarize_or_none(
             "Compaction summarization failed — falling back to static marker", exc_info=True
         )
         _emit_compaction_fallback(CompactionFallbackReason.SUMMARIZER_ERROR)
-        ctx.deps.runtime.compaction_skip_count += 1
+        deps.runtime.compaction_skip_count += 1
         return None, False
     if not _is_valid_summary(summary_text):
         log.warning(
             "Compaction summarizer returned empty output — counting as failure (count=%d)",
-            ctx.deps.runtime.compaction_skip_count + 1,
+            deps.runtime.compaction_skip_count + 1,
         )
         _emit_compaction_fallback(CompactionFallbackReason.EMPTY_SUMMARY)
-        ctx.deps.runtime.compaction_skip_count += 1
+        deps.runtime.compaction_skip_count += 1
         return None, False
-    ctx.deps.runtime.compaction_skip_count = 0
+    deps.runtime.compaction_skip_count = 0
     return summary_text, False
 
 
-def _snapshot_and_kick_review(ctx: RunContext[CoDeps], messages: list[ModelMessage]) -> None:
+def _snapshot_and_kick_review(deps: CoDeps, messages: list[ModelMessage]) -> None:
     """Snapshot the pre-compaction message list and fire a memory review KICK.
 
     Defect-B fix: compaction rewrites the live transcript in place, lossily, so a
@@ -300,7 +299,6 @@ def _snapshot_and_kick_review(ctx: RunContext[CoDeps], messages: list[ModelMessa
     (a fresh processor pass) still snapshots. Best-effort — any failure is logged
     and never aborts the compaction it rides on.
     """
-    deps = ctx.deps
     if deps.runtime.skip_compaction_snapshot:
         return
     if not messages or not deps.config.memory.review_enabled or deps.model is None:
@@ -321,7 +319,7 @@ def _snapshot_and_kick_review(ctx: RunContext[CoDeps], messages: list[ModelMessa
 
 
 async def compact_messages(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     messages: list[ModelMessage],
     bounds: CompactionBoundaries,
     *,
@@ -350,7 +348,7 @@ async def compact_messages(
     for a memory review KICK (Defect-B; see ``_snapshot_and_kick_review``) — a
     fire-and-forget filesystem write, not a runtime mutation.
     """
-    _snapshot_and_kick_review(ctx, messages)
+    _snapshot_and_kick_review(deps, messages)
     head_end, tail_start, _ = bounds
     head = messages[:head_end]
     dropped = messages[head_end:tail_start]
@@ -358,13 +356,13 @@ async def compact_messages(
     body, prior_summary = _partition_dropped(dropped)
     if summarize:
         summary_text, input_too_large = await _gated_summarize_or_none(
-            ctx, body, focus=focus, prior_summary=prior_summary
+            deps, body, focus=focus, prior_summary=prior_summary
         )
     else:
         summary_text, input_too_large = None, False
     has_tail = len(tail) > 0
     marker = build_compaction_marker(len(dropped), summary_text, has_tail=has_tail)
-    todo_snapshot = build_todo_snapshot(ctx.deps.session.session_todos)
+    todo_snapshot = build_todo_snapshot(deps.session.session_todos)
     result = [
         *head,
         marker,
@@ -375,7 +373,7 @@ async def compact_messages(
 
 
 def commit_compaction(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     result: list[ModelMessage],
 ) -> None:
     """Mark that compaction ran this turn and record the post-compaction size.
@@ -390,12 +388,12 @@ def commit_compaction(
 
     Callers must invoke this as the last step before returning.
     """
-    ctx.deps.runtime.current_request_tokens_estimate = effective_request_tokens(ctx.deps, result)
-    ctx.deps.runtime.compaction_applied_this_turn = True
+    deps.runtime.current_request_tokens_estimate = effective_request_tokens(deps, result)
+    deps.runtime.compaction_applied_this_turn = True
 
 
 def _record_proactive_outcome(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     messages: list[ModelMessage],
     result: list[ModelMessage],
     summary_text: str | None,
@@ -424,19 +422,19 @@ def _record_proactive_outcome(
     unavailability; a genuine summarizer failure (model present, summary came
     back None, not a deliberate degrade) keeps the "Summarizer failed" wording.
     """
-    cfg = ctx.deps.config.compaction
+    cfg = deps.config.compaction
 
-    if (cb := ctx.deps.runtime.status_callback) is not None:
+    if (cb := deps.runtime.status_callback) is not None:
         if summary_text is not None:
             cb("Compacted.")
         elif summary_skipped or input_too_large:
             cb("Compacted (static marker).")
-        elif ctx.deps.model is None:
+        elif deps.model is None:
             cb("LLM compaction unavailable — used static marker.")
         else:
             cb("Summarizer failed — used static marker.")
 
-    tokens_after = effective_request_tokens(ctx.deps, result)
+    tokens_after = effective_request_tokens(deps, result)
     savings = (token_count - tokens_after) / token_count if token_count > 0 else 0.0
     log.debug(
         "Compaction result: tokens %d→%d (saved %.0f%%) msgs %d→%d",
@@ -454,16 +452,16 @@ def _record_proactive_outcome(
     span.set_attribute("compaction.fired", True)
 
     if savings < cfg.min_proactive_savings:
-        ctx.deps.runtime.consecutive_low_yield_proactive_compactions += 1
+        deps.runtime.consecutive_low_yield_proactive_compactions += 1
     else:
-        ctx.deps.runtime.consecutive_low_yield_proactive_compactions = 0
+        deps.runtime.consecutive_low_yield_proactive_compactions = 0
 
-    commit_compaction(ctx, result)
+    commit_compaction(deps, result)
     return tokens_after
 
 
 async def recover_overflow_history(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     messages: list[ModelMessage],
 ) -> list[ModelMessage] | None:
     """Single-tier overflow recovery: strip-then-summarize.
@@ -488,19 +486,19 @@ async def recover_overflow_history(
     stripped = strip_all_tool_returns(messages)
     stripped_tokens = estimate_message_tokens(stripped)
 
-    budget = resolve_compaction_budget(ctx.deps)
+    budget = resolve_compaction_budget(deps)
     if stripped_tokens <= budget:
         # PATH 1: strip-only-fits — no LLM, no marker, just commit and return.
-        commit_compaction(ctx, stripped)
-        _reset_thrash_state(ctx)
+        commit_compaction(deps, stripped)
+        _reset_thrash_state(deps)
         return stripped
 
-    cfg = ctx.deps.config.compaction
+    cfg = deps.config.compaction
     bounds = plan_compaction_boundaries(
         stripped,
         budget,
         cfg.tail_fraction,
-        static_floor_tokens=ctx.deps.static_floor_tokens,
+        static_floor_tokens=deps.static_floor_tokens,
         compaction_ratio=cfg.compaction_ratio,
     )
     if bounds is None:
@@ -514,17 +512,17 @@ async def recover_overflow_history(
         return None
 
     # PATH 2: summarize, assemble, commit.
-    result, _, _ = await compact_messages(ctx, stripped, bounds, focus=None)
-    commit_compaction(ctx, result)
-    _reset_thrash_state(ctx)
+    result, _, _ = await compact_messages(deps, stripped, bounds, focus=None)
+    commit_compaction(deps, result)
+    _reset_thrash_state(deps)
     return result
 
 
 def _resolve_proactive_focus(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     messages: list[ModelMessage],
 ) -> str | None:
-    for todo in ctx.deps.session.session_todos:
+    for todo in deps.session.session_todos:
         if todo["status"] == "in_progress":
             return todo["content"][:200]
     for msg in reversed(messages):
@@ -547,7 +545,7 @@ def _resolve_proactive_focus(
 
 @trace("compaction.proactive_check")
 async def proactive_window_processor(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
     """Mid-turn compaction trigger — the only auto-compaction layer.
@@ -568,16 +566,16 @@ async def proactive_window_processor(
     docs/specs/compaction.md for the design choice.
     """
     try:
-        budget = resolve_compaction_budget(ctx.deps)
+        budget = resolve_compaction_budget(deps)
         if budget <= 0:
             return messages
-        cfg = ctx.deps.config.compaction
+        cfg = deps.config.compaction
 
         # Trigger is the realtime-local count (floor-inclusive: static prefill + message list),
         # no provider-reported floor — peer-aligned with hermes/openclaw. A successful L2 spill
         # deterministically lowers this same value, so L3 re-reads the lowered payload and
         # fast-paths when the spill already fit. Savings reuses the same effective-before.
-        token_count = effective_request_tokens(ctx.deps, messages)
+        token_count = effective_request_tokens(deps, messages)
         token_threshold = int(budget * cfg.compaction_ratio)
 
         tool_calls_in_history = sum(
@@ -604,7 +602,7 @@ async def proactive_window_processor(
         span.set_attribute("compaction.budget", budget)
         span.set_attribute("compaction.tool_calls_in_history", tool_calls_in_history)
         span.set_attribute(
-            "compaction.applied_this_turn", ctx.deps.runtime.compaction_applied_this_turn
+            "compaction.applied_this_turn", deps.runtime.compaction_applied_this_turn
         )
 
         from co_cli.config.tuning import MAX_TOOL_CALLS_PER_MODEL_REQUEST
@@ -612,7 +610,7 @@ async def proactive_window_processor(
         span.set_attribute("compaction.tool_call_limit", MAX_TOOL_CALLS_PER_MODEL_REQUEST)
         span.set_attribute(
             "compaction.request_tokens_estimate",
-            ctx.deps.runtime.current_request_tokens_estimate or -1,
+            deps.runtime.current_request_tokens_estimate or -1,
         )
 
         if token_count <= token_threshold:
@@ -636,10 +634,7 @@ async def proactive_window_processor(
         # span writes stay uniform; only the summarize flag (and the resulting
         # marker content) differs.
         summarize = True
-        if (
-            ctx.deps.runtime.consecutive_low_yield_proactive_compactions
-            >= cfg.proactive_thrash_window
-        ):
+        if deps.runtime.consecutive_low_yield_proactive_compactions >= cfg.proactive_thrash_window:
             log.info("Compaction: anti-thrashing gate active, using static marker")
             span.set_attribute("compaction.skip_reason", "anti_thrash_gate")
             summarize = False
@@ -648,7 +643,7 @@ async def proactive_window_processor(
             messages,
             budget,
             cfg.tail_fraction,
-            static_floor_tokens=ctx.deps.static_floor_tokens,
+            static_floor_tokens=deps.static_floor_tokens,
             compaction_ratio=cfg.compaction_ratio,
         )
         if bounds is None:
@@ -675,15 +670,15 @@ async def proactive_window_processor(
             len(messages) - tail_start,
         )
 
-        focus = _resolve_proactive_focus(ctx, messages)
+        focus = _resolve_proactive_focus(deps, messages)
         result, summary_text, input_too_large = await compact_messages(
-            ctx, messages, bounds, focus=focus, summarize=summarize
+            deps, messages, bounds, focus=focus, summarize=summarize
         )
         if summary_text is not None:
             log.info("Sliding window: summarised %d messages inline", dropped_count)
 
         tokens_after = _record_proactive_outcome(
-            ctx,
+            deps,
             messages,
             result,
             summary_text,
@@ -706,11 +701,11 @@ async def proactive_window_processor(
             span.set_attribute("compaction.no_progress_escalation", True)
             # Suppress the snapshot for the escalation's re-entry into compact_messages:
             # it is the SAME logical compaction the proactive pass already snapshotted.
-            ctx.deps.runtime.skip_compaction_snapshot = True
+            deps.runtime.skip_compaction_snapshot = True
             try:
-                recovered = await recover_overflow_history(ctx, messages)
+                recovered = await recover_overflow_history(deps, messages)
             finally:
-                ctx.deps.runtime.skip_compaction_snapshot = False
+                deps.runtime.skip_compaction_snapshot = False
             return recovered if recovered is not None else messages
         return result
     except Exception:

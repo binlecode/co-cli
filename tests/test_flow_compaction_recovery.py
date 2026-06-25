@@ -88,7 +88,7 @@ async def test_recover_strip_only_fits():
     ]
 
     ctx = _make_ctx(model_max_context_tokens=2000)
-    recovered = await recover_overflow_history(ctx, messages)
+    recovered = await recover_overflow_history(ctx.deps, messages)
 
     assert recovered is not None
     assert len(recovered) == len(messages), "strip preserves message count"
@@ -126,7 +126,7 @@ async def test_recover_strip_plus_summary_fits():
     msgs.append(ModelRequest(parts=[UserPromptPart(content="pending request")]))
 
     ctx = _make_ctx(model_max_context_tokens=50)
-    recovered = await recover_overflow_history(ctx, msgs)
+    recovered = await recover_overflow_history(ctx.deps, msgs)
 
     assert recovered is not None
     assert len(recovered) < len(msgs), "summarize path drops middle groups"
@@ -152,7 +152,7 @@ async def test_recover_terminal_when_planner_returns_none():
     # Tiny budget so even after strip the markers exceed; with one turn group,
     # plan_compaction_boundaries returns None (len(groups) < 2).
     ctx = _make_ctx(model_max_context_tokens=1)
-    recovered = await recover_overflow_history(ctx, messages)
+    recovered = await recover_overflow_history(ctx.deps, messages)
 
     assert recovered is None
 
@@ -181,7 +181,7 @@ async def test_recover_preserves_tool_call_id_pairing(model_max_context_tokens: 
     msgs.append(ModelRequest(parts=[UserPromptPart(content="pending")]))
 
     ctx = _make_ctx(model_max_context_tokens=model_max_context_tokens)
-    recovered = await recover_overflow_history(ctx, msgs)
+    recovered = await recover_overflow_history(ctx.deps, msgs)
     assert recovered is not None
 
     call_ids, return_ids = _all_tool_call_ids(recovered)

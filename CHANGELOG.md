@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.492]
+
+Loop-decoupling Phase 2 — owned turn loop behind a flag, parallel to the graph (refactor).
+
+- **Owned turn loop (default-off)** — new `config.llm.use_owned_loop` flag selects a graph-free, linear turn driver for both the orchestrator turn (`run_turn_owned`) and the subagent driver (`run_standalone_owned`), parallel to the still-default pydantic-ai graph path. New modules under `co_cli/agent/`: `turn_state.py` (`TurnState`/`TurnExit`/`ToolCapState`), `preflight.py` (processor chain + `clean_message_history` port + instruction assembly + tool/output-def builders), `dispatch.py` (folded `_CallSeamToolset` — pre-fan-out cap shed + MCP spill + span + deny-placeholder approval), and `loop.py` (the shared step loop driving the Phase-1 `model_turn`).
+- **History-processor + compaction chain → `deps` (S6)** — the five history processors and the full compaction call-chain now take `deps: CoDeps` instead of `RunContext`; the graph path keeps working via `(ctx, msgs) → proc(ctx.deps, msgs)` adapter shims (`build.py`) and a direct `recover_overflow_history(deps, …)` call at the overflow-recovery site. The two stateful instruction builders (`wrap_up_prompt`, `safety_prompt`) take explicit `request_count`/`messages` params so the blanket-deps shim cannot drop the wrap-up nudge or safety warnings on the graph path.
+- **Owned subagent structured output (OQ-4 option b)** — builds the `final_result` output-tool def via `OutputToolset.build` with `allow_text_output=False` and `output_mode='tool'`, validates into `spec.output_type`, re-prompts on failure. The `pydantic_ai._output` reach is the single documented private-module dependency (inline-flagged + logged, Phase-5 cleanup).
+- **Parity-gated, behind the flag** — graph path is byte-for-byte unchanged and default; the read-only/chat evals and real-Ollama owned turn/subagent tests gate owned == graph on the no-approval/no-recovery slice. Approval and recovery flows are Phases 3/4.
+
 ## [0.8.490]
 
 Loop-decoupling Phase 1 — graph-free `model_turn` provider client (refactor).

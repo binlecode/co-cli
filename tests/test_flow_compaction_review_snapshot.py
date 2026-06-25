@@ -78,7 +78,7 @@ async def test_compaction_snapshots_full_history_and_fires_one_memory_kick(monke
     ctx = _make_ctx(tmp_path)
     messages = _multi_turn_history()
 
-    await compact_messages(ctx, messages, (1, 3, 2), summarize=False)
+    await compact_messages(ctx.deps, messages, (1, 3, 2), summarize=False)
 
     snapshot_files = list(snapshots.glob("*.jsonl"))
     assert len(snapshot_files) == 1, "exactly one snapshot file"
@@ -99,7 +99,7 @@ async def test_escalation_reentry_is_suppressed(monkeypatch, tmp_path):
     ctx = _make_ctx(tmp_path)
     ctx.deps.runtime.skip_compaction_snapshot = True
 
-    await compact_messages(ctx, _multi_turn_history(), (1, 3, 2), summarize=False)
+    await compact_messages(ctx.deps, _multi_turn_history(), (1, 3, 2), summarize=False)
 
     assert list(snapshots.glob("*.jsonl")) == [], "skip flag must suppress the snapshot"
     assert _kicks(queue) == [], "skip flag must suppress the KICK"
@@ -118,7 +118,7 @@ async def test_second_in_turn_compaction_still_snapshots(monkeypatch, tmp_path):
     ctx.deps.runtime.compaction_applied_this_turn = True
     ctx.deps.runtime.skip_compaction_snapshot = False
 
-    await compact_messages(ctx, _multi_turn_history(), (1, 3, 2), summarize=False)
+    await compact_messages(ctx.deps, _multi_turn_history(), (1, 3, 2), summarize=False)
 
     assert len(list(snapshots.glob("*.jsonl"))) == 1, "separate compaction must still snapshot"
     assert len(_kicks(queue)) == 1, "separate compaction must still fire one memory KICK"
@@ -142,7 +142,7 @@ async def test_strip_only_path_produces_no_snapshot(monkeypatch, tmp_path):
         ModelRequest(parts=[UserPromptPart(content="pending")]),
     ]
 
-    result = await recover_overflow_history(ctx, messages)
+    result = await recover_overflow_history(ctx.deps, messages)
 
     assert result is not None, "strip-only-fits should recover"
     assert list(snapshots.glob("*.jsonl")) == [], (

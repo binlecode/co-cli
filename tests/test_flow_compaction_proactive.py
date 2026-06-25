@@ -131,7 +131,7 @@ async def test_processor_returns_messages_unchanged_when_below_threshold() -> No
     )
     ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
 
-    result = await proactive_window_processor(ctx, short_history)
+    result = await proactive_window_processor(ctx.deps, short_history)
 
     assert result is short_history, "Messages must be the same object when below threshold"
     assert deps.runtime.compaction_applied_this_turn is False
@@ -158,7 +158,7 @@ async def test_processor_applies_compaction_when_above_threshold() -> None:
 
     await ensure_ollama_warm(TEST_LLM.model)
     async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
-        result = await proactive_window_processor(ctx, messages)
+        result = await proactive_window_processor(ctx.deps, messages)
 
     assert result is not messages, "Compacted result must be a new list"
     assert len(result) < len(messages), "Compacted result must be shorter than input"
@@ -203,7 +203,7 @@ async def test_anti_thrash_gate_falls_back_to_static_marker() -> None:
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
     messages = _above_threshold_messages()
 
-    result = await proactive_window_processor(ctx, messages)
+    result = await proactive_window_processor(ctx.deps, messages)
 
     # The bug this fix kills: the gate used to no-op, leaving the history
     # untrimmed so it grew toward the hard limit. A shorter history proves the
@@ -256,7 +256,7 @@ async def test_floor_aware_trigger_fires_on_static_floor() -> None:
 
     await ensure_ollama_warm(TEST_LLM.model)
     async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
-        result = await proactive_window_processor(ctx, messages)
+        result = await proactive_window_processor(ctx.deps, messages)
 
     assert result is not messages, "Floor-inclusive size crossed the threshold — must compact"
     assert deps.runtime.compaction_applied_this_turn is True
@@ -285,7 +285,7 @@ async def test_small_realtime_no_compaction_despite_high_provider_usage() -> Non
         ModelResponse(parts=[TextPart(content="hi")], usage=RequestUsage(input_tokens=20_000)),
     ]
 
-    result = await proactive_window_processor(ctx, messages)
+    result = await proactive_window_processor(ctx.deps, messages)
 
     assert result is messages, (
         "Small realtime payload must not compact despite high provider usage"
@@ -312,7 +312,7 @@ def test_savings_uses_floor_inclusive_basis() -> None:
     # result estimate = 1800 chars // 4 = 450 tokens; tokens_after = 500 + 450 = 950.
     result = [_resp("x" * 1800)]
 
-    _record_proactive_outcome(ctx, [_req("q")], result, "a summary", token_count=1000)
+    _record_proactive_outcome(ctx.deps, [_req("q")], result, "a summary", token_count=1000)
 
     assert deps.runtime.consecutive_low_yield_proactive_compactions == 1, (
         "Floor-inclusive savings (5%) is below the 10% min — counter must increment"
@@ -338,7 +338,9 @@ def test_status_estimate_written_back_after_proactive() -> None:
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
     result = [_resp("x" * 1800)]
 
-    returned = _record_proactive_outcome(ctx, [_req("q")], result, "a summary", token_count=1000)
+    returned = _record_proactive_outcome(
+        ctx.deps, [_req("q")], result, "a summary", token_count=1000
+    )
 
     expected = effective_request_tokens(deps, result)
     assert deps.runtime.current_request_tokens_estimate == expected, (
@@ -391,7 +393,7 @@ async def test_no_progress_escalates_to_recovery_once(monkeypatch) -> None:
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
     messages = _no_progress_messages()
 
-    result = await proactive_window_processor(ctx, messages)
+    result = await proactive_window_processor(ctx.deps, messages)
 
     assert len(calls) == 1, "no-progress pass must escalate to recovery exactly once"
     assert result is sentinel, "processor must return the recovery output"
@@ -419,7 +421,7 @@ async def test_no_progress_recovery_none_is_fail_open(monkeypatch) -> None:
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
     messages = _no_progress_messages()
 
-    result = await proactive_window_processor(ctx, messages)
+    result = await proactive_window_processor(ctx.deps, messages)
 
     assert result is messages, "fail-open: a None recovery must return the original messages"
 
@@ -447,7 +449,7 @@ def test_gate_open_before_trip(count: int) -> None:
     failures, blocking the LLM prematurely.
     """
     ctx, _ = _gate_ctx(count)
-    gate_open, _ = _summarization_gate_open(ctx)
+    gate_open, _ = _summarization_gate_open(ctx.deps)
     assert gate_open is True
 
 
@@ -465,7 +467,7 @@ def test_gate_closed_after_trip(count: int) -> None:
     making every subsequent call a live LLM probe (circuit breaker never engages).
     """
     ctx, _ = _gate_ctx(count)
-    gate_open, _ = _summarization_gate_open(ctx)
+    gate_open, _ = _summarization_gate_open(ctx.deps)
     assert gate_open is False
 
 
@@ -476,7 +478,7 @@ def test_gate_open_at_first_probe() -> None:
     silently skipped), leaving the LLM permanently bypassed after any 3 failures.
     """
     ctx, _ = _gate_ctx(BREAKER_TRIP + BREAKER_PROBE_EVERY)
-    gate_open, _ = _summarization_gate_open(ctx)
+    gate_open, _ = _summarization_gate_open(ctx.deps)
     assert gate_open is True
 
 
@@ -494,7 +496,7 @@ def test_gate_closed_between_probes(count: int) -> None:
     making every call post-probe a live LLM attempt (probe cadence lost).
     """
     ctx, _ = _gate_ctx(count)
-    gate_open, _ = _summarization_gate_open(ctx)
+    gate_open, _ = _summarization_gate_open(ctx.deps)
     assert gate_open is False
 
 
@@ -505,7 +507,7 @@ def test_gate_open_at_second_probe() -> None:
     cycle, leaving the LLM permanently blocked after the first probe fails.
     """
     ctx, _ = _gate_ctx(BREAKER_TRIP + 2 * BREAKER_PROBE_EVERY)
-    gate_open, _ = _summarization_gate_open(ctx)
+    gate_open, _ = _summarization_gate_open(ctx.deps)
     assert gate_open is True
 
 
@@ -534,7 +536,7 @@ async def test_successful_compaction_resets_skip_count() -> None:
 
     await ensure_ollama_warm(TEST_LLM.model)
     async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
-        result = await proactive_window_processor(ctx, messages)
+        result = await proactive_window_processor(ctx.deps, messages)
 
     assert result is not messages
     assert deps.runtime.compaction_skip_count == 0, (
@@ -580,7 +582,7 @@ async def test_l3_fastpaths_after_l2_spill_fits_payload(tmp_path: Path) -> None:
     )
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
 
-    after_spill = spill_largest_tool_results(ctx, messages)
+    after_spill = spill_largest_tool_results(ctx.deps, messages)
     spilled = [
         part.content
         for msg in after_spill
@@ -592,7 +594,7 @@ async def test_l3_fastpaths_after_l2_spill_fits_payload(tmp_path: Path) -> None:
         "L2 must spill the oversized return to disk"
     )
 
-    result = await proactive_window_processor(ctx, after_spill)
+    result = await proactive_window_processor(ctx.deps, after_spill)
 
     assert result is after_spill, (
         "L3 must fast-path (below_threshold) after the spill fit the payload — no summarize"
@@ -626,7 +628,7 @@ async def test_closing_callback_fires_compacted_on_success() -> None:
 
     await ensure_ollama_warm(TEST_LLM.model)
     async with asyncio.timeout(LLM_COMPACTION_SUMMARY_TIMEOUT_SECS):
-        result = await proactive_window_processor(ctx, messages)
+        result = await proactive_window_processor(ctx.deps, messages)
 
     assert result is not messages
     assert "Compacted." in captured
@@ -651,7 +653,7 @@ async def test_closing_callback_fires_unavailable_when_no_model() -> None:
     ctx = RunContext(deps=deps, model=None, usage=RunUsage())
     messages = _above_threshold_messages()
 
-    result = await proactive_window_processor(ctx, messages)
+    result = await proactive_window_processor(ctx.deps, messages)
 
     assert result is not messages
     assert "LLM compaction unavailable — used static marker." in captured
@@ -677,7 +679,7 @@ async def test_closing_callback_fires_failed_when_breaker_tripped() -> None:
     ctx = RunContext(deps=deps, model=_TIGHT_MODEL.model, usage=RunUsage())
     messages = _above_threshold_messages()
 
-    result = await proactive_window_processor(ctx, messages)
+    result = await proactive_window_processor(ctx.deps, messages)
 
     assert result is not messages
     assert "Summarizer failed — used static marker." in captured
@@ -702,7 +704,7 @@ def test_focus_from_in_progress_todo() -> None:
     )
     ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
 
-    result = _resolve_proactive_focus(ctx, [])
+    result = _resolve_proactive_focus(ctx.deps, [])
 
     assert result == long_content[:200]
 
@@ -726,7 +728,7 @@ def test_focus_from_last_user_message() -> None:
     )
     ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
 
-    result = _resolve_proactive_focus(ctx, messages)
+    result = _resolve_proactive_focus(ctx.deps, messages)
 
     assert result == long_content[-200:]
 
@@ -745,7 +747,7 @@ def test_focus_none_when_no_todo_and_no_messages() -> None:
     )
     ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
 
-    result = _resolve_proactive_focus(ctx, [])
+    result = _resolve_proactive_focus(ctx.deps, [])
 
     assert result is None
 
@@ -770,7 +772,7 @@ def test_focus_skips_compaction_marker() -> None:
     )
     ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
 
-    result = _resolve_proactive_focus(ctx, messages)
+    result = _resolve_proactive_focus(ctx.deps, messages)
 
     assert result == real[-200:]
 
@@ -797,7 +799,7 @@ def test_focus_skips_todo_snapshot() -> None:
     )
     ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
 
-    result = _resolve_proactive_focus(ctx, messages)
+    result = _resolve_proactive_focus(ctx.deps, messages)
 
     assert result == real[-200:]
 
@@ -857,7 +859,9 @@ async def test_prior_summary_partitioned_into_dedicated_slot() -> None:
         ),
     )
     ctx = RunContext(deps=deps, model=_LLM_MODEL.model, usage=RunUsage())
-    result, summary_text, _ = await compact_messages(ctx, messages, (1, 5, 4), summarize=False)
+    result, summary_text, _ = await compact_messages(
+        ctx.deps, messages, (1, 5, 4), summarize=False
+    )
 
     assert summary_text is None
     assert result[0] is head

@@ -28,7 +28,6 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
-from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     BinaryContent,
     ModelMessage,
@@ -163,7 +162,7 @@ def _build_durable_call_ids(messages: list[ModelMessage], boundary: int) -> set[
 
 
 def dedup_tool_results(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
     """Collapse repeat returns of the same ``(tool_name, content)`` pair to back-references.
@@ -271,7 +270,7 @@ def _build_cleared_part(
 
 
 def evict_old_tool_results(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
     """Content-clear tool results older than the 5 most recent per tool name.
@@ -287,9 +286,10 @@ def evict_old_tool_results(
 
     Registered after ``dedup_tool_results`` so the kept window has already
     been collapsed for identical repeats before recency-based clearing
-    runs. Cheap in-memory work, no LLM call. ``ctx`` is required by
-    pydantic-ai's history processor signature but no config fields are
-    accessed.
+    runs. Cheap in-memory work, no LLM call. Takes ``deps`` directly (the owned
+    loop calls it as ``proc(deps, msgs)``); the graph path adapts it to
+    pydantic-ai's ``(ctx, msgs)`` history-processor signature via a shim in
+    ``build.py``. No config fields are accessed.
     """
     boundary = _find_last_turn_start(messages)
     if not boundary:
@@ -368,7 +368,7 @@ def _spill_largest_first(
 
 
 def spill_largest_tool_results(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
     """Force-spill the largest unspilled ``ToolReturnPart``s until the request fits.
@@ -405,7 +405,6 @@ def spill_largest_tool_results(
                                     ``proactive_window_processor`` handle it.
       - empty string             -- spill fired and brought total under threshold.
     """
-    deps = ctx.deps
     threshold = deps.spill_threshold_tokens
 
     local_total = estimate_message_tokens(messages)
@@ -552,7 +551,7 @@ def _elide_multimodal_content(content: list[Any]) -> tuple[list[Any], bool]:
 
 
 def elide_old_multimodal_prompts(
-    ctx: RunContext[CoDeps],
+    deps: CoDeps,
     messages: list[ModelMessage],
 ) -> list[ModelMessage]:
     """Strip inline pixels from non-tail UserPromptParts so base64 does not accumulate.

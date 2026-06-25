@@ -10,7 +10,6 @@ tokens fall to ``deps.spill_threshold_tokens`` or candidates exhaust.
 from pathlib import Path
 
 import pytest
-from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -20,7 +19,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.usage import RequestUsage, RunUsage
+from pydantic_ai.usage import RequestUsage
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.config.tuning import PERSISTED_OUTPUT_TAG
@@ -47,10 +46,6 @@ def _make_deps(
         model_max_context_tokens=model_max_context_tokens,
         spill_threshold_tokens=threshold_tokens,
     )
-
-
-def _ctx(deps: CoDeps) -> RunContext:
-    return RunContext(deps=deps, model=None, usage=RunUsage())
 
 
 def _user_request(text: str) -> ModelRequest:
@@ -80,7 +75,7 @@ def _run_capturing_event(
     """
     span = tracing.push_span("test.spill")
     try:
-        out = spill_largest_tool_results(_ctx(deps), messages)
+        out = spill_largest_tool_results(deps, messages)
     finally:
         tracing.pop_span()
     events = [e for e in span["events"] if e["name"] == "tool_budget.spill_largest_tool_results"]
@@ -109,7 +104,7 @@ async def test_below_threshold_fast_path(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=50_000)
 
-    out = spill_largest_tool_results(_ctx(deps), messages)
+    out = spill_largest_tool_results(deps, messages)
 
     assert out is messages
     returns = _collect_returns(out)
@@ -136,7 +131,7 @@ async def test_force_spill_largest_first(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=5_000)
 
-    out = spill_largest_tool_results(_ctx(deps), messages)
+    out = spill_largest_tool_results(deps, messages)
 
     returns = _collect_returns(out)
     assert returns["tc_small"] == content_small, "smallest must remain unspilled"
@@ -166,7 +161,7 @@ async def test_cross_batch_accumulation(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=6_000)
 
-    out = spill_largest_tool_results(_ctx(deps), messages)
+    out = spill_largest_tool_results(deps, messages)
 
     returns = _collect_returns(out)
     spilled = sum(1 for c in returns.values() if PERSISTED_OUTPUT_TAG in c)
@@ -191,7 +186,7 @@ async def test_all_spilled_bail_out(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=100)
 
-    out = spill_largest_tool_results(_ctx(deps), messages)
+    out = spill_largest_tool_results(deps, messages)
 
     assert out is messages, "messages must be returned unchanged"
     returns = _collect_returns(out)
@@ -210,7 +205,7 @@ async def test_no_candidates_text_only_history(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=100)
 
-    out = spill_largest_tool_results(_ctx(deps), messages)
+    out = spill_largest_tool_results(deps, messages)
 
     assert out is messages, "no rewrite when there are no tool returns to spill"
 
@@ -238,7 +233,7 @@ async def test_already_spilled_excluded_but_counted(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=4_000)
 
-    out = spill_largest_tool_results(_ctx(deps), messages)
+    out = spill_largest_tool_results(deps, messages)
 
     returns = _collect_returns(out)
     assert returns["tc_stub"] == stub, "already-spilled stub must not be re-spilled"
@@ -264,7 +259,7 @@ def test_small_realtime_no_spill_despite_high_provider_usage(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
 
-    result = spill_largest_tool_results(_ctx(deps), messages)
+    result = spill_largest_tool_results(deps, messages)
 
     assert result is messages
     returns = _collect_returns(result)
@@ -295,7 +290,7 @@ async def test_fresh_tail_return_survives_while_aged_return_spills(tmp_path: Pat
     ]
     deps = _make_deps(tmp_path, threshold_tokens=5_000)
 
-    out = spill_largest_tool_results(_ctx(deps), messages)
+    out = spill_largest_tool_results(deps, messages)
 
     returns = _collect_returns(out)
     assert not returns["tc_fresh"].startswith(PERSISTED_OUTPUT_TAG), (
@@ -332,7 +327,7 @@ async def test_protected_tail_alone_over_threshold_defers_without_stubbing(tmp_p
     ]
     deps = _make_deps(tmp_path, threshold_tokens=4_000)
 
-    out = spill_largest_tool_results(_ctx(deps), messages)
+    out = spill_largest_tool_results(deps, messages)
 
     returns = _collect_returns(out)
     assert not returns["tc_fresh"].startswith(PERSISTED_OUTPUT_TAG), (
@@ -357,7 +352,7 @@ async def test_single_turn_group_has_no_tail_protection(tmp_path: Path):
     ]
     deps = _make_deps(tmp_path, threshold_tokens=4_000)
 
-    out = spill_largest_tool_results(_ctx(deps), messages)
+    out = spill_largest_tool_results(deps, messages)
 
     returns = _collect_returns(out)
     assert PERSISTED_OUTPUT_TAG in returns["tc_fresh"], (
@@ -384,7 +379,7 @@ def test_large_realtime_spills_and_post_spill_estimate_is_realtime(tmp_path: Pat
     ]
     deps = _make_deps(tmp_path, threshold_tokens=8_000)
 
-    result = spill_largest_tool_results(_ctx(deps), messages)
+    result = spill_largest_tool_results(deps, messages)
 
     returns = _collect_returns(result)
     assert returns["tc1"].startswith(PERSISTED_OUTPUT_TAG)

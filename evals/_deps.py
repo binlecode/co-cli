@@ -25,9 +25,10 @@ set).
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import os
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import AsyncExitStack, asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from evals._settings import apply_eval_judge, apply_eval_workspace
 from pydantic_ai import Agent
@@ -37,6 +38,61 @@ from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.bootstrap.core import create_deps
 from co_cli.deps import ApprovalSubject, CoDeps
 from co_cli.display.core import QuestionPrompt, TerminalFrontend
+
+if TYPE_CHECKING:
+    from co_cli.agent.orchestrate import TurnResult
+    from co_cli.display.core import Frontend
+
+
+_EVAL_OWNED_LOOP_ENV = "CO_EVAL_OWNED_LOOP"
+
+
+def apply_eval_owned_loop(deps: CoDeps) -> None:
+    """Flip ``config.llm.use_owned_loop`` on when ``CO_EVAL_OWNED_LOOP`` is set.
+
+    The eval-layer toggle for the loop-decoupling parity gate: run the read-only/chat
+    evals on the owned loop (against the same evals on the graph path as the oracle)
+    without editing config. A legitimate production toggle the eval layer flips — not
+    eval-driven production API.
+    """
+    if os.getenv(_EVAL_OWNED_LOOP_ENV):
+        deps.config.llm.use_owned_loop = True
+
+
+def drive_turn(
+    *,
+    agent: Agent[CoDeps, Any],
+    user_input: Any,
+    deps: CoDeps,
+    message_history: list[Any],
+    frontend: Frontend,
+    model_settings: Any = None,
+) -> Awaitable[TurnResult]:
+    """Drive one eval turn through the owned loop or the graph, per ``use_owned_loop``.
+
+    Returns the awaitable so call sites (often a ``lambda`` handed to ``record_turn``)
+    await it unchanged. The owned path drops ``agent`` (it builds requests itself).
+    """
+    if deps.config.llm.use_owned_loop:
+        from co_cli.agent.loop import run_turn_owned
+
+        return run_turn_owned(
+            user_input=user_input,
+            deps=deps,
+            message_history=message_history,
+            model_settings=model_settings,
+            frontend=frontend,
+        )
+    from co_cli.agent.orchestrate import run_turn
+
+    return run_turn(
+        agent=agent,
+        user_input=user_input,
+        deps=deps,
+        message_history=message_history,
+        model_settings=model_settings,
+        frontend=frontend,
+    )
 
 
 class EvalFrontend(TerminalFrontend):
@@ -90,6 +146,7 @@ async def eval_deps() -> AsyncIterator[tuple[CoDeps, Agent[CoDeps, Any], EvalFro
     async with AsyncExitStack() as stack:
         deps = await create_deps(on_status=frontend.on_status, stack=stack)
         apply_eval_workspace(deps)
+        apply_eval_owned_loop(deps)
         agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
         print(f"[eval_deps] agent backend: {deps.config.llm.provider}/{deps.config.llm.model}")
         print(f"[eval_deps] {apply_eval_judge(deps)}")
@@ -109,6 +166,7 @@ async def make_eval_deps() -> tuple[CoDeps, Agent[CoDeps, Any], EvalFrontend, As
     await stack.__aenter__()
     deps = await create_deps(on_status=frontend.on_status, stack=stack)
     apply_eval_workspace(deps)
+    apply_eval_owned_loop(deps)
     agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
     print(f"[eval_deps] agent backend: {deps.config.llm.provider}/{deps.config.llm.model}")
     print(f"[eval_deps] {apply_eval_judge(deps)}")

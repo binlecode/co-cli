@@ -6,7 +6,6 @@ newest-first too. A return batch ``[err, err, err, ok]`` (ok most recent) must
 report a streak of 0, not 3.
 """
 
-from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -15,7 +14,6 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.context.prompt_text import safety_prompt_text
@@ -26,12 +24,6 @@ _DEPS = CoDeps(shell=ShellBackend(), config=SETTINGS_NO_MCP, session=CoSessionSt
 
 _DOOM_MARKER = "repeating the same tool call"
 _REFLECTION_MARKER = "Shell reflection limit reached"
-
-
-def _ctx(messages: list[ModelMessage]) -> RunContext[CoDeps]:
-    ctx: RunContext[CoDeps] = RunContext(deps=_DEPS, model=None, usage=RunUsage())
-    ctx.messages = messages
-    return ctx
 
 
 def _shell_call(call_id: str) -> ModelResponse:
@@ -72,7 +64,7 @@ def test_shell_batch_ending_in_success_does_not_warn():
             ]
         ),
     ]
-    assert _REFLECTION_MARKER not in safety_prompt_text(_ctx(messages))
+    assert _REFLECTION_MARKER not in safety_prompt_text(_DEPS, messages)
 
 
 def test_shell_batch_ending_in_errors_warns():
@@ -94,7 +86,7 @@ def test_shell_batch_ending_in_errors_warns():
             ]
         ),
     ]
-    assert _REFLECTION_MARKER in safety_prompt_text(_ctx(messages))
+    assert _REFLECTION_MARKER in safety_prompt_text(_DEPS, messages)
 
 
 def test_doom_batch_ending_in_different_call_does_not_warn():
@@ -112,7 +104,7 @@ def test_doom_batch_ending_in_different_call_does_not_warn():
             ]
         ),
     ]
-    assert _DOOM_MARKER not in safety_prompt_text(_ctx(messages))
+    assert _DOOM_MARKER not in safety_prompt_text(_DEPS, messages)
 
 
 def test_doom_repeated_calls_warns():
@@ -128,4 +120,4 @@ def test_doom_repeated_calls_warns():
             ]
         ),
     ]
-    assert _DOOM_MARKER in safety_prompt_text(_ctx(messages))
+    assert _DOOM_MARKER in safety_prompt_text(_DEPS, messages)

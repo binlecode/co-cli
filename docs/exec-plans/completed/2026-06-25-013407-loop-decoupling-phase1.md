@@ -1,6 +1,6 @@
 # Loop decoupling Phase 1 — thin provider client `model_turn` (graph path untouched)
 
-**Milestone:** `2026-06-24-234633-loop-decoupling.md` (`0.9.0`). **Design:** `2026-06-24-234633-loop-decoupling-design.md` §6.1. Gate 1 for the milestone is APPROVED; this pass details Phase 1's per-task `done_when` before `/orchestrate-dev`.
+**Milestone:** `2026-06-24-234633-loop-decoupling-milestone.md` (`0.9.0`). **Design:** `2026-06-24-234633-loop-decoupling-design.md` §6.1. Gate 1 for the milestone is APPROVED; this pass details Phase 1's per-task `done_when` before `/orchestrate-dev`.
 
 ## Context
 

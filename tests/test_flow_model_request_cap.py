@@ -18,7 +18,7 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from pydantic_ai.toolsets import FunctionToolset
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.agent._instructions import WRAP_UP_TEXT, wrap_up_prompt
+from co_cli.agent._instructions import WRAP_UP_TEXT, wrap_up_prompt_ctx
 from co_cli.agent.orchestrate import TOOL_CAP_NO_ANSWER_TEXT, run_turn
 from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.config.core import load_config
@@ -759,7 +759,7 @@ def _make_wrap_up_agent(
         deps_type=CoDeps,
         output_type=[str, DeferredToolRequests],
         toolsets=[_CallSeamToolset(toolset)],
-        instructions=wrap_up_prompt,
+        instructions=wrap_up_prompt_ctx,
     )
 
 

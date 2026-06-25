@@ -7,12 +7,10 @@ observable prompt text:
 
 - builder boundary: a revealed DEFERRED tool is omitted while an unrevealed one remains;
   all-revealed input yields the empty-string contract.
-- wired runtime path: ``deferred_tool_awareness_prompt(ctx)`` threads
-  ``ctx.deps.runtime.revealed_tools`` into the builder.
+- wired runtime path: ``deferred_tool_awareness_prompt(deps)`` threads
+  ``deps.runtime.revealed_tools`` into the builder.
 """
 
-from pydantic_ai import RunContext
-from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
 from co_cli.agent._instructions import deferred_tool_awareness_prompt
@@ -78,13 +76,6 @@ def test_wired_path_threads_runtime_reveal_set(tmp_path) -> None:
         tool_results_dir=tmp_path / "tool-results",
     )
     deps.runtime.revealed_tools.add("skill_create")
-    ctx = RunContext(
-        deps=deps,
-        model=None,
-        usage=RunUsage(),
-        tool_name="deferred_tool_awareness_prompt",
-        messages=[],
-    )
-    prompt = deferred_tool_awareness_prompt(ctx)
+    prompt = deferred_tool_awareness_prompt(deps)
     assert "skill_create" not in prompt
     assert "skill_delete" in prompt

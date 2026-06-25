@@ -194,13 +194,23 @@ async def _run_foreground_turn(
     if session_path is not None:
         set_session_context(session_path.stem[-8:])
     try:
-        turn_result = await run_turn(
-            agent=agent,
-            user_input=user_input,
-            deps=deps,
-            message_history=message_history,
-            frontend=frontend,
-        )
+        if deps.config.llm.use_owned_loop:
+            from co_cli.agent.loop import run_turn_owned
+
+            turn_result = await run_turn_owned(
+                user_input=user_input,
+                deps=deps,
+                message_history=message_history,
+                frontend=frontend,
+            )
+        else:
+            turn_result = await run_turn(
+                agent=agent,
+                user_input=user_input,
+                deps=deps,
+                message_history=message_history,
+                frontend=frontend,
+            )
     finally:
         cleanup_skill_run_state(saved_env, deps)
     next_history = await _finalize_turn(turn_result, message_history, deps, frontend)
