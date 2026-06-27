@@ -19,20 +19,21 @@ from co_cli.tools.agent_tool import agent_tool
     is_concurrent_safe=False,
 )
 async def delegate(ctx: RunContext[CoDeps], task: str) -> str:
-    """Delegate a multi-step read/search/gather subtask to a focused sub-agent.
+    """Delegate a multi-step subtask to a focused sub-agent.
 
-    Use this when a subtask needs several read/search/fetch steps whose intermediate
-    results you won't need to retain — the sub-agent does the gathering in its own
-    isolated context and returns only a concise summary, keeping your working context
-    clean. Do small one-shot lookups inline yourself; delegate only the multi-step ones.
+    Use this when a subtask needs several steps whose intermediate results you won't need
+    to retain — the sub-agent does the work in its own isolated context and returns only a
+    concise summary, keeping your working context clean. Do small one-shot actions inline
+    yourself; delegate only the multi-step ones.
 
-    The sub-agent has read-only tools (file read/search, web search/fetch, memory and
-    session search/view, todo read, capabilities, image view). It cannot write, send, or
-    delegate further. State the subtask completely — the sub-agent has no access to this
+    The sub-agent can read and act: file read/search, web search/fetch, memory and session
+    search/view, todo read, capabilities, image view, shell commands, and file write/patch.
+    Sensitive actions are gated — the user is asked before they run. It cannot delegate
+    further. State the subtask completely — the sub-agent has no access to this
     conversation, only the task string you pass.
 
     Args:
-        task: A self-contained description of the read/search/gather subtask, including
-            any context the sub-agent needs (it cannot see this conversation).
+        task: A self-contained description of the subtask, including any context the
+            sub-agent needs (it cannot see this conversation).
     """
     return await delegate_to_child(ctx.deps, task)

@@ -1,12 +1,15 @@
-"""In-turn agent-as-tool delegation (Phase 2.5).
+"""In-turn agent-as-tool delegation (Phase 2.5 + 3.5).
 
-The behavioral net for the read-mostly child:
+The behavioral net for the write-capable child:
   - depth-cap refusal returns before any child runs (recursion bound);
   - share_dispatch_sem=False decouples the child's tool-dispatch semaphore from the
     parent's (the CD-M-1 no-starvation contract);
-  - the child spec resolves to a real read-mostly tool surface that excludes delegate;
+  - the child spec resolves to a real write-capable tool surface that excludes delegate,
+    with file_write/file_patch registered sequential (the CD-M-1 concurrency contract);
   - a delegated child genuinely reads via its tools and distills (a secret only readable
     from a file appears in the returned summary) with its tokens rolled into the parent;
+  - delegate_to_child threads the parent's frontend so a child's gated write surfaces on
+    the parent terminal (Phase 3.5 approval propagation);
   - run_standalone_owned returns None on budget exhaustion (the source the delegate
     None-fallback guards) — delegate_to_child maps that to a fixed string, not AttributeError;
   - through the owned loop, the child's intermediate tool results never enter the parent
@@ -38,7 +41,7 @@ from co_cli.agent.spec import TaskAgentSpec
 from co_cli.deps import CoDeps, CoRuntimeState, CoSessionState, fork_deps
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.factory import build_model
-from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY_BY_NAME
+from co_cli.tools.agent_tool import TOOL_REGISTRY_BY_NAME
 from co_cli.tools.shell_backend import ShellBackend
 
 _NATIVE, _CATALOG = build_native_toolset()
@@ -103,26 +106,61 @@ def test_fork_with_own_dispatch_sem_decouples_child_from_parent() -> None:
     assert shared_child.tool_dispatch_sem is parent.tool_dispatch_sem
 
 
-def test_child_spec_builds_read_mostly_surface_excluding_delegate() -> None:
-    """The child spec resolves to a real, all-non-approval tool surface that omits delegate.
+def test_child_spec_builds_write_capable_surface_excluding_delegate() -> None:
+    """The child spec resolves to a real write-capable tool surface that omits delegate,
+    with non-concurrent-safe writes registered sequential (CD-M-1).
 
-    Failure mode: an unknown tool name (would raise at child build time), an approval-gated
-    tool on a child with no approval channel, or delegate present (re-delegation path).
-    Drives the production resolver _build_subagent_toolset (raises ValueError on a bad name).
+    Failure modes: an unknown tool name (would raise at child build time); delegate present
+    (the re-delegation path); the three write tools absent; or file_write/file_patch landing
+    in the concurrent batch — the unsafe interleaving the orchestrator serializes. Drives the
+    production resolver _build_subagent_toolset (raises ValueError on a bad name).
     """
-    _build_subagent_toolset(DELEGATE_CHILD_SPEC)
+    seam = _build_subagent_toolset(DELEGATE_CHILD_SPEC)
 
     assert "delegate" not in DELEGATE_CHILD_SPEC.tool_names
-    assert DELEGATE_CHILD_SPEC.tool_names
+    for name in ("shell_exec", "file_write", "file_patch"):
+        assert name in DELEGATE_CHILD_SPEC.tool_names
     for name in DELEGATE_CHILD_SPEC.tool_names:
-        fn = TOOL_REGISTRY_BY_NAME[name]
-        info = getattr(fn, AGENT_TOOL_ATTR)
-        assert info.is_approval_required is False, f"{name} requires approval"
+        assert name in TOOL_REGISTRY_BY_NAME, f"{name} not registered"
+
+    for name in ("file_write", "file_patch"):
+        assert seam.wrapped.tools[name].sequential is True, f"{name} must be sequential (CD-M-1)"
 
 
 # ---------------------------------------------------------------------------
 # Real-Ollama: the child gathers, distills, and isolates.
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not _CONFIG_NO_MCP.llm.uses_ollama(), reason="real-LLM delegation needs Ollama"
+)
+@pytest.mark.asyncio
+async def test_delegate_to_child_threads_parent_frontend_for_gated_write(tmp_path) -> None:
+    """delegate_to_child threads the parent's frontend (and propagate_approvals=True): a
+    child's write surfaces on the parent terminal, and a denial blocks it.
+
+    If propagate_approvals/frontend were not threaded, the collector would never run and the
+    child's file_write would execute unprompted — so a recorded prompt plus an absent file is
+    the joint proof. The headless (frontend-None) auto-deny path is covered by the run-turn
+    gate in test_flow_delegation_approval.py.
+    """
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+    target = tmp_path / "made.txt"
+    deps = _make_parent_deps()
+    deps.workspace_dir = tmp_path
+    deps.runtime.frontend = HeadlessFrontend(approval_response="n")
+    task = (
+        f"Use the file_write tool to create a file at {target} with the content `hi`. "
+        "Then summarize what you did."
+    )
+
+    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
+        summary = await delegate_to_child(deps, task)
+
+    assert deps.runtime.frontend.approval_calls, "child write gated on the parent frontend"
+    assert not target.exists(), "the denied write did not create the file"
+    assert summary, "delegate_to_child still returns a summary"
 
 
 @pytest.mark.skipif(

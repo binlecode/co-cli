@@ -11,6 +11,7 @@ prove the tuned contract is preserved (G1-1).
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
@@ -21,12 +22,16 @@ from tests._settings import TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.agent.build import build_task_agent
+from co_cli.agent.core import build_native_toolset
 from co_cli.agent.loop import run_standalone_owned
 from co_cli.agent.preflight import build_output_toolset
 from co_cli.agent.spec import TaskAgentSpec
 from co_cli.deps import CoDeps, CoSessionState
+from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.factory import build_model
 from co_cli.tools.shell_backend import ShellBackend
+
+_, _CATALOG = build_native_toolset()
 
 
 class _ReviewNote(BaseModel):
@@ -97,3 +102,91 @@ async def test_owned_subagent_produces_schema_valid_output_at_parity_with_graph(
         )
     assert isinstance(graph_run.output, _ReviewNote)
     assert graph_run.output.summary.strip()
+
+
+def _write_spec() -> TaskAgentSpec:
+    return TaskAgentSpec(
+        name="owned_subagent_write_probe",
+        instructions=lambda deps: (
+            "You handle one write subtask, then call final_result with a one-sentence "
+            "summary of what you did."
+        ),
+        tool_names=("file_write",),
+        output_type=_ReviewNote,
+        default_budget=4,
+    )
+
+
+def _write_deps(workspace: Path) -> CoDeps:
+    return CoDeps(
+        shell=ShellBackend(),
+        model=build_model(_CONFIG_NO_MCP.llm),
+        tool_catalog=_CATALOG,
+        config=_CONFIG_NO_MCP,
+        session=CoSessionState(),
+        workspace_dir=workspace,
+        model_max_context_tokens=_CONFIG_NO_MCP.llm.max_context_tokens,
+    )
+
+
+_WRITE_ASK = (
+    "Use the file_write tool to create a file named note.txt in the current directory "
+    "with the content `hello`. Use only file_write, then call final_result. Do not use "
+    "any other tool."
+)
+
+
+@pytest.mark.skipif(
+    not _CONFIG_NO_MCP.llm.uses_ollama(), reason="real-LLM subagent approval flow needs Ollama"
+)
+@pytest.mark.asyncio
+async def test_owned_subagent_propagated_approval_executes_on_approve(tmp_path: Path) -> None:
+    """A write-capable subagent's gated call surfaces on the supplied frontend (marked
+    delegated-origin); a scripted approval lets the write happen on disk."""
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+    target = tmp_path / "note.txt"
+    deps = _write_deps(tmp_path)
+    frontend = HeadlessFrontend(approval_response="y")
+
+    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
+        await run_standalone_owned(
+            _write_spec(),
+            deps,
+            _WRITE_ASK,
+            settings=deps.model.settings_noreason,
+            propagate_approvals=True,
+            frontend=frontend,
+        )
+
+    assert frontend.approval_calls, "the subagent's file_write was gated for approval"
+    assert any("[delegated subtask]" in call for call in frontend.approval_calls), (
+        "the prompt carries the delegated-origin marker"
+    )
+    assert target.exists(), "approved write executed on disk"
+
+
+@pytest.mark.skipif(
+    not _CONFIG_NO_MCP.llm.uses_ollama(), reason="real-LLM subagent approval flow needs Ollama"
+)
+@pytest.mark.asyncio
+async def test_owned_subagent_propagated_approval_denied_blocks_write(tmp_path: Path) -> None:
+    """A scripted denial blocks the subagent's write (no file on disk) while the driver
+    still returns a structured result — the child adapts and summarizes."""
+    await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
+    target = tmp_path / "note.txt"
+    deps = _write_deps(tmp_path)
+    frontend = HeadlessFrontend(approval_response="n")
+
+    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 2):
+        result = await run_standalone_owned(
+            _write_spec(),
+            deps,
+            _WRITE_ASK,
+            settings=deps.model.settings_noreason,
+            propagate_approvals=True,
+            frontend=frontend,
+        )
+
+    assert frontend.approval_calls, "the subagent's file_write was gated for approval"
+    assert not target.exists(), "denied write did not create the file"
+    assert isinstance(result, _ReviewNote), "the driver still returns a structured result"

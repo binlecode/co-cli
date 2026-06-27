@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.498]
+
+Loop-decoupling Phase 3.5 — write-capable delegated children with child→parent approval propagation (additive capability #2, owned-path-only; reaches the Option-B end state). Daemon path byte-for-byte unchanged.
+
+- **Frontend-reach seam (`co_cli/deps.py`, `co_cli/agent/loop.py`)** — `CoRuntimeState.frontend` is a per-turn, explicitly-justified tool reach-in (like `clarify_answers`/`revealed_tools`): set in `run_turn_owned` alongside `status_callback`, cleared by `reset_for_turn` and the turn's `finally`. `fork_deps` resets runtime, so a child never inherits it — the frontend is threaded explicitly into `run_standalone_owned`, keeping propagation auditable.
+- **Approval propagation in `run_standalone_owned`** — a new `propagate_approvals: bool` flag (the delegated-vs-daemon discriminator, **not** `frontend is None`) plus a `frontend` param. On the delegated path the inline-approval collector runs before each dispatch; a headless parent (`frontend is None`) still gates and **auto-denies** — a write-capable child never acts unprompted. The daemon path (`run_standalone`) defaults to `propagate_approvals=False` and is unchanged. Approval prompts from a child carry a `[delegated subtask]` provenance marker (`origin_label` on `collect_inline_approvals`, applied via `dataclasses.replace` on the prompt copy only, so remember/auto-approve matching on `kind`/`value` is unaffected).
+- **Write-capable child surface (`co_cli/agent/delegation.py`, `co_cli/tools/system/delegate.py`)** — `shell_exec`, `file_write`, `file_patch` added to the delegated child; `delegate` stays absent (depth cap 1). `_build_subagent_toolset` now propagates `sequential=not info.is_concurrent_safe`, so the child serializes its `is_concurrent_safe=False` writes exactly as the orchestrator does. The `delegate` docstring + child instructions updated to "read and act, gated by user approval".
+- **End-to-end gate** — new real-Ollama owned-path flow tests (`tests/test_flow_delegation_approval.py`): deny blocks the child's disk side effect, approve executes it, a headless parent auto-denies a `file_write` child (the collector-only gate, no in-body raise), and context isolation holds (only the `delegate` summary enters parent history). Spec sync to `docs/specs/` remains fenced to milestone Phase 6.
+
 ## [0.8.496]
 
 Loop-decoupling Phase 3 — inline approval on the owned loop, replacing the deny-placeholder (refactor, parity).

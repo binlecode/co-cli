@@ -25,6 +25,7 @@ from co_cli.tools.file_read_tracker import FileReadTracker
 if TYPE_CHECKING:
     from pydantic_ai.toolsets import AbstractToolset
 
+    from co_cli.display.core import Frontend
     from co_cli.index.store import IndexStore
     from co_cli.llm.factory import LlmModel
     from co_cli.memory.store import MemoryStore
@@ -203,6 +204,13 @@ class CoRuntimeState:
     # cleared by reset_for_turn(). Used by history processors (e.g. proactive
     # compaction) that run inside the agent loop without direct Frontend access.
     status_callback: Callable[[str], None] | None = field(default=None, repr=False)
+    # Turn-scoped parent prompt surface: set by run_turn_owned alongside status_callback,
+    # cleared by reset_for_turn() and the turn's finally. The "explicitly justified" tool
+    # reach-in (like clarify_answers / revealed_tools): the delegate tool body reaches the
+    # parent's frontend through ctx.deps to propagate a delegated child's approval prompt
+    # onto the parent terminal. fork_deps resets runtime, so a child never inherits it — the
+    # frontend is threaded explicitly into run_standalone_owned, keeping propagation auditable.
+    frontend: Frontend | None = field(default=None, repr=False)
     active_skill_name: str | None = None
     active_skill_env: dict[str, str] = field(default_factory=dict)
     resume_tool_names: frozenset[str] | None = None
@@ -244,6 +252,7 @@ class CoRuntimeState:
         """Reset per-turn fields at the start of each run_turn() call."""
         self.tool_progress_callback = None
         self.status_callback = None
+        self.frontend = None
         self.resume_tool_names = None
         self.clarify_answers = {}
         self.compaction_applied_this_turn = False

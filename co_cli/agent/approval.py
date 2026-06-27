@@ -26,7 +26,7 @@ None``) auto-denies standard approvals (``"n"``), matching ``orchestrate.py:263`
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 from pydantic_ai.messages import ToolCallPart, ToolReturnPart
@@ -133,6 +133,7 @@ async def collect_inline_approvals(
     tool_calls: list[ToolCallPart],
     deps: CoDeps,
     frontend: Frontend | None,
+    origin_label: str | None = None,
 ) -> ApprovalResolution:
     """Collect approval decisions for one step's calls, sequentially, before fan-out.
 
@@ -147,6 +148,12 @@ async def collect_inline_approvals(
     to ``approved_ids`` with no prompt; otherwise ``prompt_approval`` (``frontend is None``
     → ``"n"``) decides — ``y``/``a`` approve (``a`` also remembers a rememberable subject),
     ``n`` denies. Calls needing no approval are left untouched (they execute normally).
+
+    ``origin_label`` (set by the delegated-subtask driver) prefixes the prompt's
+    ``display`` with ``[<label>] `` so a child's gated call is identifiable as
+    delegated-origin even though the child's reasoning stays silent (D-3). It is purely
+    cosmetic — auto-approval and remember-choice match on ``kind``/``value``, never
+    ``display`` — and defaults ``None`` to keep the orchestrator prompt byte-identical.
     """
     resolution = ApprovalResolution()
     for call in tool_calls:
@@ -166,7 +173,12 @@ async def collect_inline_approvals(
             resolution.approved_ids.add(call.tool_call_id)
             continue
 
-        choice = (await frontend.prompt_approval(subject)) if frontend is not None else "n"
+        prompt_subject = (
+            replace(subject, display=f"[{origin_label}] {subject.display}")
+            if origin_label
+            else subject
+        )
+        choice = (await frontend.prompt_approval(prompt_subject)) if frontend is not None else "n"
         if choice in ("y", "a"):
             resolution.approved_ids.add(call.tool_call_id)
             if choice == "a" and subject.can_remember:

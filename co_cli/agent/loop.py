@@ -186,6 +186,7 @@ async def run_turn_owned(
     deps.runtime.reset_for_turn()
     deps.usage_accumulator.reset()
     deps.runtime.status_callback = frontend.on_status
+    deps.runtime.frontend = frontend
     frontend.begin_waiting()
 
     settings = model_settings if model_settings is not None else deps.model.settings
@@ -239,6 +240,7 @@ async def run_turn_owned(
         span.set_attribute("turn.input_tokens", turn_usage.input_tokens)
         span.set_attribute("turn.output_tokens", turn_usage.output_tokens)
         deps.runtime.tool_progress_callback = None
+        deps.runtime.frontend = None
 
 
 async def _orchestrator_step_loop(
@@ -373,14 +375,15 @@ def _build_subagent_toolset(spec: Any) -> Any:
     from pydantic_ai.toolsets import FunctionToolset
 
     from co_cli.agent.toolset import _CallSeamToolset
-    from co_cli.tools.agent_tool import TOOL_REGISTRY_BY_NAME
+    from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY_BY_NAME
 
     toolset: FunctionToolset[CoDeps] = FunctionToolset()
     for name in spec.tool_names:
         fn = TOOL_REGISTRY_BY_NAME.get(name)
         if fn is None:
             raise ValueError(f"{spec.name}: unknown tool {name!r}")
-        toolset.add_function(fn, requires_approval=False)
+        info = getattr(fn, AGENT_TOOL_ATTR)
+        toolset.add_function(fn, requires_approval=False, sequential=not info.is_concurrent_safe)
     return _CallSeamToolset(toolset)
 
 
@@ -396,7 +399,12 @@ def _subagent_instructions(spec: Any, deps: CoDeps) -> str:
 
 
 async def run_standalone_owned(
-    spec: Any, deps: CoDeps, prompt: str, settings: ModelSettings | None = None
+    spec: Any,
+    deps: CoDeps,
+    prompt: str,
+    settings: ModelSettings | None = None,
+    propagate_approvals: bool = False,
+    frontend: Frontend | None = None,
 ) -> Any:
     """Run a task agent through the owned loop (OQ-4 option b — structured ``final_result``).
 
@@ -406,6 +414,16 @@ async def run_standalone_owned(
     (re-prompting on validation failure, bounded by ``spec.default_budget``). Returns the
     validated model (``run_standalone`` discards it — daemons consume the tool side effects);
     the return lets the parity test assert the structured output.
+
+    ``propagate_approvals`` is the delegated-vs-daemon discriminator (NOT ``frontend is
+    None``): when True (the delegated-child path), each step runs ``collect_inline_approvals``
+    before dispatch so an approval-required child call surfaces on the parent's ``frontend``
+    (marked delegated-origin). A delegated child with ``frontend is None`` (headless parent)
+    still runs the collector, which auto-denies — a write-capable child never acts unprompted.
+    When False (the ``run_standalone`` daemon default) no collector runs and dispatch is
+    byte-for-byte identical to today; daemon surfaces carry no approval-required tools anyway.
+    ``dispatch_tools`` keeps ``frontend=None`` in both branches — only the collector gets the
+    real frontend, so the child's routine tool activity stays silent (D-3).
     """
     from pydantic import ValidationError as _ValidationError
     from pydantic_ai.messages import RetryPromptPart
@@ -492,7 +510,20 @@ async def run_standalone_owned(
                 ]
                 continue
             history = [*history, response]
-            parts = await dispatch_tools(calls, deps, cap_state=cap_state, frontend=None)
+            if propagate_approvals:
+                resolution = await collect_inline_approvals(
+                    calls, deps, frontend, origin_label="delegated subtask"
+                )
+                parts = await dispatch_tools(
+                    calls,
+                    deps,
+                    cap_state=cap_state,
+                    frontend=None,
+                    denials=resolution.denials,
+                    approved_ids=resolution.approved_ids,
+                )
+            else:
+                parts = await dispatch_tools(calls, deps, cap_state=cap_state, frontend=None)
             history = [*history, ModelRequest(parts=parts)]
             if cap_state.hard_stop:
                 break

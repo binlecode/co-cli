@@ -1,9 +1,11 @@
-"""In-turn agent-as-tool delegation — read-mostly child agent (Phase 2.5).
+"""In-turn agent-as-tool delegation — write-capable child agent (Phase 2.5 + 3.5).
 
 The ``delegate`` tool (``co_cli/tools/system/delegate.py``) calls ``delegate_to_child``,
-which runs a child agent in an isolated forked context with a curated read-mostly tool
-surface and returns only a distilled one-field summary. The child's intermediate tool
-calls/results never enter the parent's history — the context-isolation contract.
+which runs a child agent in an isolated forked context with a curated tool surface (read,
+search, and — Phase 3.5 — shell + file write/patch) and returns only a distilled one-field
+summary. The child's intermediate tool calls/results never enter the parent's history — the
+context-isolation contract. Approval-required child calls surface on the parent's terminal
+via the inline-approval collector (Phase 3.5); the child never bypasses the gate.
 
 Recursion is bounded: the child surface excludes ``delegate`` and ``agent_depth`` is the
 backstop (``DELEGATE_DEPTH_CAP``). The child draws tool-dispatch concurrency from its own
@@ -56,15 +58,20 @@ _CHILD_TOOL_NAMES = (
     "todo_read",
     "capabilities_check",
     "image_view",
+    "shell_exec",
+    "file_write",
+    "file_patch",
 )
 
 
 def _delegate_child_instructions(deps: CoDeps) -> str:
     return (
-        "You are a focused sub-agent handling one delegated read/search/gather subtask "
-        "for the main agent. Use your read-only tools to gather what the task asks for, "
-        "then call the final_result tool with a single concise `summary` that distills "
-        "your findings into what the main agent needs to continue. You have no user "
+        "You are a focused sub-agent handling one delegated subtask for the main agent. "
+        "Use your tools to do what the task asks: you can read and search, and you can "
+        "act — run commands, write and patch files. Sensitive actions are gated by user "
+        "approval; if an action is denied, adapt and continue with what you can do. When "
+        "done, call the final_result tool with a single concise `summary` that distills "
+        "the outcome into what the main agent needs to continue. You have no user "
         "channel — do not ask questions. Keep the summary self-contained: the main agent "
         "sees only your summary, never your intermediate tool calls or their results."
     )
@@ -80,7 +87,7 @@ DELEGATE_CHILD_SPEC = TaskAgentSpec(
 
 
 async def delegate_to_child(parent_deps: CoDeps, task: str) -> str:
-    """Run a read-mostly child agent on ``task`` in an isolated forked context.
+    """Run a write-capable child agent on ``task`` in an isolated forked context.
 
     Depth-guarded: refuses at ``DELEGATE_DEPTH_CAP`` without forking. The child gets its
     own tool-dispatch semaphore (``share_dispatch_sem=False``) so it never contends with
@@ -89,6 +96,13 @@ async def delegate_to_child(parent_deps: CoDeps, task: str) -> str:
     without a ``final_result`` call (``run_standalone_owned`` returns ``None``). Child usage
     rolls into the parent turn via the shared ``usage_accumulator`` (fork shares it by
     reference) — no extra accounting here. ``CancelledError`` propagates, cancelling the child.
+
+    Approval propagation (Phase 3.5): the child surface includes write-capable tools
+    (shell, file write/patch), so the driver runs with ``propagate_approvals=True`` and the
+    parent's ``runtime.frontend`` — an approval-required child call surfaces on the parent's
+    terminal. ``fork_deps`` reset the child runtime, so the frontend is threaded explicitly,
+    never inherited; a headless parent (``frontend is None``) makes the child auto-deny, so a
+    write-capable child never acts unprompted.
     """
     if parent_deps.runtime.agent_depth >= DELEGATE_DEPTH_CAP:
         return (
@@ -97,8 +111,14 @@ async def delegate_to_child(parent_deps: CoDeps, task: str) -> str:
         )
 
     child_deps = fork_deps(parent_deps, share_dispatch_sem=False)
+    frontend = parent_deps.runtime.frontend
     result = await run_standalone_owned(
-        DELEGATE_CHILD_SPEC, child_deps, task, settings=parent_deps.model.settings
+        DELEGATE_CHILD_SPEC,
+        child_deps,
+        task,
+        settings=parent_deps.model.settings,
+        propagate_approvals=True,
+        frontend=frontend,
     )
     if result is None:
         return _NO_RESULT_FALLBACK

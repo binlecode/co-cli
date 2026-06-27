@@ -6,6 +6,7 @@ from co_cli.deps import (
     CoDeps,
     fork_deps,
 )
+from co_cli.display.headless import HeadlessFrontend
 
 
 def _make_deps() -> CoDeps:
@@ -33,3 +34,23 @@ def test_fork_deps_does_not_share_runtime() -> None:
     child = fork_deps(parent)
     child.runtime.compaction_skip_count = 99
     assert parent.runtime.compaction_skip_count == 0
+
+
+def test_reset_for_turn_clears_frontend() -> None:
+    """The per-turn frontend reach-in is cleared by reset_for_turn()."""
+    deps = _make_deps()
+    deps.runtime.frontend = HeadlessFrontend()
+    deps.runtime.reset_for_turn()
+    assert deps.runtime.frontend is None
+
+
+def test_fork_deps_child_does_not_inherit_frontend() -> None:
+    """A delegated child never inherits the parent's frontend through runtime.
+
+    fork_deps resets runtime, so propagation must be explicit (threaded into
+    run_standalone_owned) — never silently carried on child_deps.runtime.
+    """
+    parent = _make_deps()
+    parent.runtime.frontend = HeadlessFrontend()
+    child = fork_deps(parent)
+    assert child.runtime.frontend is None
