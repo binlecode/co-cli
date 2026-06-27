@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.500]
+
+Loop-decoupling Phase 3.6 — the general delegated agent gets the orchestrator's full visibility surface (additive capability #3, owned-path-only; beyond the Option-B end state). A delegated agent is a *full agent*, separated for context isolation, not a lesser one — so it sees the same surface as the orchestrator, gated by the same approval boundary. Specialist/daemon specs stay flat-exact and byte-for-byte unchanged.
+
+- **Surface mode on `TaskAgentSpec` (`co_cli/agent/spec.py`)** — a `SurfaceModeEnum` (`flat-exact` default vs `visibility-model`) selects between today's curated flat toolset and the orchestrator visibility model. Default preserves daemon-spec behavior exactly; only `DELEGATE_AGENT_SPEC` routes to the new builder.
+- **General-agent visibility toolset (`co_cli/agent/loop.py`, `co_cli/agent/core.py`)** — `_build_subagent_toolset` branches on the mode and reuses the orchestrator's own `assemble_routing_toolset`, now parametrized with `name_blocklist` (the single filter-composition point). The delegated agent sees the ALWAYS core minus `{delegate}`, and self-loads DEFERRED tools (native **and** MCP) via `tool_view`. The `_CHILD_TOOL_NAMES` curated 14-tool allowlist is removed.
+- **Per-step recompute in `run_standalone_owned` (`co_cli/agent/loop.py`)** — instructions and `build_tool_defs` are recomputed each step (mirroring the orchestrator), so a `tool_view` reveal becomes callable on the next step instead of silently no-op'ing. Awareness stubs are injected per step and drop a tool once it is revealed.
+- **Connected MCP toolsets on `CoDeps` (`co_cli/bootstrap/core.py`, `co_cli/deps.py`)** — exposed as a single source built once at bootstrap, shared by reference through `fork_deps`, so the delegated agent composes the live session-open MCP toolsets (orchestrator surface minus blocklist) rather than re-connecting.
+- **Trust boundary unchanged** — the blocklist is `{delegate}` only (recursion/depth cap); durable/outward writes (`gmail`, `memory`/`skill` writes, `file_write`, etc.) become reachable but every gated call propagates to the parent frontend via Phase 3.5's approval propagation. Withholding at the surface gives strictly less safety than gating at the prompt.
+- **Rename: "child" → "delegated agent"** — peers name the delegation target an agent, never a child. Renamed across source/tests/specs with zero backward-compat aliases: `delegate_to_child`→`delegate_to_agent`, `DELEGATE_CHILD_SPEC`→`DELEGATE_AGENT_SPEC`, `delegate_child`→`delegate_agent`, and all related symbols/prose. The daemon reviewer's own out-of-scope `child_deps` is untouched.
+- **End-to-end gate** — new real-Ollama owned-path flow tests (`tests/test_flow_delegation_full_surface.py`): a delegated agent `tool_view`-loads a deferred tool the old allowlist lacked and uses it; a broader-trust `file_write` gate surfaces on the parent terminal with the `[delegated subtask]` marker and concrete subject (path), deny blocks the side effect; context isolation holds; a daemon flat-exact spec resolves its exact surface unchanged.
+
 ## [0.8.498]
 
 Loop-decoupling Phase 3.5 — write-capable delegated children with child→parent approval propagation (additive capability #2, owned-path-only; reaches the Option-B end state). Daemon path byte-for-byte unchanged.

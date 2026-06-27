@@ -383,7 +383,7 @@ The foreground loop still matches the common 2026 CLI-agent shape more than it d
 | command-specific shell trust boundary | shell tool classifies allow/deny/ask itself | aligned and strong |
 | error handling and interrupts owned by the loop | `run_turn()` | aligned |
 | compaction as an inline concern with circuit breaker | `proactive_window_processor()` with `compaction_skip_count` | aligned |
-| isolated specialist contexts | daemon task agents use `fork_deps()` outside the foreground loop; the in-turn `delegate` tool forks a read-mostly child *inside* the turn and returns only its summary (context isolation) | aligned |
+| isolated specialist contexts | daemon task agents use `fork_deps()` outside the foreground loop; the in-turn `delegate` tool forks a full delegated agent (orchestrator surface minus blocklist) *inside* the turn and returns only its summary (context isolation) | aligned |
 
 The intentional simplification remains:
 

@@ -103,9 +103,11 @@ build_native_toolset() -> (FunctionToolset, tool_catalog):
                              prepare            = _make_prepare(info.check_fn) (if set))
         catalog[info.name] = info
 
-assemble_routing_toolset(native, mcp_toolsets):
+assemble_routing_toolset(native, mcp_toolsets, name_blocklist=frozenset()):
     combined = CombinedToolset([native, *mcp_toolsets])
-    filtered = combined.filtered(_tool_visibility_filter)   # SDK per-turn get_tools gate
+    # name_blocklist (default empty = orchestrator surface) folds into the single
+    # filter; the delegated agent passes {delegate} to drop it from its surface.
+    filtered = combined.filtered(visibility_filter)         # SDK per-turn get_tools gate
     return _CallSeamToolset(filtered)                       # outermost call_tool seam
 ```
 
@@ -309,7 +311,7 @@ Orchestrator `usage_limits` **is** config-driven — `request_limit` resolves fr
 | `build_judge_model` | `(LlmSettings) -> LlmModel \| None` | Distinct judge handle; `None` when unset |
 | `LlmModel` | dataclass `{model, settings, settings_noreason}` | Model + inference settings container on `CoDeps.model` |
 | `build_native_toolset` | `(Settings) -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]` | Unfiltered native `FunctionToolset` + catalog |
-| `assemble_routing_toolset` | `(AbstractToolset, list[AbstractToolset]) -> AbstractToolset` | Combine + visibility-filter + call-seam wrap |
+| `assemble_routing_toolset` | `(AbstractToolset, list[AbstractToolset], frozenset[str] = frozenset()) -> AbstractToolset` | Combine + visibility-filter (with optional `name_blocklist`) + call-seam wrap |
 | `build_orchestrator` | `(OrchestratorSpec, CoDeps) -> SessionAgent` | Singleton orchestrator; `output_type=[str, DeferredToolRequests]` |
 | `build_task_agent` | `(TaskAgentSpec, CoDeps, model) -> Agent[CoDeps, Any]` | Per-spec task agent with own call-seam |
 | `run_standalone` | `(TaskAgentSpec, CoDeps, str, int\|None, Any) -> tuple[Any, RunUsage, str]` | Daemon task-agent run with real `UsageLimits` |

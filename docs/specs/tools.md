@@ -327,7 +327,7 @@ on shared mutation keys is a complementary guard — both layers apply.
 | `TOOL_REGISTRY` | `co_cli/tools/agent_tool.py` | Module-level list populated at import time; read by `build_native_toolset()` |
 | `build_native_toolset() -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]` | `co_cli/agent/core.py` | Pure registry walk. Returns the unfiltered native toolset and a fresh `tool_catalog` |
 | `build_mcp_entries(config, tool_catalog) -> list[MCPToolsetEntry]` | `co_cli/agent/core.py` | Builds MCP entries wrapped with sequential-flag propagation; not yet connected |
-| `assemble_routing_toolset(native, mcp_toolsets) -> AbstractToolset[CoDeps]` | `co_cli/agent/core.py` | Combines native + connected MCP toolsets via `CombinedToolset(...).filtered(_tool_visibility_filter)`, wrapped in `_CallSeamToolset` |
+| `assemble_routing_toolset(native, mcp_toolsets, name_blocklist=frozenset()) -> AbstractToolset[CoDeps]` | `co_cli/agent/core.py` | Combines native + connected MCP toolsets via `CombinedToolset(...).filtered(...)` (visibility filter + optional `name_blocklist`), wrapped in `_CallSeamToolset`. The delegated agent passes `{delegate}` |
 
 > Agent builders (`build_orchestrator`, `build_task_agent`) and spec records (`OrchestratorSpec`, `TaskAgentSpec`) are documented in [agents.md § 4](agents.md).
 

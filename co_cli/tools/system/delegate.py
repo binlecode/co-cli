@@ -1,14 +1,15 @@
-"""delegate tool — hand a read/search/gather subtask to an isolated child agent.
+"""delegate tool — hand a multi-step subtask to an isolated delegated agent.
 
-Orchestrator-only flagship capability (ALWAYS visibility). The child runs in a forked,
-context-isolated session with a read-mostly tool surface; only its distilled summary
-returns as the tool result, so the child's intermediate tool transcript never enters the
-parent's history. The driver and child spec live in co_cli/agent/delegation.py.
+Orchestrator-only flagship capability (ALWAYS visibility). The delegated agent runs in a
+forked, context-isolated session with the orchestrator's own full visibility surface (minus
+the recursion blocklist); only its distilled summary returns as the tool result, so its
+intermediate tool transcript never enters the parent's history. The driver and agent spec
+live in co_cli/agent/delegation.py.
 """
 
 from pydantic_ai import RunContext
 
-from co_cli.agent.delegation import delegate_to_child
+from co_cli.agent.delegation import delegate_to_agent
 from co_cli.deps import CoDeps, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import agent_tool
 
@@ -26,14 +27,14 @@ async def delegate(ctx: RunContext[CoDeps], task: str) -> str:
     concise summary, keeping your working context clean. Do small one-shot actions inline
     yourself; delegate only the multi-step ones.
 
-    The sub-agent can read and act: file read/search, web search/fetch, memory and session
-    search/view, todo read, capabilities, image view, shell commands, and file write/patch.
-    Sensitive actions are gated — the user is asked before they run. It cannot delegate
-    further. State the subtask completely — the sub-agent has no access to this
-    conversation, only the task string you pass.
+    The sub-agent is a full agent with the same capabilities you have — it decides for
+    itself which tools the subtask needs. Sensitive actions are gated exactly as they are
+    for you: the user is asked before they run. It cannot delegate further. State the
+    subtask completely — the sub-agent has no access to this conversation, only the task
+    string you pass.
 
     Args:
         task: A self-contained description of the subtask, including any context the
             sub-agent needs (it cannot see this conversation).
     """
-    return await delegate_to_child(ctx.deps, task)
+    return await delegate_to_agent(ctx.deps, task)

@@ -262,7 +262,7 @@ System-level contracts crossing every subsystem. Per-subsystem APIs are document
 | `build_orchestrator(spec, deps) -> Agent[CoDeps, Any]` | `co_cli/agent/build.py` | Constructs the foreground orchestrator agent from `ORCHESTRATOR_SPEC` — composes static-instruction builders, registers per-turn instructions, attaches history processors, and reads toolset from `deps.toolset` |
 | `build_task_agent(spec, deps, model) -> Agent[CoDeps, Any]` | `co_cli/agent/build.py` | Constructs a focused task agent from a `TaskAgentSpec`; resolves `spec.tool_names` against `TOOL_REGISTRY_BY_NAME`; fails loud on unknown names |
 | `run_turn(deps, agent, user_input, message_history, frontend) -> TurnResult` | `co_cli/agent/orchestrate.py` | Async single-turn entrypoint: assembly → run stream → approval loop → output checks |
-| `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds a delegated `CoDeps` for sub-agents; forwards `tool_catalog`, excludes `toolset`, increments `agent_depth` |
+| `fork_deps(base) -> CoDeps` | `co_cli/deps.py` | Builds a delegated `CoDeps` for sub-agents; forwards `tool_catalog` and `mcp_toolsets`, excludes `toolset`, increments `agent_depth` |
 | `fork_deps_for_reviewer(parent) -> CoDeps` | `co_cli/deps.py` | Fork for the dream daemon reviewer agent; delegates to `fork_deps` |
 | `dispatch(raw_input, ctx) -> SlashOutcome` | `co_cli/commands/core.py` | Async slash-command router; returns `LocalOnly`, `ReplaceTranscript`, or `DelegateToAgent` |
 

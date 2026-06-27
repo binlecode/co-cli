@@ -234,7 +234,7 @@ The mode is stored on `deps.session.reasoning_display` (a `CoSessionState` field
 `StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)`. Changes take
 effect on the next turn; any in-flight stream uses the mode it started with. Delegation agent
 turns inherit the mode via `fork_deps()`, which copies `base.session.reasoning_display` into the
-child agent's `CoSessionState`.
+delegated agent's `CoSessionState`.
 
 `StreamRenderer` owns the mode, the thinking buffer, and the elapsed timing; it composes the
 per-mode display string and feeds the dumb frontend surfaces `on_thinking_delta()` (transient

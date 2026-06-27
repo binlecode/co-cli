@@ -332,6 +332,11 @@ class CoDeps:
     # is read separately via ToolInfo.visibility and enforced by _tool_visibility_filter.
     tool_catalog: dict[str, ToolInfo] = field(default_factory=dict)
     toolset: AbstractToolset[CoDeps] | None = field(default=None, repr=False)
+    # The connected MCP toolsets, set once at bootstrap (the same list passed to
+    # assemble_routing_toolset for the orchestrator). Shared by reference through
+    # fork_deps like tool_catalog so the delegate child composes the live
+    # session-open MCP toolsets into its visibility surface rather than reconnecting.
+    mcp_toolsets: list[AbstractToolset[CoDeps]] = field(default_factory=list, repr=False)
     skill_catalog: dict[str, SkillInfo] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)
@@ -460,6 +465,7 @@ def fork_deps(base: CoDeps, *, share_dispatch_sem: bool = True) -> CoDeps:
         judge_model=base.judge_model,
         agent_vision_capable=base.agent_vision_capable,
         tool_catalog=base.tool_catalog,
+        mcp_toolsets=base.mcp_toolsets,
         skill_catalog=base.skill_catalog,
         session=inherited_session,
         runtime=CoRuntimeState(agent_depth=base.runtime.agent_depth + 1),

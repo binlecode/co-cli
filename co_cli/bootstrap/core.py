@@ -410,7 +410,8 @@ async def create_deps(
                 degradations[f"mcp.{prefix}"] = err[:120]
             tool_catalog.update(mcp_tool_catalog)
 
-    toolset = assemble_routing_toolset(native_toolset, [entry.toolset for entry in connected])
+    mcp_toolsets = [entry.toolset for entry in connected]
+    toolset = assemble_routing_toolset(native_toolset, mcp_toolsets)
 
     from co_cli.commands.registry import BUILTIN_COMMANDS, filter_namespace_conflicts
     from co_cli.skills.loader import load_skills
@@ -458,6 +459,7 @@ async def create_deps(
         session_store=session_store,
         tool_catalog=tool_catalog,
         toolset=toolset,
+        mcp_toolsets=mcp_toolsets,
         skill_catalog=skill_catalog,
         runtime=runtime,
         model_max_context_tokens=model_max_context_tokens,

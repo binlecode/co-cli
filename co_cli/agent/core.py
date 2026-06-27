@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from pydantic_ai import RunContext
+from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import AbstractToolset
 from pydantic_ai.toolsets.combined import CombinedToolset
 
@@ -51,15 +53,28 @@ def build_mcp_entries(
 def assemble_routing_toolset(
     native_toolset: AbstractToolset[CoDeps],
     mcp_toolsets: list[AbstractToolset[CoDeps]],
+    name_blocklist: frozenset[str] = frozenset(),
 ) -> AbstractToolset[CoDeps]:
     """Assemble the routing surface (native + MCP, visibility-filtered) and wrap it in the call-seam ``call_tool`` wrapper.
 
     The call-seam wrapper sits outermost so its ``call_tool`` hosts the tool span,
     per-model-request cap, and MCP-result spill over every dispatched tool, while
     ``get_tools`` (and thus per-turn visibility) still flows through the filter.
+
+    ``name_blocklist`` (default empty — the orchestrator surface) drops the named
+    tools from the surface entirely, folded into the single visibility-filter
+    composition point so there is no second filter pass. The delegated agent uses
+    this to exclude ``delegate`` (the recursion / depth-cap invariant) while
+    otherwise inheriting the full orchestrator surface.
     """
     from co_cli.agent.toolset import _CallSeamToolset, _tool_visibility_filter
 
     combined = CombinedToolset([native_toolset, *mcp_toolsets])
-    filtered = combined.filtered(_tool_visibility_filter)
+
+    def visibility_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -> bool:
+        if tool_def.name in name_blocklist:
+            return False
+        return _tool_visibility_filter(ctx, tool_def)
+
+    filtered = combined.filtered(visibility_filter)
     return _CallSeamToolset(filtered)

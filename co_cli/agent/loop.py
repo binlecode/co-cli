@@ -364,14 +364,30 @@ def _interrupted_result(state: TurnState, turn_usage: RunUsage) -> TurnResult:
 # ---------------------------------------------------------------------------
 
 
-def _build_subagent_toolset(spec: Any) -> Any:
+def _build_subagent_toolset(spec: Any, deps: CoDeps) -> Any:
     """Build the subagent's tool surface (mirror ``build_task_agent``) and route dispatch to it.
 
-    Task agents wire their own minimal tool surface from ``spec.tool_names`` (all
-    ``requires_approval=False``); the forked deps carry no ``deps.toolset``. Setting it to the
-    subagent toolset lets the owned ``dispatch_tools`` / ``build_tool_defs`` operate on it
-    exactly as they do for the orchestrator's toolset.
+    Two modes (``spec.surface_mode``). FLAT_EXACT (default): wire a plain toolset from
+    ``spec.tool_names`` (all ``requires_approval=False``) — the closed-surface specialist
+    path, byte-for-byte today's behavior. VISIBILITY_MODEL: assemble the orchestrator's
+    own surface (native + the connected MCP toolsets on ``deps.mcp_toolsets``, visibility-
+    filtered, ``_CallSeamToolset``-wrapped) minus a structural blocklist — the open general
+    worker, which sees ALWAYS tools, can self-load DEFERRED ones via ``tool_view``, and
+    carries each tool's real ``requires_approval``/``sequential`` flags. Either way the
+    forked deps carry no ``deps.toolset`` until set here, so the owned ``dispatch_tools`` /
+    ``build_tool_defs`` operate on it exactly as they do for the orchestrator's toolset.
     """
+    from co_cli.agent.spec import SurfaceModeEnum
+
+    if spec.surface_mode is SurfaceModeEnum.VISIBILITY_MODEL:
+        from co_cli.agent.core import assemble_routing_toolset, build_native_toolset
+        from co_cli.agent.delegation import _DELEGATE_AGENT_BLOCKLIST
+
+        native_toolset, _ = build_native_toolset()
+        return assemble_routing_toolset(
+            native_toolset, deps.mcp_toolsets, name_blocklist=_DELEGATE_AGENT_BLOCKLIST
+        )
+
     from pydantic_ai.toolsets import FunctionToolset
 
     from co_cli.agent.toolset import _CallSeamToolset
@@ -416,14 +432,14 @@ async def run_standalone_owned(
     the return lets the parity test assert the structured output.
 
     ``propagate_approvals`` is the delegated-vs-daemon discriminator (NOT ``frontend is
-    None``): when True (the delegated-child path), each step runs ``collect_inline_approvals``
-    before dispatch so an approval-required child call surfaces on the parent's ``frontend``
-    (marked delegated-origin). A delegated child with ``frontend is None`` (headless parent)
-    still runs the collector, which auto-denies — a write-capable child never acts unprompted.
+    None``): when True (the delegated-agent path), each step runs ``collect_inline_approvals``
+    before dispatch so an approval-required delegated call surfaces on the parent's ``frontend``
+    (marked delegated-origin). A delegated agent with ``frontend is None`` (headless parent)
+    still runs the collector, which auto-denies — a write-capable agent never acts unprompted.
     When False (the ``run_standalone`` daemon default) no collector runs and dispatch is
     byte-for-byte identical to today; daemon surfaces carry no approval-required tools anyway.
     ``dispatch_tools`` keeps ``frontend=None`` in both branches — only the collector gets the
-    real frontend, so the child's routine tool activity stays silent (D-3).
+    real frontend, so the delegated agent's routine tool activity stays silent (D-3).
     """
     from pydantic import ValidationError as _ValidationError
     from pydantic_ai.messages import RetryPromptPart
@@ -433,13 +449,9 @@ async def run_standalone_owned(
     if deps.model is None:
         raise ValueError(f"{spec.name}: run_standalone_owned requires deps.model to be set.")
 
-    deps.toolset = _build_subagent_toolset(spec)
-    instructions = _subagent_instructions(spec, deps)
-    instr_parts = [InstructionPart(content=instructions, dynamic=False)] if instructions else []
+    deps.toolset = _build_subagent_toolset(spec, deps)
     output_defs, processor = build_output_toolset(spec.output_type)
     output_name = output_defs[0].name
-
-    function_defs = await build_tool_defs(deps)
 
     if settings is None:
         settings = deps.model.settings_noreason
@@ -462,6 +474,11 @@ async def run_standalone_owned(
     try:
         requests = 0
         while requests < request_limit:
+            instructions = _subagent_instructions(spec, deps)
+            instr_parts = (
+                [InstructionPart(content=instructions, dynamic=False)] if instructions else []
+            )
+            function_defs = await build_tool_defs(deps)
             params = build_request_params(
                 instruction_parts=instr_parts,
                 function_tools=function_defs,
