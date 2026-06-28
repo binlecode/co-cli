@@ -35,6 +35,7 @@ from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
+    ToolCallPart,
     ToolReturnPart,
 )
 from pydantic_ai.models import ModelRequestParameters
@@ -74,6 +75,59 @@ async def run_history_processors(history: list[ModelMessage], deps: CoDeps) -> l
             result = await result
         messages = result
     return messages
+
+
+_INTERRUPTED_TOOL_STUB = "Tool call interrupted; no result."
+
+
+def fill_unanswered_tool_calls(history: list[ModelMessage]) -> list[ModelMessage]:
+    """Insert synthetic tool-return stubs for any unanswered ``ToolCallPart`` (every-step net).
+
+    For any ``ModelResponse`` whose ``ToolCallPart`` ids are not answered by the
+    immediately-following message, **insert** a fresh ``ModelRequest`` carrying a
+    ``ToolReturnPart`` stub per unanswered id directly after that response — never mutate
+    a following message (CD-M-1: the stub must land between the unanswered response and any
+    abort marker for ``clean_message_history`` to merge it into a protocol-valid request).
+
+    A no-op under normal intra-turn flow (the loop appends a ``ModelRequest`` after every
+    dispatch, so no response is left unanswered within a turn). Load-bearing only on the
+    first step of the turn following an interrupt, where ``_interrupted_result`` retains the
+    unanswered response (the deliberate drop→fill divergence, milestone OQ-6) and appends the
+    abort marker after it. Idempotent: once a stub is inserted, the response is answered, so a
+    re-run is a no-op.
+    """
+    result: list[ModelMessage] = []
+    for index, message in enumerate(history):
+        result.append(message)
+        if not isinstance(message, ModelResponse):
+            continue
+        call_names = {
+            part.tool_call_id: part.tool_name
+            for part in message.parts
+            if isinstance(part, ToolCallPart)
+        }
+        if not call_names:
+            continue
+        following = history[index + 1] if index + 1 < len(history) else None
+        answered: set[str] = set()
+        if isinstance(following, ModelRequest):
+            answered = {
+                part.tool_call_id
+                for part in following.parts
+                if isinstance(part, ToolReturnPart | RetryPromptPart)
+            }
+        stubs = [
+            ToolReturnPart(
+                tool_name=call_names[call_id],
+                tool_call_id=call_id,
+                content=_INTERRUPTED_TOOL_STUB,
+            )
+            for call_id in call_names
+            if call_id not in answered
+        ]
+        if stubs:
+            result.append(ModelRequest(parts=stubs))
+    return result
 
 
 def clean_message_history(messages: list[ModelMessage]) -> list[ModelMessage]:

@@ -14,9 +14,13 @@ dispatch, and this primitive; they differ only in instruction assembly, request 
 (``output_tools``), termination predicate, rendering, and approval — realizing the
 milestone's "single driver core for both" without duplicating the request mechanics.
 
-Phase 2 is the no-approval / no-recovery slice: a provider error / overflow / interrupt ends
-the turn as a clean terminal ``TurnResult`` (compact-and-retry and length-continuation are
-Phase 4). The graph path stays default and byte-for-byte unchanged.
+Phase 4 relocates the graph path's error/recovery machinery here as inline code: a single
+in-loop catch classifies provider errors (``recovery.classify_provider_error``) and recovers
+inline — context overflow strip-then-summarizes and retries once, an HTTP 400 tool-call
+rejection reflects to the model within a budget, length-truncated answers continue with a
+boosted token budget, and transient/timeout/malformed errors surface terminal with the graph's
+parity messages. Interrupt appends the abort marker; every step's preflight fills unanswered
+tool-call ids. The graph path stays default and byte-for-byte unchanged.
 """
 
 from __future__ import annotations
@@ -57,11 +61,20 @@ from co_cli.agent.preflight import (
     build_static_instructions,
     build_tool_defs,
     clean_message_history,
+    fill_unanswered_tool_calls,
     run_history_processors,
+)
+from co_cli.agent.recovery import (
+    _HTTP_400_REFLECT_BACKOFF_SECS,
+    ErrorAction,
+    ErrorClass,
+    classify_provider_error,
+    length_retry_settings,
 )
 from co_cli.agent.turn_state import ToolCapState, TurnExit, TurnState
 from co_cli.config.llm import resolve_request_limit
 from co_cli.config.tuning import TOOL_CAP_HARD_STOP_CONSECUTIVE
+from co_cli.context.compaction import recover_overflow_history
 from co_cli.display.stream_renderer import StreamRenderer
 from co_cli.llm.model_turn import model_turn
 from co_cli.observability.tracing import current_span, trace
@@ -180,8 +193,9 @@ async def run_turn_owned(
     """Execute one orchestrator turn through the owned loop (flag-on path).
 
     Mirrors ``run_turn``'s contract — returns a ``TurnResult`` the chat loop pattern-matches
-    on — for the no-approval / no-recovery slice. Provider errors / overflow / interrupt end
-    the turn as a clean terminal result (Phase 4 owns recovery).
+    on. Provider errors are classified and recovered inline inside the step loop (the single
+    classification site, CD-M-2); the turn boundary here owns only interrupt (which can fire
+    during ``dispatch_tools``, not just the model request) plus a generic last-resort.
     """
     deps.runtime.reset_for_turn()
     deps.usage_accumulator.reset()
@@ -216,15 +230,12 @@ async def run_turn_owned(
         return result
     except (KeyboardInterrupt, asyncio.CancelledError):
         return _interrupted_result(state, turn_usage)
-    except (ModelHTTPError, ModelAPIError, httpx.ReadError, TimeoutError) as exc:
+    except Exception as exc:
+        # Last-resort: a truly unexpected exception escaping dispatch_tools. Provider
+        # errors are classified and surfaced in-loop (CD-M-2), so they never reach here;
+        # dispatch_tools absorbs tool errors as payloads, so this fires only on a bug.
         frontend.on_status(f"Provider error — turn ended: {exc}")
         span.add_event("provider_error", {"error.type": type(exc).__name__})
-        return _terminal_result(
-            state, turn_usage, outcome="error", exit_reason=TurnExit.PROVIDER_ERROR
-        )
-    except UnexpectedModelBehavior as exc:
-        frontend.on_status(f"Model returned malformed output: {exc}")
-        span.add_event("malformed_output", {"error.type": type(exc).__name__})
         return _terminal_result(
             state, turn_usage, outcome="error", exit_reason=TurnExit.PROVIDER_ERROR
         )
@@ -255,7 +266,14 @@ async def _orchestrator_step_loop(
     frontend: Frontend,
     turn_usage: RunUsage,
 ) -> TurnResult:
-    """Run the per-step orchestrator loop until a terminal condition, returning a TurnResult."""
+    """Run the per-step orchestrator loop until a terminal condition, returning a TurnResult.
+
+    ``settings`` is a mutable loop-local: the length-continuation retry boosts it in place so
+    the larger token budget persists across the re-run steps. The provider-error catch around
+    ``_drive_model_request`` is the single classification site (CD-M-2) — it both recovers
+    (overflow / 400) and surfaces terminal errors with their graph-parity messages.
+    """
+    span = current_span()
     requests_completed = 0
     while True:
         if request_limit is not None and requests_completed >= request_limit:
@@ -267,6 +285,7 @@ async def _orchestrator_step_loop(
             )
 
         processed = await run_history_processors(state.history, deps)
+        processed = fill_unanswered_tool_calls(processed)
         state.history = processed
         instr = _instruction_parts_for_step(
             deps, static_instructions, processed, requests_completed
@@ -275,9 +294,24 @@ async def _orchestrator_step_loop(
         params = build_request_params(instruction_parts=instr, function_tools=tool_defs)
         request_messages = clean_message_history(processed)
 
-        response, step_usage = await _drive_model_request(
-            deps, request_messages, params, settings, renderer, stall_window
-        )
+        try:
+            response, step_usage = await _drive_model_request(
+                deps, request_messages, params, settings, renderer, stall_window
+            )
+        except (
+            ModelHTTPError,
+            ModelAPIError,
+            httpx.ReadError,
+            TimeoutError,
+            UnexpectedModelBehavior,
+        ) as exc:
+            err = classify_provider_error(exc)
+            terminal = await _recover_provider_error(
+                err, exc, state, deps, frontend, span, turn_usage
+            )
+            if terminal is not None:
+                return terminal
+            continue
         requests_completed += 1
         state.model_requests += 1
         turn_usage.incr(step_usage)
@@ -285,16 +319,29 @@ async def _orchestrator_step_loop(
         calls = _tool_calls(response)
         if not calls:
             renderer.finish()
-            state.history = [*state.history, response]
             if _is_reasoning_overflow(response):
+                state.history = [*state.history, response]
                 frontend.on_status(_REASONING_OVERFLOW_MESSAGE)
                 state.exit_reason = TurnExit.REASONING_OVERFLOW
                 return _terminal_result(
                     state, turn_usage, outcome="error", exit_reason=TurnExit.REASONING_OVERFLOW
                 )
+            boosted = length_retry_settings(response, settings)
+            if boosted is not None:
+                # Length-continuation retry: discard the truncated partial (do NOT append it
+                # to history) and re-run from the originating user turn with a larger budget.
+                # Dropping the partial keeps the prompt from appearing twice and guarantees
+                # history ends on a request, never a bare assistant turn.
+                settings = boosted
+                frontend.on_status(
+                    f"Response truncated — retrying with {boosted['max_tokens']:,} output tokens…"
+                )
+                continue
+            state.history = [*state.history, response]
             output = _final_text(response)
             if not renderer.streamed_text and output:
                 frontend.on_final_output(output)
+            _emit_output_limit_diagnostics(response, deps, frontend, span)
             state.exit_reason = TurnExit.FINAL_TEXT
             return _continue_result(state, turn_usage, output)
 
@@ -320,6 +367,120 @@ async def _orchestrator_step_loop(
                 frontend.on_final_output(salvaged)
             state.exit_reason = TurnExit.TOOL_CAP
             return _continue_result(state, turn_usage, salvaged)
+
+
+async def _recover_provider_error(
+    err: ErrorClass,
+    exc: Exception,
+    state: TurnState,
+    deps: CoDeps,
+    frontend: Frontend,
+    span: Any,
+    turn_usage: RunUsage,
+) -> TurnResult | None:
+    """Apply in-loop recovery for a classified provider error (the single catch's body).
+
+    Returns None to retry the step loop (overflow compacted, 400 reflected), or a terminal
+    ``TurnResult`` when the error is terminal or recovery/budget is exhausted. Overflow NEVER
+    falls through to the 400 path (graph invariant) — the classifier routes them disjointly.
+    """
+    match err.action:
+        case ErrorAction.RECOVER_OVERFLOW:
+            if not state.overflow_recovery_attempted:
+                state.overflow_recovery_attempted = True
+                # recover_overflow_history self-commits (commit_compaction + thrash reset);
+                # the loop only assigns its return — no extra bookkeeping (CD-m-4).
+                compacted = await recover_overflow_history(deps, state.history)
+                if compacted is not None:
+                    state.history = compacted
+                    frontend.on_status("Context overflow — compacting and retrying...")
+                    return None
+            frontend.on_status("Context overflow — unrecoverable.")
+            span.add_event(*err.span_event)
+            return _terminal_result(
+                state, turn_usage, outcome="error", exit_reason=err.exit_reason
+            )
+        case ErrorAction.REFLECT_400:
+            if state.tool_reformat_budget > 0:
+                state.tool_reformat_budget -= 1
+                state.history = [*state.history, _reflection_request(exc)]
+                frontend.on_status("Tool call rejected (HTTP 400), reflecting to model...")
+                await asyncio.sleep(_HTTP_400_REFLECT_BACKOFF_SECS)
+                return None
+            frontend.on_status(err.message)
+            span.add_event(*err.span_event)
+            return _terminal_result(
+                state, turn_usage, outcome="error", exit_reason=err.exit_reason
+            )
+        case _:
+            frontend.on_status(err.message)
+            span.add_event(*err.span_event)
+            return _terminal_result(
+                state, turn_usage, outcome="error", exit_reason=err.exit_reason
+            )
+
+
+def _reflection_request(exc: Exception) -> ModelRequest:
+    """Build the HTTP 400 tool-call reflection nudge (verbatim graph wording)."""
+    body = getattr(exc, "body", exc)
+    return ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=(
+                    "Your previous tool call was rejected by the "
+                    f"model provider: {body}. Please reformulate "
+                    "your tool call with valid JSON arguments."
+                )
+            )
+        ]
+    )
+
+
+def _emit_output_limit_diagnostics(
+    response: ModelResponse,
+    deps: CoDeps,
+    frontend: Frontend,
+    span: Any,
+) -> None:
+    """Emit finish-reason + context-overflow status after a completed turn (graph parity).
+
+    Sources the diagnostics off the final ``ModelResponse`` directly (CD-m-3):
+    ``response.finish_reason`` gates the truncation status, and ``response.usage.input_tokens``
+    (the live context-window size, NOT the turn-cumulative usage) is the overflow-ratio
+    numerator.
+    """
+    if response.finish_reason == "length":
+        frontend.on_status(
+            "Response truncated at output token ceiling — use /compact to free context."
+        )
+    latest_input = response.usage.input_tokens or 0
+    if latest_input <= 0:
+        return
+    ratio = latest_input / deps.model_max_context_tokens
+    span.add_event(
+        "ctx_overflow_check",
+        {
+            "ctx.input_tokens": latest_input,
+            "ctx.max_context_tokens": deps.model_max_context_tokens,
+            "ctx.ratio": ratio,
+        },
+    )
+    if ratio >= 1.0:
+        frontend.on_status(
+            f"Context limit reached ({latest_input:,} / {deps.model_max_context_tokens:,} tokens)"
+            " — prompt may have been truncated. Use /compact or /new."
+        )
+    elif ratio >= deps.config.compaction.compaction_ratio:
+        # Only nudge when proactive compaction has given up (anti-thrash gate active);
+        # below that threshold proactive fires on the next request, making it redundant.
+        thrash_count = deps.runtime.consecutive_low_yield_proactive_compactions
+        if thrash_count >= deps.config.compaction.proactive_thrash_window:
+            frontend.on_status(
+                f"Context {ratio:.0%} full ({latest_input:,} /"
+                f" {deps.model_max_context_tokens:,} tokens)."
+                " Auto-compaction paused — try /compact for one more pass or /new for a"
+                " fresh session."
+            )
 
 
 def _continue_result(state: TurnState, turn_usage: RunUsage, output: Any) -> TurnResult:
@@ -348,11 +509,28 @@ def _terminal_result(
 
 
 def _interrupted_result(state: TurnState, turn_usage: RunUsage) -> TurnResult:
+    """Build the interrupted TurnResult: append the abort marker, retain history.
+
+    Unlike the graph (which drops the last unanswered ModelResponse), the owned path
+    **retains** it — the every-step ``fill_unanswered_tool_calls`` net synthesizes the
+    missing tool returns on the next turn (the deliberate drop→fill divergence, OQ-6). The
+    abort marker (verbatim graph wording) tells the model the previous turn was interrupted.
+    """
     state.exit_reason = TurnExit.INTERRUPTED
+    abort_marker = ModelRequest(
+        parts=[
+            UserPromptPart(
+                content=(
+                    "The user interrupted the previous turn. Some actions "
+                    "may be incomplete. Verify current state before continuing."
+                )
+            )
+        ]
+    )
     return TurnResult(
         outcome="continue",
         interrupted=True,
-        messages=state.history,
+        messages=[*state.history, abort_marker],
         output=None,
         usage=turn_usage,
         model_requests=state.model_requests,

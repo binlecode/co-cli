@@ -103,10 +103,14 @@ class TurnState:
     history is the request-building source. ``model_requests`` counts every
     ``ModelResponse`` across the turn's steps (drives the post-turn skill-review gate,
     matching the graph path's accumulator). ``exit_reason`` is set once the loop
-    terminates.
+    terminates. ``overflow_recovery_attempted`` latches the once-per-turn emergency
+    compaction; ``tool_reformat_budget`` bounds the HTTP 400 tool-call reflection retries
+    (both Phase-4 recovery state, parity with the graph's ``_TurnState``).
     """
 
     history: list[ModelMessage]
     model_requests: int = 0
     exit_reason: TurnExit | None = None
     cap_state: ToolCapState = field(default_factory=ToolCapState)
+    overflow_recovery_attempted: bool = False
+    tool_reformat_budget: int = 2
