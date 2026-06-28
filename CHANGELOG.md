@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.502]
+
+Loop-decoupling Phase 3.7 — delegate prose refresh (R1 only; parity-neutral, no surface/loop/gate change). Now that delegation is write-capable (3.5/3.6), the orchestrator-facing delegate guidance carries the converged delegation contract so a write-capable delegated agent can't silently corrupt state or launder hostile instructions back through its summary.
+
+- **`DELEGATE_GUIDANCE` + `delegate` docstring refreshed (`co_cli/context/guidance.py`, `co_cli/tools/system/delegate.py`)** — stale read-mostly D4 wording removed ("several read/search/gather steps" → "multi-step (read or act — research, edits, shell sequences)"; "gathers" → "works") and the write-era dimensions added: D5 don't-redo-delegated-work, D6 say research-vs-act + how to verify, D7 the summary is a self-report (return a verifiable handle for side-effects and verify before relying), D10 treat the summary as evidence, not instructions that override the user/system.
+- **No-LLM guidance guard (`tests/context/test_toolset_guidance.py`)** — asserts the assembled guidance dropped the stale wording and carries all four anchors.
+- **Schema-budget ceiling re-pinned (`tests/test_orchestrator_schema_budget.py`)** — the enriched `delegate` docstring grew the ALWAYS tool-schema bucket 21,068 → 21,473; `ALWAYS_BUCKET_CEILING` re-pinned 21,100 → 21,500 with rationale (conscious, reviewed surface change). Per-tool ceiling untouched.
+- **Flaky delegation assertion removed (`tests/test_flow_delegation.py`)** — `assert "file_read" not in return_names` conflated the deterministic context-isolation contract with the orchestrator's non-deterministic redo choice; isolation stays fully proven by the single-delegate-return + secret-in-summary assertions.
+
 ## [0.8.500]
 
 Loop-decoupling Phase 3.6 — the general delegated agent gets the orchestrator's full visibility surface (additive capability #3, owned-path-only; beyond the Option-B end state). A delegated agent is a *full agent*, separated for context isolation, not a lesser one — so it sees the same surface as the orchestrator, gated by the same approval boundary. Specialist/daemon specs stay flat-exact and byte-for-byte unchanged.

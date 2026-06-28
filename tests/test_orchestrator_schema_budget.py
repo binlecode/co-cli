@@ -49,7 +49,13 @@ from co_cli.personality.prompts.loader import load_soul_critique
 # → bucket 20,016 → 21,068. Re-pinned consciously: ALWAYS (not DEFERRED) is the reviewed decision —
 # a flagship in-turn-delegation capability under-fires if hidden behind a tool_view reveal, so the
 # one-schema prefill cost buys discoverability (its when-to-delegate cue is what counters under-firing).
-ALWAYS_BUCKET_CEILING = 21_100
+# 2026-06-27: loop-decoupling Phase 3.7 enriched the `delegate` docstring with the converged
+# write-era delegation contract (D5 don't-redo, D6 research-vs-act + verify, D7 verify side-effects,
+# D10 evidence-not-authority) → delegate schema 970 → 1,375 chars, bucket 21,068 → 21,473. Re-pinned
+# consciously: now that delegation is write-capable, these are the minimal cues that stop the
+# orchestrator acting on an unverified self-report or re-running delegated work — a reviewed,
+# non-deferrable cost on an ALWAYS tool (same class as the original when-to-delegate cue).
+ALWAYS_BUCKET_CEILING = 21_500
 # Per-tool tripwire against UNINTENDED docstring bloat — pinned just above the
 # largest ALWAYS tool, not a first-principle budget (the principled cap is the
 # cumulative ALWAYS_BUCKET_CEILING: every ALWAYS schema ships in every turn's
