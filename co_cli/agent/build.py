@@ -122,12 +122,18 @@ def build_task_agent(spec: TaskAgentSpec, deps: CoDeps, model: Any) -> Agent[CoD
     for fn in tool_fns:
         toolset.add_function(fn, requires_approval=False)
 
+    # Match output-JSON retries to tool retries: a small model that fumbles a
+    # structured final_result payload needs as many reattempts to repair it as it
+    # gets for a tool call. The pydantic-ai default (1) is too tight and exhausts on
+    # the occasional malformed-JSON output, ending the run with UnexpectedModelBehavior.
+    # Parity with the owned path's validation re-prompt loop (run_standalone_owned).
     agent: Agent[CoDeps, Any] = Agent(
         model,
         deps_type=CoDeps,
         output_type=spec.output_type,
         instructions=instructions,
         tool_retries=deps.config.tool_retries,
+        output_retries=deps.config.tool_retries,
         toolsets=[_CallSeamToolset(toolset)],
     )
     return agent

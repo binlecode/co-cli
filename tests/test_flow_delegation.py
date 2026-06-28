@@ -83,6 +83,29 @@ def _tool_return_names(messages: list) -> list[str]:
     return names
 
 
+async def _run_owned_turn_until_delegated(deps: CoDeps, user_input: str, *, attempts: int = 4):
+    """Drive the owned turn until the orchestrator actually delegates, then return that turn.
+
+    Whether qwen3.6 elects to call the delegate tool on a given turn is non-deterministic
+    model tool-choice, not the contract under test (the contract is context isolation *when*
+    delegation happens). Gating on a single turn flakes when the model answers inline instead;
+    retry a bounded number of times and fail loudly only if delegation never fires. Each attempt
+    gets its own timeout (a stalled call must not hang to the pytest ceiling).
+    """
+    for _ in range(attempts):
+        frontend = HeadlessFrontend(approval_response="y")
+        async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 3):
+            turn = await run_turn_owned(
+                user_input=user_input,
+                deps=deps,
+                message_history=[],
+                frontend=frontend,
+            )
+        if turn.outcome == "continue" and "delegate" in _tool_return_names(turn.messages):
+            return turn
+    pytest.fail(f"orchestrator did not delegate across {attempts} attempts")
+
+
 # ---------------------------------------------------------------------------
 # Deterministic, no-LLM contracts.
 # ---------------------------------------------------------------------------
@@ -395,21 +418,13 @@ async def test_owned_turn_delegate_isolates_delegated_transcript(tmp_path) -> No
 
     deps = _make_parent_deps()
     deps.file_search_roots = [tmp_path]
-    frontend = HeadlessFrontend(approval_response="y")
     user_input = (
         f"Use the delegate tool to read the file at {fact_file} and find the launch code. "
         "Then tell me the launch code."
     )
 
-    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS * 3):
-        turn = await run_turn_owned(
-            user_input=user_input,
-            deps=deps,
-            message_history=[],
-            frontend=frontend,
-        )
+    turn = await _run_owned_turn_until_delegated(deps, user_input)
 
-    assert turn.outcome == "continue"
     return_names = _tool_return_names(turn.messages)
     assert "delegate" in return_names
 

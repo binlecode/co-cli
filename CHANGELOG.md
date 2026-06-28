@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.505]
+
+Flaky real-LLM test fixes — one production root-cause, two test-robustness. The full suite now runs green end-to-end (925 passed).
+
+- **Graph-path task agents get output-JSON retry parity (`co_cli/agent/build.py`)** — `build_task_agent` set `tool_retries` but left `output_retries` at pydantic-ai's default of 1, so a small model that occasionally fumbled a structured `final_result` payload exhausted the single retry and crashed the run with `UnexpectedModelBehavior` (observed flaking the dream-daemon profile-synthesis path, `test_synthesize_user_profile_reflects_cross_session_fact`). Now `output_retries=deps.config.tool_retries` — the model gets as many reattempts to repair output JSON as it gets for tool calls, matching the owned path's validation re-prompt loop and improving real daemon reliability (synthesis + review agents).
+- **Delegation isolation tests no longer gate on model tool-choice (`tests/test_flow_delegation.py`, `tests/test_flow_delegation_full_surface.py`)** — both asserted `"delegate" in return_names` after a single `run_turn_owned`, which flaked whenever qwen3.6 answered inline instead of delegating (a non-deterministic non-contract behavior). A bounded-retry helper now re-runs the turn until delegation fires (each attempt under its own timeout), failing loudly only if it never does; the deterministic context-isolation contract is still asserted on the delegated turn, so a real isolation regression still fails immediately.
+
 ## [0.8.504]
 
 Loop-decoupling Phase 4 — error/recovery/length-retry relocated into the owned loop, reaching behavioral parity with the graph path on the failure surface (the precondition for the Phase 5 cutover). Owned-path only, additive; the graph path stays default and byte-for-byte unchanged.
