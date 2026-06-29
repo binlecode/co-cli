@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from evals._deps import make_eval_deps
+from evals._deps import drive_turn, make_eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
@@ -45,7 +45,6 @@ from evals._timeouts import (
 from evals._trace import record_turn, response_text
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from co_cli.agent.orchestrate import run_turn
 from co_cli.commands.core import dispatch
 from co_cli.commands.resume import _rehydrate_todos
 from co_cli.commands.types import (
@@ -126,7 +125,7 @@ async def case_w2_d_resume_helpers_rehydrate(
                 turn_index=0,
                 user_input=seed_input,
                 prior_message_count=len(history),
-                run_turn_callable=lambda: run_turn(
+                run_turn_callable=lambda: drive_turn(
                     agent=agent,
                     user_input=seed_input,
                     deps=deps,
@@ -183,7 +182,7 @@ async def case_w2_d_resume_helpers_rehydrate(
                     turn_index=1,
                     user_input=followup_input,
                     prior_message_count=len(prior_messages),
-                    run_turn_callable=lambda: run_turn(
+                    run_turn_callable=lambda: drive_turn(
                         agent=agent,
                         user_input=followup_input,
                         deps=deps,
@@ -310,7 +309,7 @@ async def case_w2_e_compact_replaces_with_summary(
                 turn_index=0,
                 user_input=marker_input,
                 prior_message_count=len(history),
-                run_turn_callable=lambda: run_turn(
+                run_turn_callable=lambda: drive_turn(
                     agent=agent,
                     user_input=marker_input,
                     deps=deps,
@@ -332,7 +331,7 @@ async def case_w2_e_compact_replaces_with_summary(
                     turn_index=i + 1,
                     user_input=user_input,
                     prior_message_count=len(history),
-                    run_turn_callable=lambda u=user_input, h=history: run_turn(
+                    run_turn_callable=lambda u=user_input, h=history: drive_turn(
                         agent=agent,
                         user_input=u,
                         deps=deps,
@@ -388,7 +387,7 @@ async def case_w2_e_compact_replaces_with_summary(
                     turn_index=target_turns + 1,
                     user_input=followup_input,
                     prior_message_count=len(post_compact_history),
-                    run_turn_callable=lambda: run_turn(
+                    run_turn_callable=lambda: drive_turn(
                         agent=agent,
                         user_input=followup_input,
                         deps=deps,

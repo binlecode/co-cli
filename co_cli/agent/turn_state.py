@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 from co_cli.config.tuning import (
     MAX_TOOL_CALLS_PER_MODEL_REQUEST,
@@ -30,6 +30,9 @@ from co_cli.config.tuning import (
 
 if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage
+
+# Typed return value from the owned turn driver (run_turn_owned) to the chat loop.
+TurnOutcome = Literal["continue", "error"]
 
 
 class TurnExit(Enum):
@@ -114,3 +117,20 @@ class TurnState:
     cap_state: ToolCapState = field(default_factory=ToolCapState)
     overflow_recovery_attempted: bool = False
     tool_reformat_budget: int = 2
+
+
+@dataclass
+class TurnResult:
+    """Result of one agent turn, returned by the owned driver to the chat loop.
+
+    Callers pattern-match on ``interrupted`` / ``outcome``; ``output`` and ``usage``
+    are forwarded opaquely (kept ``Any`` — the chat loop never inspects their fields).
+    ``model_requests`` counts the ModelResponses across the turn (post-turn skill-review gate).
+    """
+
+    outcome: TurnOutcome
+    interrupted: bool
+    messages: list[ModelMessage] = field(default_factory=list)
+    output: Any = None
+    usage: Any = None
+    model_requests: int = 0

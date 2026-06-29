@@ -59,7 +59,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from evals._deps import eval_deps
+from evals._deps import drive_turn, eval_deps
 from evals._fixtures import load_fixture
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
@@ -77,7 +77,6 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.agent.orchestrate import run_turn
 from co_cli.daemons.dream._housekeeping import merge_memory, synthesize_user_profile
 from co_cli.daemons.dream.state import HousekeepingState, SessionMarker
 from co_cli.session.browser import list_sessions
@@ -185,7 +184,7 @@ async def _drive_turns(
                 user_input=user_input,
                 prior_message_count=prior_len,
                 run_turn_callable=(
-                    lambda h=history, ui=user_input: run_turn(
+                    lambda h=history, ui=user_input: drive_turn(
                         agent=agent,
                         user_input=ui,
                         deps=deps,

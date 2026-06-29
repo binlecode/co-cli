@@ -19,8 +19,9 @@ from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.messages import BinaryContent, ModelMessage
 
 from co_cli.agent.build import build_orchestrator
-from co_cli.agent.orchestrate import TurnResult, run_turn
+from co_cli.agent.orchestrate import run_turn
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
+from co_cli.agent.turn_state import TurnResult
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import (
     create_deps,
@@ -197,12 +198,26 @@ async def _run_foreground_turn(
         if deps.config.llm.use_owned_loop:
             from co_cli.agent.loop import run_turn_owned
 
-            turn_result = await run_turn_owned(
-                user_input=user_input,
-                deps=deps,
-                message_history=message_history,
-                frontend=frontend,
-            )
+            try:
+                turn_result = await run_turn_owned(
+                    user_input=user_input,
+                    deps=deps,
+                    message_history=message_history,
+                    frontend=frontend,
+                )
+            except asyncio.CancelledError:
+                # Esc cancels the active turn task; the owned loop stashed its
+                # drop->fill result before re-raising. This caller owns the REPL
+                # interrupt, so absorb the cancellation, clear it, and finalize the
+                # drop->fill. A cancellation with no stashed result is not ours
+                # (genuine outer cancellation) — let it propagate.
+                stashed = deps.runtime.pending_interrupt_result
+                if stashed is None:
+                    raise
+                task = asyncio.current_task()
+                if task is not None:
+                    task.uncancel()
+                turn_result = stashed
         else:
             turn_result = await run_turn(
                 agent=agent,

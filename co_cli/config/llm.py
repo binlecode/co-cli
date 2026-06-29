@@ -306,11 +306,11 @@ class LlmSettings(BaseModel):
     # model size and hardware; a fixed window risks false stalls on slow local setups.
     run_stall_timeout_secs: float = Field(default=RUN_STALL_TIMEOUT_SECS, gt=0)
     # Strangler-fig cutover lever (loop-decoupling milestone): select co's owned,
-    # graph-free turn loop instead of the pydantic-ai agent graph. Default False keeps
-    # the graph path live and default; True routes both the orchestrator turn
-    # (main.py) and the subagent driver (agent/run.py) through the owned loop. Read only
-    # at those two driver entry points; not an env var (deliberate, real cutover toggle).
-    use_owned_loop: bool = Field(default=False)
+    # graph-free turn loop instead of the pydantic-ai agent graph. Default True (Phase 5
+    # cutover) routes both the orchestrator turn (main.py) and the subagent driver
+    # (agent/run.py) through the owned loop; the graph path is deleted in the same phase.
+    # Read only at those two driver entry points; not an env var (deliberate cutover toggle).
+    use_owned_loop: bool = Field(default=True)
 
     @model_validator(mode="after")
     def _default_model_per_provider(self) -> LlmSettings:

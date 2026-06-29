@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from evals._deps import EvalFrontend, make_eval_deps
+from evals._deps import EvalFrontend, drive_turn, make_eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, EvalRun, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
@@ -38,7 +38,6 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.agent.orchestrate import run_turn
 from co_cli.daemons.dream._reviewer import process_review
 from co_cli.deps import CoDeps
 from co_cli.session.filename import session_filename
@@ -221,7 +220,7 @@ async def case_w3_g_forget_propagates_to_recall(
                 turn_index=0,
                 user_input=t0_input,
                 prior_message_count=len(history),
-                run_turn_callable=lambda: run_turn(
+                run_turn_callable=lambda: drive_turn(
                     agent=agent,
                     user_input=t0_input,
                     deps=deps,
@@ -252,7 +251,7 @@ async def case_w3_g_forget_propagates_to_recall(
                     turn_index=1,
                     user_input=t1_input,
                     prior_message_count=len(history),
-                    run_turn_callable=lambda: run_turn(
+                    run_turn_callable=lambda: drive_turn(
                         agent=agent,
                         user_input=t1_input,
                         deps=deps,
@@ -280,7 +279,7 @@ async def case_w3_g_forget_propagates_to_recall(
                     turn_index=2,
                     user_input=t2_input,
                     prior_message_count=len(history),
-                    run_turn_callable=lambda: run_turn(
+                    run_turn_callable=lambda: drive_turn(
                         agent=agent,
                         user_input=t2_input,
                         deps=deps,

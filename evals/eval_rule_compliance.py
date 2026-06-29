@@ -554,10 +554,10 @@ def _target_fired(tool_calls: list[ToolCallPart], target_tools: frozenset[str]) 
 
 async def _run_turn(agent: Any, deps: Any, frontend: Any, user_input: str) -> list[ToolCallPart]:
     """Drive one fresh single-turn agent run; return the turn's tool calls."""
-    from co_cli.agent.orchestrate import run_turn
+    from evals._deps import drive_turn
 
     async with asyncio.timeout(CALL_TIMEOUT_S):
-        result = await run_turn(
+        result = await drive_turn(
             agent=agent,
             user_input=user_input,
             deps=deps,

@@ -27,7 +27,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.agent.orchestrate import TurnResult
+from co_cli.agent.turn_state import TurnResult
 
 
 def _skill_view_turn(skill_name: str, call_id: str, reply: str) -> list:

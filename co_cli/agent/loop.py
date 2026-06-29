@@ -47,13 +47,6 @@ from pydantic_ai.usage import RunUsage
 
 from co_cli.agent.approval import collect_inline_approvals
 from co_cli.agent.dispatch import dispatch_tools
-from co_cli.agent.orchestrate import (
-    _REASONING_OVERFLOW_MESSAGE,
-    TOOL_CAP_NO_ANSWER_TEXT,
-    TurnResult,
-    _handle_model_request_event,
-    _last_assistant_text,
-)
 from co_cli.agent.preflight import (
     assemble_instructions,
     build_output_toolset,
@@ -71,11 +64,11 @@ from co_cli.agent.recovery import (
     classify_provider_error,
     length_retry_settings,
 )
-from co_cli.agent.turn_state import ToolCapState, TurnExit, TurnState
+from co_cli.agent.turn_state import ToolCapState, TurnExit, TurnResult, TurnState
 from co_cli.config.llm import resolve_request_limit
 from co_cli.config.tuning import TOOL_CAP_HARD_STOP_CONSECUTIVE
 from co_cli.context.compaction import recover_overflow_history
-from co_cli.display.stream_renderer import StreamRenderer
+from co_cli.display.stream_renderer import StreamRenderer, handle_model_request_event
 from co_cli.llm.model_turn import model_turn
 from co_cli.observability.tracing import current_span, trace
 from co_cli.observability.usage import record_usage
@@ -89,6 +82,31 @@ if TYPE_CHECKING:
     from co_cli.display.core import Frontend
 
 logger = logging.getLogger(__name__)
+
+_REASONING_OVERFLOW_MESSAGE = (
+    "Reasoning used the entire output budget before answering — "
+    "simplify your request, or raise max_tokens for this model."
+)
+
+TOOL_CAP_NO_ANSWER_TEXT = (
+    "Stopped after hitting the tool-call cap before producing an answer. "
+    "The work so far is in history — re-ask or narrow the request."
+)
+
+
+def _last_assistant_text(messages: list[ModelMessage]) -> str:
+    """Return the most recent non-empty assistant text in a message list, or ''.
+
+    Scans backwards for the latest ModelResponse whose TextParts join to non-empty
+    text. Used to salvage the model's last visible answer when a cap terminates the
+    turn without a usable final output.
+    """
+    for msg in reversed(messages):
+        if isinstance(msg, ModelResponse):
+            text = "".join(p.content for p in msg.parts if isinstance(p, TextPart)).strip()
+            if text:
+                return text
+    return ""
 
 
 def _unwrap_model(deps: CoDeps) -> Any:
@@ -144,7 +162,7 @@ async def _drive_model_request(
             async for event in stream:
                 stall.reschedule(loop.time() + stall_window)
                 if renderer is not None:
-                    _handle_model_request_event(event, renderer)
+                    handle_model_request_event(event, renderer)
             response = stream.get()
             usage = stream.usage()
     turn_usage = RunUsage()
@@ -228,8 +246,18 @@ async def run_turn_owned(
             turn_usage=turn_usage,
         )
         return result
-    except (KeyboardInterrupt, asyncio.CancelledError):
+    except KeyboardInterrupt:
+        # Headless/sync interrupt (no surrounding event loop to cancel the task):
+        # absorb directly into the drop->fill interrupted result.
         return _interrupted_result(state, turn_usage)
+    except asyncio.CancelledError:
+        # Cancellation we do NOT own — a user Esc (REPL) or an outer deadline
+        # (eval/test asyncio.timeout). Swallowing it here would defeat outer timeouts
+        # (a timed-out turn would masquerade as a silent empty answer). Stash the
+        # drop->fill result for the turn caller that owns the cancellation, then
+        # re-raise so the timeout propagates and structured concurrency holds.
+        deps.runtime.pending_interrupt_result = _interrupted_result(state, turn_usage)
+        raise
     except Exception as exc:
         # Last-resort: a truly unexpected exception escaping dispatch_tools. Provider
         # errors are classified and surfaced in-loop (CD-M-2), so they never reach here;

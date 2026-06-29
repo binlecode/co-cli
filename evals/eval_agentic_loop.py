@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from evals._deps import drive_turn
 from evals._fixtures import load_fixture
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
@@ -55,7 +56,6 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 
-from co_cli.agent.orchestrate import run_turn
 from co_cli.context.prompt_text import _is_shell_error_return
 
 _FIXTURE_NAME = "agentic_loop_baseline"
@@ -219,7 +219,7 @@ async def _drive_turns(
                 user_input=user_input,
                 prior_message_count=prior_len,
                 run_turn_callable=(
-                    lambda h=history, ui=user_input: run_turn(
+                    lambda h=history, ui=user_input: drive_turn(
                         agent=agent,
                         user_input=ui,
                         deps=deps,
@@ -651,7 +651,12 @@ async def _case_w12_d_completeness_gate(
         )
 
         completeness_ok = todo_used and (unresolved == 0 or flagged_blocked)
-        structural_ok = todo_read_called and completeness_ok
+        # Structural floor = the documented contract: a todo tool fired and no
+        # unresolved item remains unless the blocked goal is flagged in the closing
+        # summary. todo_read_called is informational only (reported above): the task
+        # asks the agent to track/update via a todo list, never to read it back, so
+        # gating on a stochastic todo_read call tested the wrong behavior.
+        structural_ok = completeness_ok
 
         async with asyncio.timeout(CALL_TIMEOUT_S):
             verdict = await judge_with_llm(

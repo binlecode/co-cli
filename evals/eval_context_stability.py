@@ -86,7 +86,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from evals._deps import make_eval_deps
+from evals._deps import drive_turn, make_eval_deps
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
 from evals._settings import apply_eval_window
@@ -94,7 +94,6 @@ from evals._timeouts import MULTI_TURN_COMPACT_BUDGET_S
 from evals._trace import record_turn
 from pydantic_ai.messages import ModelResponse, TextPart
 
-from co_cli.agent.orchestrate import run_turn
 from co_cli.config.tuning import SPILL_THRESHOLD_CHARS, SUMMARY_BUDGET_FLOOR
 from co_cli.context.compaction import extract_summary_body, summary_marker
 from co_cli.memory.frontmatter import render_frontmatter
@@ -426,7 +425,7 @@ async def case_cs_a_text_pressure_bounded(
                         turn_index=i,
                         user_input=user_input,
                         prior_message_count=len(history),
-                        run_turn_callable=lambda u=user_input, h=history: run_turn(
+                        run_turn_callable=lambda u=user_input, h=history: drive_turn(
                             agent=agent,
                             user_input=u,
                             deps=deps,
@@ -564,7 +563,7 @@ async def case_cs_a_text_pressure_bounded(
                     turn_index=_NUM_TURNS,
                     user_input=_COHERENCE_PROBE_PROMPT,
                     prior_message_count=len(history),
-                    run_turn_callable=lambda: run_turn(
+                    run_turn_callable=lambda: drive_turn(
                         agent=agent,
                         user_input=_COHERENCE_PROBE_PROMPT,
                         deps=deps,
@@ -906,7 +905,7 @@ async def case_cs_c_tool_spill_precedes_summarize(
                         turn_index=index,
                         user_input=user_input,
                         prior_message_count=len(history),
-                        run_turn_callable=lambda u=user_input, h=history: run_turn(
+                        run_turn_callable=lambda u=user_input, h=history: drive_turn(
                             agent=agent,
                             user_input=u,
                             deps=deps,

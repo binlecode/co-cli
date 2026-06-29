@@ -53,7 +53,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from evals._deps import make_eval_deps
+from evals._deps import drive_turn, make_eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
@@ -61,7 +61,6 @@ from evals._settings import apply_eval_window
 from evals._timeouts import CALL_TIMEOUT_S
 from evals._trace import record_turn, response_text
 
-from co_cli.agent.orchestrate import run_turn
 from co_cli.session.filename import session_filename
 
 _FIXTURE_UUID8 = "f1a2b3c4"
@@ -161,7 +160,7 @@ async def case_sr_a_concept_expansion(
                 turn_index=0,
                 user_input=user_input,
                 prior_message_count=0,
-                run_turn_callable=lambda: run_turn(
+                run_turn_callable=lambda: drive_turn(
                     agent=agent,
                     user_input=user_input,
                     deps=deps,

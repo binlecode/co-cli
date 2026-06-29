@@ -53,7 +53,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from evals._deps import EvalFrontend, make_eval_deps
+from evals._deps import EvalFrontend, drive_turn, make_eval_deps
 from evals._judge import judge_model_annotation, judge_with_llm
 from evals._observability import CaseResult, Verdict, open_eval_run
 from evals._ollama import ensure_ollama_warm
@@ -68,7 +68,6 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from co_cli.agent.orchestrate import run_turn
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, DelegateToAgent, SlashOutcome
 from co_cli.daemons.dream._housekeeping import merge_skills
@@ -186,7 +185,7 @@ async def case_w4_a_dispatch_user_skill(
                     turn_index=0,
                     user_input=outcome.delegated_input,
                     prior_message_count=0,
-                    run_turn_callable=lambda: run_turn(
+                    run_turn_callable=lambda: drive_turn(
                         agent=agent,
                         user_input=outcome.delegated_input,
                         deps=deps,
@@ -347,7 +346,7 @@ async def case_w4_b_skill_selection(
                     turn_index=index,
                     user_input=prompt,
                     prior_message_count=0,
-                    run_turn_callable=lambda p=prompt: run_turn(
+                    run_turn_callable=lambda p=prompt: drive_turn(
                         agent=agent,
                         user_input=p,
                         deps=deps,

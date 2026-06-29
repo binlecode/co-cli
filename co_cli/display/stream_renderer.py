@@ -27,6 +27,15 @@ import asyncio
 import time
 from typing import TYPE_CHECKING
 
+from pydantic_ai.messages import (
+    PartDeltaEvent,
+    PartStartEvent,
+    TextPart,
+    TextPartDelta,
+    ThinkingPart,
+    ThinkingPartDelta,
+)
+
 from co_cli.config.core import (
     DEFAULT_REASONING_DISPLAY,
     REASONING_DISPLAY_COLLAPSED,
@@ -188,3 +197,25 @@ def _format_elapsed(seconds: float) -> str:
     if total < 60:
         return f"{total}s"
     return f"{total // 60}m{total % 60}s"
+
+
+def handle_model_request_event(event: object, renderer: StreamRenderer) -> None:
+    """Render one event from a model-request node stream.
+
+    ``ModelRequestNode.stream()`` yields PartStartEvent/PartDeltaEvent/PartEndEvent
+    and FinalResultEvent only. PartEnd/FinalResult are side-effect free for rendering;
+    text may continue after FinalResultEvent. Pure SDK-event -> StreamRenderer glue,
+    consumed by the owned loop's model-request driver.
+    """
+    if isinstance(event, PartStartEvent):
+        if isinstance(event.part, ThinkingPart):
+            renderer.append_thinking(event.part.content)
+        elif isinstance(event.part, TextPart):
+            renderer.append_text(event.part.content)
+        return
+
+    if isinstance(event, PartDeltaEvent):
+        if isinstance(event.delta, ThinkingPartDelta):
+            renderer.append_thinking(event.delta.content_delta or "")
+        elif isinstance(event.delta, TextPartDelta):
+            renderer.append_text(event.delta.content_delta)

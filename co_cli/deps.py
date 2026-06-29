@@ -247,6 +247,12 @@ class CoRuntimeState:
     # message history is what lets reveals survive compaction for free — no history
     # preservation coupling. Not reset per-turn (a reveal holds for the whole session run).
     revealed_tools: set[str] = field(default_factory=set)
+    # Drop->fill hand-off across the interrupt boundary. The owned loop stashes the
+    # interrupted TurnResult here before re-raising CancelledError, so the REPL turn
+    # caller (which owns the Esc cancellation) can retrieve it and finalize the
+    # drop->fill, while an outer-timeout cancellation it does NOT own propagates
+    # cleanly. Typed Any to avoid a TurnResult import cycle into deps.
+    pending_interrupt_result: Any = field(default=None, repr=False)
 
     def reset_for_turn(self) -> None:
         """Reset per-turn fields at the start of each run_turn() call."""
@@ -261,6 +267,7 @@ class CoRuntimeState:
         self.consecutive_tool_cap_violations = 0
         self.tool_cap_hard_stop = False
         self.tool_calls_in_model_request = 0
+        self.pending_interrupt_result = None
 
 
 def _resource_lock_store_factory() -> ResourceLockStore:
