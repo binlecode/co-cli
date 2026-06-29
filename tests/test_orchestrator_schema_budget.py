@@ -55,7 +55,14 @@ from co_cli.personality.prompts.loader import load_soul_critique
 # consciously: now that delegation is write-capable, these are the minimal cues that stop the
 # orchestrator acting on an unverified self-report or re-running delegated work — a reviewed,
 # non-deferrable cost on an ALWAYS tool (same class as the original when-to-delegate cue).
-ALWAYS_BUCKET_CEILING = 21_500
+# 2026-06-29: loop-decoupling Phase 5.5 added the persona-mode selector — optional `subagent_type`
+# + a lean 2-mode (synthesis/critique) when-to-use menu in the `delegate` docstring → delegate
+# schema 1,375 → 1,839 chars, bucket 21,473 → 21,937. Re-pinned consciously: the menu IS the ALWAYS
+# selection surface (the model picks the mode on the turn it delegates; a deferred reveal would defeat
+# selection), eval-validated affordable (~76 tokens, TASK-1) with the exact when-to-use wording the
+# A/B tuned — trimming it would change the validated pick signal. The rich per-mode brief stays
+# on-use (injected into the delegated agent's instructions), never in this always-on bucket.
+ALWAYS_BUCKET_CEILING = 22_000
 # Per-tool tripwire against UNINTENDED docstring bloat — pinned just above the
 # largest ALWAYS tool, not a first-principle budget (the principled cap is the
 # cumulative ALWAYS_BUCKET_CEILING: every ALWAYS schema ships in every turn's

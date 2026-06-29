@@ -193,6 +193,26 @@ The peer-dominant pattern (4/5). Decision sub-questions co must answer:
 3. **How surfaced to the small model?** Prefer **enumerate-in-description** (codex/claude-code style, `"- {role}: {when-to-use}"`) for legibility, OR a deferred `delegate_roles`-style discovery tool to protect prefill (co deferred-tier precedent). Pick per budget measurement.
 4. **Schema shape:** add optional `subagent_type: str` to `delegate(task, subagent_type=None)`; default = today's generalist (zero-regression). Keep `task` required and free-form (preserve the universal core, §3).
 
+#### R2 — DECISION: **GO** (eval-backed, Phase 5.5 TASK-1, 2026-06-29)
+
+The crux (sub-question 2 / Q1) was settled with the user *before* the eval to a **small, closed, co-native persona-mode contract** — NOT free-text, skills, souls, or a generic `researcher/editor/verifier` registry (the rejected shapes are recorded in `docs/exec-plans/active/2026-06-27-182243-loop-decoupling-phase5-5.md` Decisions). The eval then validated the contract against the **R1 prose baseline** (not nothing — co already carries delegation mode in the `delegate` description), since the only delta that justifies the field is that a tuned brief keyed by a cheap pick beats the small model authoring mode-prose unaided.
+
+**Eval:** `evals/eval_delegate_persona_mode.py` — real-Ollama A/B on `qwen3.6:35b-a3b-agentic`, judge `gemini-3.5-flash`, two seeded knowledge-work scenarios over the `multistep_research_baseline` workspace (Helios context + the prior sqlite decision). Arm A = small model authoring an R1-laden task unaided → production `DELEGATE_AGENT_SPEC`; Arm B = plain task + scenario-correct mode brief → eval-local `dataclasses.replace` spec; both via the real `run_standalone_owned` (forked, `propagate_approvals=True`, parent frontend). Single UAT smoke run.
+
+**Readings:**
+- **Headline (B vs A, both judge orders, disagreement = tie):** B wins 1 (critique), ties 1 (synthesis), **A never wins**. The tuned brief *beats* R1 prose on the stance-shaped critique task and *holds even* on synthesis — consistent with synthesis sitting close to co's default behavior (a brief adds less) while critique is a genuine stance shift the default agent does not adopt (a brief adds more).
+- **Disqualifier 1 — pick stability + correctness:** 3/3 correct **and** stable on **both** scenarios. The small model reliably picks the scenario's natural mode from the lean menu — no over/under-firing observed.
+- **Disqualifier 2 — semantic cost:** no `task`/`subagent_type` mismatch; every pick matched the task the same call authored.
+- **Surfacing (prefill):** lean menu ≈ **76 tokens** for the 2-mode set — negligible against the multi-thousand-token static prompt. **Adopt enumerate-in-description (option a).** A deferred discovery tool is only warranted if the set grows large.
+
+**Settled mode set (validated, not final-frozen — TASK-2 may refine briefs):** `synthesis` (distill scattered sources → condensed, decision-ready brief) and `critique` (adversarially stress-test a claim/decision/artifact). Small, closed, co-native — distinctively knowledge-work, explicitly not a coding-shop menu.
+
+**Selector cardinality — OPTIONAL, on effectiveness (no-fit decider, 2026-06-29):** a third scenario (`P5.N`, a mechanical no-fit task) settled optional-vs-mandatory on delegation effectiveness, not safety. The model **omits the field 3/3** when no mode fits (correct routing), and **forcing** synthesis or critique onto no-fit work is **neutral-to-harmful** (one run tied, one run the default beat the forced mode both orders). So mandatory is dominated: forcing never helps and sometimes hurts on no-fit, while charging a pick on every delegation and removing the "no mode" option; a `general` third mode ≡ the default (pure cost, and the rejected R-registry smell). Optional captures the fit-case gain (B beats-or-ties A, never loses) and avoids forcing on no-fit. `fail-loud` is scoped to *unknown* names, not a *missing* field. Matches the converged peer shape (claude-code's `subagent_type` is also optional).
+
+**Overhead — the field is NOT free (with/without-menu A/B, `P5.O`, 2 runs):** driving the same delegation decision with the production `delegate` def vs a control def that strips the menu + `subagent_type` (only delta) measured a **~77-token static prefill** (clean isolate) PLUS a real per-decision **generation/latency cost when the field is engaged** — fit decision +369→+416 output tokens / +4.5→+5.3 s, no-fit +90→+146 tokens / +1.3→+2.1 s (noisy, conflates field-emission + task-authoring variance, directionally robust). Trigger fidelity is mostly-but-not-perfectly preserved (one run 2/3 vs 3/3 on fit). So the field is justified by a favourable *trade* (bounded overhead, paid mostly when engaged, offset by the fit-case quality gain; no-fit omits and avoids most of it), **not** by being overhead-free.
+
+**Recommendation:** proceed to **TASK-2** (gated impl) — optional `subagent_type` on `delegate`, the lean enumerate-in-description menu, on-use injection of the picked mode's brief into the delegated agent's instructions, surface unchanged by role, unknown `subagent_type` ⇒ fail-loud, `None` ⇒ byte-for-byte today. *Caveat:* this is a 2-scenario single-run smoke, not a powered statistical result — the signal is clean (B never loses, picks reliable, prefill trivial), sufficient for a go under co's UAT-eval discipline, but TASK-2 briefs should be revisited if a wider scenario set later shows synthesis flat.
+
 ### R3 — Record conscious divergences (G-D, G-E)
 Document in the delegation spec (`docs/specs/agents.md`) that co **deliberately** omits async/parallel delegation (synchronous owned-loop, holds a tool slot) and per-call model/scope overrides ("full agent inherits parent" principle), with the peer counts as context — so future reviewers see these as decisions, not oversights. Mirrors the loop-decoupling survey's "rejected-by-design" treatment.
 
@@ -205,8 +225,8 @@ Document in the delegation spec (`docs/specs/agents.md`) that co **deliberately*
 
 ## 7. Open questions
 
-- **Q1 (R2 crux):** skills-as-roles vs a separate role registry — which serves co's knowledge-work positioning without duplicating the skills asset? Needs a skills/roles boundary decision before any impl.
-- **Q2:** does a small model (qwen3.6:35b-a3b) actually delegate *better* with a named role than with a free-form task alone? Worth a focused eval before committing to R2 — the 4/5 convergence is frontier-model-derived; co's tier may differ.
+- **Q1 (R2 crux) — RESOLVED:** neither skills-as-roles nor a generic role registry. A **small, closed, co-native persona-mode contract** (instructions-only, surface-unchanged) — see R2 DECISION and the phase-5.5 plan Decisions for why skills/souls/free-text/generic-registry were all rejected.
+- **Q2 — RESOLVED (GO):** yes, for co's tier. The eval (`evals/eval_delegate_persona_mode.py`) shows a tuned persona-mode brief ties-or-beats the R1 prose baseline on `qwen3.6:35b-a3b` (B never loses), with reliable+stable picks and trivial prefill. The 4/5 frontier convergence holds for co's small model. See R2 DECISION.
 - **Q3:** D7 (verify-side-effects) — is the right home the delegate description, the delegated-agent instructions, or the orchestrator's wrap-up? Possibly all three; place where the small model acts on it.
 - **Q4:** `clarify` in the delegated agent (carried over from the 3.6 plan's Open Questions) — re-raise if delegated subtasks need to ask the user mid-task.
 

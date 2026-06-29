@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.508]
+
+Loop-decoupling Phase 5.5 — **named persona-mode selector for `delegate`** (`subagent_type`), eval-gated against the R1-prose baseline. The orchestrator can optionally pick a small, closed, co-native mode (`synthesis` / `critique`) whose tuned brief is injected into the delegated agent's instructions; the tool surface is unchanged by mode (persona-only, the Phase 3.6 principle), and omitting it reproduces today's anonymous generalist byte-for-byte. TASK-1 (real-Ollama A/B) returned GO before any production code; full suite green (887 passed).
+
+- **`subagent_type` selector (`co_cli/tools/system/delegate.py`, `co_cli/agent/delegation.py`)** — optional param + a lean 2-mode when-to-use menu in the `delegate` docstring (the always-on selection surface). `delegate_to_agent` resolves the mode against the closed `PERSONA_MODES` table into a per-call `dataclasses.replace` spec; an unknown `subagent_type` fails loud (a refusal naming the valid modes, no run), `None` returns the `DELEGATE_AGENT_SPEC` singleton unchanged.
+- **On-use brief injection (`_delegate_agent_instructions(deps, mode_brief=None)`)** — the picked mode's brief is composed after the base brief and before the deferred-tool stubs (the stub block is never displaced); the rich brief is paid only on the turn a mode is used, never in the always-on prefill.
+- **Eval-gated decision (`evals/eval_delegate_persona_mode.py`, new)** — a real-Ollama A/B (Arm A = the small model authoring R1-prose mode-setting unaided → production spec; Arm B = plain task + tuned mode brief → eval-local spec), plus a no-fit cardinality decider and a with/without-menu overhead A/B. Findings (recorded in `docs/reference/RESEARCH-delegation-interface-peer-survey.md` R2): the brief ties-or-beats the baseline (never loses); picks are correct+stable on fit and correctly omitted on no-fit; the field is optional on effectiveness grounds (forcing a mode on no-fit work is neutral-to-harmful); the field is not overhead-free (~77-token static prefill + a per-decision generation cost when engaged), justified by a favourable trade.
+- **Schema-budget ceiling re-pinned (`tests/test_orchestrator_schema_budget.py`)** — the ALWAYS-bucket ceiling moves 21,500 → 22,000 to admit the lean menu on the ALWAYS `delegate` docstring; a conscious, dated re-pin (the menu is the always-on selection surface; the rich brief stays on-use).
+
 ## [0.8.506]
 
 Loop-decoupling Phase 5 — **cutover to the owned loop + deletion of the graph path**. The owned loop (`run_turn_owned`) is now the sole agent turn; the parallel pydantic-ai `Agent.iter()` graph orchestration, its wrappers, the selection flag, and all orphaned wiring are gone. Source-only (spec sync + `0.9.0` are Phase 6). Full real-LLM suite green (884 passed); the cutover ran behind an in-session graph-baseline gate before any deletion.

@@ -23,6 +23,7 @@ Real-LLM tests skip unless Ollama is configured; the model is warmed outside the
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 
 import pytest
 from pydantic import BaseModel
@@ -38,6 +39,7 @@ from co_cli.agent.core import assemble_routing_toolset, build_native_toolset
 from co_cli.agent.delegation import (
     DELEGATE_AGENT_SPEC,
     DELEGATE_DEPTH_CAP,
+    PERSONA_MODES,
     DelegationResult,
     _delegate_agent_instructions,
     delegate_to_agent,
@@ -268,6 +270,65 @@ def test_delegate_agent_instructions_advertise_deferred_stubs() -> None:
     deps.runtime.revealed_tools.add("session_view")
     after_reveal = _delegate_agent_instructions(deps)
     assert "session_view" not in after_reveal, "a revealed tool stops being advertised"
+
+
+def test_persona_mode_brief_reaches_instructions_without_displacing_stubs() -> None:
+    """A named subagent_type's persona brief is composed into the delegated-agent
+    instructions, and the deferred-tool stubs survive (the mode brief must not displace
+    them — both share the one instructions string, CD-m-2). Omitting the mode leaves the
+    instructions free of any persona text (the zero-regression default).
+    """
+    deps = _make_parent_deps()
+    brief = PERSONA_MODES["critique"]
+
+    with_mode = _delegate_agent_instructions(deps, brief)
+    assert "adversarial reviewer" in with_mode, "the picked mode's brief reaches the agent"
+    assert "tool_view" in with_mode, "the deferred-load instruction survives the mode brief"
+    assert "session_view" in with_mode, "a deferred-tool stub is not displaced by the mode brief"
+    brief_pos = with_mode.index("adversarial reviewer")
+    stub_pos = with_mode.index("session_view")
+    assert brief_pos < stub_pos, "the brief sits before the stub block, so the stubs stay last"
+
+    base = _delegate_agent_instructions(deps)
+    assert "adversarial reviewer" not in base, "no mode => no persona text (default unchanged)"
+
+
+@pytest.mark.asyncio
+async def test_persona_mode_leaves_tool_surface_unchanged() -> None:
+    """A persona-mode changes only the instructions, never the tool surface (the Phase 3.6
+    principle holds). The per-call spec delegate_to_agent builds for a named subagent_type
+    (DELEGATE_AGENT_SPEC with the mode brief injected) must resolve the SAME visible tool
+    surface as the anonymous default — same VISIBILITY_MODEL, same visible names.
+    """
+    mode_spec = dataclasses.replace(
+        DELEGATE_AGENT_SPEC,
+        instructions=lambda deps: _delegate_agent_instructions(deps, PERSONA_MODES["synthesis"]),
+    )
+    assert mode_spec.surface_mode is SurfaceModeEnum.VISIBILITY_MODEL, "surface mode unchanged"
+
+    base_deps = fork_deps(_make_parent_deps(), share_dispatch_sem=False)
+    base_deps.toolset = _build_subagent_toolset(DELEGATE_AGENT_SPEC, base_deps)
+    mode_deps = fork_deps(_make_parent_deps(), share_dispatch_sem=False)
+    mode_deps.toolset = _build_subagent_toolset(mode_spec, mode_deps)
+
+    assert await _visible_names(mode_deps) == await _visible_names(base_deps), (
+        "the persona-mode surface equals the anonymous-default surface"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delegate_unknown_subagent_type_refuses_loudly() -> None:
+    """An unknown subagent_type fails loud — a refusal naming the valid modes — and never
+    runs a delegated agent (CD-M-1: no silent anonymous fallback that would mask a
+    mis-pick). Observable: the returned string; the mode never executes.
+    """
+    deps = _make_parent_deps()
+    result = await delegate_to_agent(deps, "Summarize the repo.", subagent_type="researcher")
+
+    assert "Delegation refused" in result, "unknown mode is refused, not silently run"
+    assert "researcher" in result, "the refusal echoes the bad name"
+    for valid in PERSONA_MODES:
+        assert valid in result, f"the refusal names the valid mode {valid!r}"
 
 
 # ---------------------------------------------------------------------------

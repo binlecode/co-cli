@@ -19,6 +19,7 @@ the parent slot held for the synchronous ``delegate`` call.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
@@ -57,14 +58,48 @@ class DelegationResult(BaseModel):
     summary: str
 
 
-def _delegate_agent_instructions(deps: CoDeps) -> str:
-    """Per-step delegated-agent instructions: the role brief plus the live deferred-tool stubs.
+PERSONA_MODES: dict[str, str] = {
+    "synthesis": (
+        "Work as a synthesis specialist. Read widely across the sources available "
+        "to you, reconcile what they say, and condense it into a tight, "
+        "decision-ready brief. Attribute each material claim to the source it came "
+        "from, and never invent a detail that no source supports — if the sources "
+        "disagree or leave a gap, say so plainly rather than papering over it. "
+        "Favour the few load-bearing facts a decision actually turns on over an "
+        "exhaustive recap."
+    ),
+    "critique": (
+        "Work as an adversarial reviewer. Your job is to stress-test the claim, "
+        "decision, or artifact in front of you — not to agree with it. Surface the "
+        "strongest objections, the assumptions that could be wrong, and the "
+        "concrete conditions under which it fails. Separate fatal flaws from minor "
+        "nits, ground every objection in the actual sources rather than generic "
+        "caution, and close on the single most important risk the reader must weigh."
+    ),
+}
+"""The small, closed, co-native persona-mode set (eval-validated, Phase 5.5 TASK-1):
+mode name -> the rich brief injected into the delegated agent's instructions on the turn
+that mode is picked. Two-tier surface — the lean when-to-use menu (the always-on selection
+surface) lives in the ``delegate`` tool docstring; the brief here is paid only on-use, and
+is persona-only (a mode never changes the tool surface, the Phase 3.6 principle). Knowledge-
+work personas, not a coding-shop menu. Keep the docstring menu's mode names in sync with
+these keys."""
+
+
+def _delegate_agent_instructions(deps: CoDeps, mode_brief: str | None = None) -> str:
+    """Per-step delegated-agent instructions: base brief + optional persona-mode brief + stubs.
 
     Recomputed each step by the owned loop (CD-M-1), so once the delegated agent loads a
     deferred tool via tool_view it stops being advertised as loadable (the stub builder skips
     already-revealed tools). The blocklist's only member, ``delegate``, is ALWAYS-visibility
     and the stub builder emits DEFERRED-only tools, so it can never appear here — the full
     tool_catalog is passed through unfiltered.
+
+    When ``mode_brief`` is given (a named ``subagent_type`` was picked), it is composed
+    after the base brief and BEFORE the deferred-tool stubs, so the stub block is never
+    displaced (CD-m-2 — both share this one instructions string). ``mode_brief`` is stable
+    across steps (the mode does not change mid-delegation), so per-step recomputation
+    re-injects the same brief.
     """
     base = (
         "You are a focused agent handling one delegated subtask for the main agent. "
@@ -78,6 +113,8 @@ def _delegate_agent_instructions(deps: CoDeps) -> str:
         "self-contained: the main agent sees only your summary, never your intermediate "
         "tool calls or their results."
     )
+    if mode_brief:
+        base = f"{base}\n\nFor this subtask, adopt a specific working mode. {mode_brief}"
     stubs = build_deferred_tool_awareness_prompt(deps.tool_catalog, deps.runtime.revealed_tools)
     if stubs:
         return f"{base}\n\n{stubs}"
@@ -94,8 +131,18 @@ DELEGATE_AGENT_SPEC = TaskAgentSpec(
 )
 
 
-async def delegate_to_agent(parent_deps: CoDeps, task: str) -> str:
+async def delegate_to_agent(
+    parent_deps: CoDeps, task: str, subagent_type: str | None = None
+) -> str:
     """Run a write-capable delegated agent on ``task`` in an isolated forked context.
+
+    ``subagent_type`` optionally names a persona-mode from ``PERSONA_MODES``; its brief is
+    injected into the delegated agent's instructions (persona only — the tool surface is
+    unchanged). ``None`` reproduces the anonymous generalist byte-for-byte (the
+    ``DELEGATE_AGENT_SPEC`` singleton). An unknown name fails loud — a delegation-refused
+    string naming the valid modes (mirroring the depth-cap refusal and the FLAT_EXACT
+    unknown-name precedent), never a silent anonymous fallback: the model-authored field has
+    no user channel to recover from a silent miss (CD-M-1).
 
     Depth-guarded: refuses at ``DELEGATE_DEPTH_CAP`` without forking. The delegated agent gets
     its own tool-dispatch semaphore (``share_dispatch_sem=False``) so it never contends with
@@ -118,10 +165,24 @@ async def delegate_to_agent(parent_deps: CoDeps, task: str) -> str:
             "Do this subtask inline instead of delegating."
         )
 
+    spec = DELEGATE_AGENT_SPEC
+    if subagent_type is not None:
+        mode_brief = PERSONA_MODES.get(subagent_type)
+        if mode_brief is None:
+            valid = ", ".join(PERSONA_MODES)
+            return (
+                f"Delegation refused: unknown subagent_type {subagent_type!r}. "
+                f"Valid modes: {valid}. Omit subagent_type to use the default sub-agent."
+            )
+        spec = dataclasses.replace(
+            DELEGATE_AGENT_SPEC,
+            instructions=lambda deps: _delegate_agent_instructions(deps, mode_brief),
+        )
+
     agent_deps = fork_deps(parent_deps, share_dispatch_sem=False)
     frontend = parent_deps.runtime.frontend
     result = await run_standalone_owned(
-        DELEGATE_AGENT_SPEC,
+        spec,
         agent_deps,
         task,
         settings=parent_deps.model.settings,

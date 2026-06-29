@@ -136,19 +136,28 @@ Daemons are top-level task agents with three defining properties: (1) **no depth
 
 The `delegate` tool (ALWAYS visibility, orchestrator-only) hands a multi-step subtask to a delegated agent **inside** the parent turn, returning only a distilled summary so the delegated agent's intermediate tool transcript never enters the parent history (context isolation). The delegated agent is a **full agent, not a lesser one** — it inherits the orchestrator's own visibility surface and decides for itself which tools the subtask needs.
 
+The tool also accepts an optional `subagent_type` naming a **persona-mode** from a small, closed, co-native set (`PERSONA_MODES` — `synthesis`, `critique`). A picked mode injects a tuned persona brief into the delegated agent's instructions; it is **persona-only and never changes the tool surface** (the full-agent principle holds). The two-tier surface keeps the always-on cost lean: a one-line when-to-use menu rides the `delegate` description (the selection surface), while the rich per-mode brief is paid only on the turn a mode is used. Omitting `subagent_type` reproduces the anonymous generalist byte-for-byte (the `DELEGATE_AGENT_SPEC` singleton); an unknown name fails loud — a refusal naming the valid modes, never a silent anonymous fallback.
+
 ```
-delegate_to_agent(parent_deps, task):
+delegate_to_agent(parent_deps, task, subagent_type=None):
     if parent_deps.runtime.agent_depth >= DELEGATE_DEPTH_CAP:   # cap = 1
         return "<refusal string>"                              # no fork, no run
+    spec = DELEGATE_AGENT_SPEC
+    if subagent_type is not None:
+        mode = PERSONA_MODES.get(subagent_type)
+        if mode is None:
+            return "<unknown-mode refusal naming valid modes>"  # fail loud, no run
+        spec = replace(DELEGATE_AGENT_SPEC,                      # per-call spec, surface unchanged
+                       instructions=lambda deps: _delegate_agent_instructions(deps, mode.brief))
     agent_deps = fork_deps(parent_deps, share_dispatch_sem=False)  # own dispatch sem
-    result = run_standalone_owned(DELEGATE_AGENT_SPEC, agent_deps, task,
+    result = run_standalone_owned(spec, agent_deps, task,
                                   settings=parent_deps.model.settings,  # parent turn's settings
                                   propagate_approvals=True,
                                   frontend=parent_deps.runtime.frontend)
     return result.summary if result is not None else "<budget-exhausted fallback>"
 ```
 
-Defining properties, all contrasting with the daemon path: (1) **depth-bounded** — `agent_depth` (incremented by `fork_deps`) caps recursion at 1; the delegated surface excludes `delegate` (`_DELEGATE_AGENT_BLOCKLIST`), so it cannot re-delegate; (2) **usage merges** — `fork_deps` shares `usage_accumulator` by reference, so the delegated agent's tokens roll into the parent turn (no extra accounting); (3) **own dispatch semaphore** — `share_dispatch_sem=False` gives a fresh `tool_dispatch_sem` so the run never starves behind the parent slot held for the synchronous `delegate` call; (4) **visibility-model surface** (`surface_mode=VISIBILITY_MODEL`) — the orchestrator's full native+MCP surface minus the `{delegate}` blocklist, built by `assemble_routing_toolset(build_native_toolset(), deps.mcp_toolsets, name_blocklist=_DELEGATE_AGENT_BLOCKLIST)`. ALWAYS tools are visible; DEFERRED tools (native and MCP) are advertised as awareness stubs in the instructions and self-loaded on demand via `tool_view`; (5) **approval-gated** — write/approval-required tools are reachable but every gated call propagates to the parent's `frontend` (`propagate_approvals=True`); a headless parent (`frontend is None`) auto-denies, so a write-capable agent never acts unprompted. Durable-write safety is recovered **at the gate**, not by withholding tools. `run_standalone_owned` returning `None` (budget spent without a `final_result` call) maps to a fixed fallback string, not an `AttributeError`.
+Defining properties, all contrasting with the daemon path: (1) **depth-bounded** — `agent_depth` (incremented by `fork_deps`) caps recursion at 1; the delegated surface excludes `delegate` (`_DELEGATE_AGENT_BLOCKLIST`), so it cannot re-delegate; (2) **usage merges** — `fork_deps` shares `usage_accumulator` by reference, so the delegated agent's tokens roll into the parent turn (no extra accounting); (3) **own dispatch semaphore** — `share_dispatch_sem=False` gives a fresh `tool_dispatch_sem` so the run never starves behind the parent slot held for the synchronous `delegate` call; (4) **visibility-model surface** (`surface_mode=VISIBILITY_MODEL`) — the orchestrator's full native+MCP surface minus the `{delegate}` blocklist, built by `assemble_routing_toolset(build_native_toolset(), deps.mcp_toolsets, name_blocklist=_DELEGATE_AGENT_BLOCKLIST)`. ALWAYS tools are visible; DEFERRED tools (native and MCP) are advertised as awareness stubs in the instructions and self-loaded on demand via `tool_view`; (5) **approval-gated** — write/approval-required tools are reachable but every gated call propagates to the parent's `frontend` (`propagate_approvals=True`); a headless parent (`frontend is None`) auto-denies, so a write-capable agent never acts unprompted. Durable-write safety is recovered **at the gate**, not by withholding tools. `run_standalone_owned` returning `None` (budget spent without a `final_result` call) maps to a fixed fallback string, not an `AttributeError`. (6) **persona-mode, surface-invariant** — an optional `subagent_type` builds a per-call spec via `dataclasses.replace` that changes only `instructions` (the mode brief composed before the deferred-tool stubs, never displacing them); `surface_mode` stays `VISIBILITY_MODEL`, so the resolved tool surface is identical to the anonymous default. An unknown `subagent_type` is refused before forking.
 
 ## 3. Config
 
@@ -173,7 +182,7 @@ Defining properties, all contrasting with the daemon path: (1) **depth-bounded**
 | `SurfaceModeEnum` | `co_cli/agent/spec.py` | `StrEnum` — `FLAT_EXACT` (exactly `tool_names`, all `requires_approval=False`) \| `VISIBILITY_MODEL` (orchestrator surface minus blocklist; `tool_names` ignored) |
 | `ORCHESTRATOR_SPEC` | `co_cli/agent/orchestrator.py` | Singleton — 3 static-instruction builders, 4 per-turn instructions, 5 history processors |
 | `MEMORY_REVIEW_SPEC`, `SKILL_REVIEW_SPEC` | `co_cli/daemons/dream/_reviewer.py` | Dream-daemon task specs; budget `REVIEW_MAX_ITERATIONS` |
-| `DELEGATE_AGENT_SPEC`, `DelegationResult` | `co_cli/agent/delegation.py` | In-turn delegated-agent spec (`surface_mode=VISIBILITY_MODEL`; orchestrator surface minus `{delegate}`); `DelegationResult` is the single-`summary` output type |
+| `DELEGATE_AGENT_SPEC`, `DelegationResult`, `PERSONA_MODES` | `co_cli/agent/delegation.py` | In-turn delegated-agent spec (`surface_mode=VISIBILITY_MODEL`; orchestrator surface minus `{delegate}`); `DelegationResult` is the single-`summary` output type; `PERSONA_MODES` is the closed persona-mode→brief table (`synthesis`, `critique`) a named `subagent_type` resolves against |
 
 ### Builders
 
@@ -188,7 +197,7 @@ Defining properties, all contrasting with the daemon path: (1) **depth-bounded**
 |--------|--------|----------|
 | `run_standalone(spec: TaskAgentSpec, deps: CoDeps, prompt: str) -> None` | `co_cli/agent/run.py` | Daemon runner; takes already-forked deps, opens own span, never depth-checks, no usage merge, plain exceptions, returns nothing. Delegates to `run_standalone_owned` when `config.llm.use_owned_loop` |
 | `run_standalone_owned(spec: TaskAgentSpec, deps: CoDeps, prompt: str, settings: ModelSettings \| None = None, propagate_approvals: bool = False, frontend: Frontend \| None = None) -> BaseModel \| None` | `co_cli/agent/loop.py` | Graph-free owned-loop driver; forces structured `final_result`; recomputes instructions + tool defs per step; returns the validated `spec.output_type` or `None` on budget exhaustion / hard-stop. `settings` defaults to `settings_noreason` (daemon path); `delegate_to_agent` passes the parent turn's settings and `propagate_approvals=True` |
-| `delegate_to_agent(parent_deps: CoDeps, task: str) -> str` | `co_cli/agent/delegation.py` | In-turn delegation driver; depth-guards, forks with own dispatch sem, runs `DELEGATE_AGENT_SPEC` with approval propagation, returns the delegated agent's `summary` or a fixed fallback |
+| `delegate_to_agent(parent_deps: CoDeps, task: str, subagent_type: str \| None = None) -> str` | `co_cli/agent/delegation.py` | In-turn delegation driver; depth-guards, optionally resolves `subagent_type` against `PERSONA_MODES` (unknown ⇒ fail-loud refusal, no run) into a per-call persona spec (surface unchanged), forks with own dispatch sem, runs with approval propagation, returns the delegated agent's `summary` or a fixed fallback |
 
 ## 5. Files
 
@@ -198,7 +207,7 @@ Defining properties, all contrasting with the daemon path: (1) **depth-bounded**
 | `co_cli/agent/build.py` | `build_orchestrator`, `build_task_agent` |
 | `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` + the 5 static-instruction provider closures |
 | `co_cli/agent/run.py` | `run_standalone` |
-| `co_cli/agent/delegation.py` | `DELEGATE_AGENT_SPEC`, `DelegationResult`, `delegate_to_agent`, `DELEGATE_DEPTH_CAP`, `DELEGATE_AGENT_BUDGET`, `_DELEGATE_AGENT_BLOCKLIST` |
+| `co_cli/agent/delegation.py` | `DELEGATE_AGENT_SPEC`, `DelegationResult`, `PERSONA_MODES`, `delegate_to_agent`, `DELEGATE_DEPTH_CAP`, `DELEGATE_AGENT_BUDGET`, `_DELEGATE_AGENT_BLOCKLIST` |
 | `co_cli/tools/system/delegate.py` | `delegate` tool (in-turn delegation, ALWAYS visibility) |
 | `co_cli/agent/_instructions.py` | `safety_prompt`, `current_time_prompt` — orchestrator per-turn instructions |
 | `co_cli/agent/core.py` | `build_native_toolset`, `build_mcp_entries`, `assemble_routing_toolset` (toolset helpers; see [tools.md](tools.md)) |
@@ -218,6 +227,7 @@ Defining properties, all contrasting with the daemon path: (1) **depth-bounded**
 | `fork_deps` starts child with fresh `runtime` state | `tests/test_flow_fork_deps.py` |
 | `fork_deps(share_dispatch_sem=False)` gives the in-turn delegated agent its own dispatch semaphore | `tests/test_flow_delegation.py` |
 | `delegate_to_agent` refuses at `DELEGATE_DEPTH_CAP` without forking/running | `tests/test_flow_delegation.py` |
+| A named `subagent_type` injects the mode brief into instructions without displacing the deferred-tool stubs and leaves the tool surface unchanged; an unknown `subagent_type` fails loud (refusal naming valid modes, no run) | `tests/test_flow_delegation.py` |
 | Delegated agent reads via its tools and distills; tokens roll into the parent turn | `tests/test_flow_delegation.py` |
 | Owned-turn `delegate` isolates the transcript — only the summary enters parent history | `tests/test_flow_delegation.py` |
 | Delegated agent resolves the orchestrator surface minus `{delegate}`; DEFERRED tools (native + MCP) hidden until `tool_view`-revealed; flat-exact specs unchanged | `tests/test_flow_delegation.py` |
