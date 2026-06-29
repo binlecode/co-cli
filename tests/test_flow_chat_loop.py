@@ -11,9 +11,7 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM, make_settings
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli.agent.build import build_orchestrator
 from co_cli.agent.core import build_native_toolset
-from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.config.repl import ReplSettings
 from co_cli.deps import CoDeps, CoSessionState
@@ -54,8 +52,8 @@ def _make_deps_with_repl(tmp_path: Path, queue_cap: int, drop_policy: str = "old
     return deps
 
 
-def _make_agent(deps: CoDeps):
-    """Build a real orchestrator agent from deps config.
+def _wire_model(deps: CoDeps) -> None:
+    """Wire the real native toolset + model onto deps for an owned-loop turn.
 
     Uses build_model so provider/model come from the user's real settings.
     """
@@ -63,7 +61,6 @@ def _make_agent(deps: CoDeps):
     deps.toolset = toolset
     deps.tool_catalog = tool_catalog
     deps.model = build_model(deps.config.llm)
-    return build_orchestrator(ORCHESTRATOR_SPEC, deps)
 
 
 def _fresh_state() -> IterationState:
@@ -88,7 +85,7 @@ async def test_empty_input_continues(tmp_path: Path) -> None:
     the user cannot submit an accidental blank line without disrupting the session.
     """
     deps = _make_deps(tmp_path)
-    agent = _make_agent(deps)
+    _wire_model(deps)
     frontend = HeadlessFrontend()
     completer = SlashCommandCompleter()
     state = _fresh_state()
@@ -98,7 +95,6 @@ async def test_empty_input_continues(tmp_path: Path) -> None:
         eof=False,
         state=state,
         deps=deps,
-        agent=agent,
         frontend=frontend,
         completer=completer,
         now=0.0,
@@ -122,7 +118,7 @@ async def test_exit_command_exits(tmp_path: Path) -> None:
     on user request and requires a process kill.
     """
     deps = _make_deps(tmp_path)
-    agent = _make_agent(deps)
+    _wire_model(deps)
     frontend = HeadlessFrontend()
     completer = SlashCommandCompleter()
     state = _fresh_state()
@@ -132,7 +128,6 @@ async def test_exit_command_exits(tmp_path: Path) -> None:
         eof=False,
         state=state,
         deps=deps,
-        agent=agent,
         frontend=frontend,
         completer=completer,
         now=0.0,
@@ -164,7 +159,6 @@ async def test_ctrl_c_double_press_within_window_exits() -> None:
         state=state,
         # deps/agent are never reached when user_input is None (interrupt path exits early)
         deps=None,  # type: ignore[arg-type]
-        agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
         completer=SlashCommandCompleter(),
         now=0.0,
@@ -180,7 +174,6 @@ async def test_ctrl_c_double_press_within_window_exits() -> None:
         state=first,
         # deps/agent are never reached when user_input is None (interrupt path exits early)
         deps=None,  # type: ignore[arg-type]
-        agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
         completer=SlashCommandCompleter(),
         now=1.5,
@@ -210,7 +203,6 @@ async def test_ctrl_c_outside_window_resets_timer() -> None:
         state=state,
         # deps/agent are never reached when user_input is None (interrupt path exits early)
         deps=None,  # type: ignore[arg-type]
-        agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
         completer=SlashCommandCompleter(),
         now=0.0,
@@ -226,7 +218,6 @@ async def test_ctrl_c_outside_window_resets_timer() -> None:
         state=first,
         # deps/agent are never reached when user_input is None (interrupt path exits early)
         deps=None,  # type: ignore[arg-type]
-        agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
         completer=SlashCommandCompleter(),
         now=3.0,
@@ -256,7 +247,6 @@ async def test_eof_exits() -> None:
         state=state,
         # deps/agent are never reached when eof=True (EOF path returns before any agent call)
         deps=None,  # type: ignore[arg-type]
-        agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
         completer=SlashCommandCompleter(),
         now=0.0,
@@ -279,7 +269,7 @@ async def test_successful_input_resets_interrupt_timer(tmp_path: Path) -> None:
     after a Ctrl+C at t=0s (with real input between them) still exits — wrong behaviour.
     """
     deps = _make_deps(tmp_path)
-    agent = _make_agent(deps)
+    _wire_model(deps)
     frontend = HeadlessFrontend()
     completer = SlashCommandCompleter()
     # Prime the state with a non-zero interrupt timer
@@ -291,7 +281,6 @@ async def test_successful_input_resets_interrupt_timer(tmp_path: Path) -> None:
         eof=False,
         state=state,
         deps=deps,
-        agent=agent,
         frontend=frontend,
         completer=completer,
         now=5.0,
@@ -305,7 +294,6 @@ async def test_successful_input_resets_interrupt_timer(tmp_path: Path) -> None:
         eof=False,
         state=state,
         deps=deps,
-        agent=agent,
         frontend=frontend,
         completer=completer,
         now=5.0,
@@ -329,7 +317,7 @@ async def test_slash_command_routes_to_dispatch(tmp_path: Path) -> None:
     the empty-result assertion fail if dispatch did nothing.
     """
     deps = _make_deps(tmp_path)
-    agent = _make_agent(deps)
+    _wire_model(deps)
     frontend = HeadlessFrontend()
     completer = SlashCommandCompleter()
     state = IterationState(
@@ -342,7 +330,6 @@ async def test_slash_command_routes_to_dispatch(tmp_path: Path) -> None:
         eof=False,
         state=state,
         deps=deps,
-        agent=agent,
         frontend=frontend,
         completer=completer,
         now=0.0,
@@ -366,7 +353,7 @@ async def test_plain_text_routes_to_foreground_turn(tmp_path: Path) -> None:
     swallowed with no response — the session appears to hang.
     """
     deps = _make_deps(tmp_path)
-    agent = _make_agent(deps)
+    _wire_model(deps)
     frontend = HeadlessFrontend()
     completer = SlashCommandCompleter()
     state = _fresh_state()
@@ -378,7 +365,6 @@ async def test_plain_text_routes_to_foreground_turn(tmp_path: Path) -> None:
             eof=False,
             state=state,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             completer=completer,
             now=0.0,
@@ -626,7 +612,6 @@ async def test_ctrl_c_is_exit_only_double_press() -> None:
             eof=eof,
             state=runtime.state,
             deps=None,  # type: ignore[arg-type]
-            agent=None,  # type: ignore[arg-type]
             frontend=HeadlessFrontend(),
             completer=SlashCommandCompleter(),
             now=time.monotonic(),

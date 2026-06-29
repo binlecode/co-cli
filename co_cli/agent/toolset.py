@@ -1,23 +1,13 @@
-"""Native toolset construction, the per-turn tool-visibility filter, and the call-seam call_tool wrapper."""
+"""Native toolset construction and the per-turn tool-visibility filter."""
 
-import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic_ai import RunContext
 from pydantic_ai.tools import ToolDefinition
-from pydantic_ai.toolsets import FunctionToolset, WrapperToolset
-from pydantic_ai.toolsets.abstract import ToolsetTool
+from pydantic_ai.toolsets import FunctionToolset
 
-from co_cli.config.tuning import (
-    MAX_TOOL_CALLS_PER_MODEL_REQUEST,
-    SPILL_THRESHOLD_CHARS,
-    TOOL_CAP_HARD_STOP_CONSECUTIVE,
-)
-from co_cli.deps import CoDeps, ToolInfo, ToolSourceEnum, VisibilityPolicyEnum
-from co_cli.fileio.spill import spill_with_span
-from co_cli.observability.serialize import serialize_tool_args, truncate_tool_result
-from co_cli.observability.tracing import current_span, pop_span, push_span
+from co_cli.deps import CoDeps, ToolInfo, VisibilityPolicyEnum
 from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY
 
 # Import all tool modules to trigger @agent_tool self-registration into TOOL_REGISTRY.
@@ -61,7 +51,6 @@ from co_cli.tools.tasks.control import (  # noqa: F401
     task_write,
 )
 from co_cli.tools.todo.rw import todo_read, todo_write  # noqa: F401
-from co_cli.tools.tool_call_limit import make_exceeded_payload
 from co_cli.tools.user_profile.view import user_profile_view  # noqa: F401
 from co_cli.tools.user_profile.write import user_profile_write  # noqa: F401
 from co_cli.tools.vision.view import image_view  # noqa: F401
@@ -76,23 +65,13 @@ def _tool_visibility_filter(ctx: RunContext[CoDeps], tool_def: ToolDefinition) -
     tool_view — i.e. until its name is in runtime.revealed_tools. This is co's sole
     deferral mechanism (no SDK defer_loading), applied uniformly to native and MCP
     tools; tool_view itself is ALWAYS and so is never gated here.
-
-    Resume gate (approval-resume turns only): narrow to approved tools + always-visible
-    tools so the resumed run re-presents only what the pending approval needs.
     """
     entry = ctx.deps.tool_catalog.get(tool_def.name)
-    if (
+    return not (
         entry is not None
         and entry.visibility == VisibilityPolicyEnum.DEFERRED
         and tool_def.name not in ctx.deps.runtime.revealed_tools
-    ):
-        return False
-    resume = ctx.deps.runtime.resume_tool_names
-    if resume is None:
-        return True
-    if tool_def.name in resume:
-        return True
-    return entry is None or entry.visibility == VisibilityPolicyEnum.ALWAYS
+    )
 
 
 def _make_prepare(
@@ -138,84 +117,3 @@ def _build_native_toolset() -> "tuple[FunctionToolset[CoDeps], dict[str, ToolInf
         catalog[info.name] = info
 
     return toolset, catalog
-
-
-class _CallSeamToolset(WrapperToolset[CoDeps]):
-    """Single explicit seam at the routing ``call_tool`` boundary.
-
-    Co-locates the three concerns that can only live at the per-call boundary, as
-    straight-line ordered code (no LIFO invariant, no cross-component global-span
-    bridge): the ``tool`` span with ``co.tool.*`` attributes, the per-model-request
-    tool-call cap (counting only — the orchestrator zeros the counter at the
-    model-request node boundary), and MCP-result spill. ``ctx.deps`` is available
-    here. This replaces the per-tool hooks of the former pydantic-ai lifecycle
-    middleware — span, cap, and spill, co-located as linear code.
-    """
-
-    async def call_tool(
-        self,
-        name: str,
-        tool_args: dict[str, Any],
-        ctx: RunContext[CoDeps],
-        tool: ToolsetTool[CoDeps],
-    ) -> Any:
-        runtime = ctx.deps.runtime
-        cap = MAX_TOOL_CALLS_PER_MODEL_REQUEST
-
-        # Per-model-request cap accounting. The orchestrator zeros the counter and
-        # finalizes the prior request's streak at the model-request node boundary
-        # (agent/orchestrate.py); here we only count this request's calls and latch
-        # the hard-stop once the consecutive-violation streak reaches the threshold.
-        runtime.tool_calls_in_model_request += 1
-        if runtime.tool_calls_in_model_request == cap + 1:
-            runtime.consecutive_tool_cap_violations += 1
-            if runtime.consecutive_tool_cap_violations >= TOOL_CAP_HARD_STOP_CONSECUTIVE:
-                runtime.tool_cap_hard_stop = True
-
-        push_span(
-            f"tool {name}",
-            kind="tool",
-            attributes={
-                "co.tool.name": name,
-                "co.tool.args": serialize_tool_args(tool_args),
-            },
-        )
-        try:
-            args_chars = len(json.dumps(tool_args, ensure_ascii=False, default=str))
-        except (TypeError, ValueError):
-            args_chars = 0
-        current_span().set_attribute("co.tool.args_chars", args_chars)
-
-        info = ctx.deps.tool_catalog.get(name)
-        try:
-            if runtime.tool_calls_in_model_request > cap:
-                result: Any = json.dumps(
-                    make_exceeded_payload(runtime.tool_calls_in_model_request)
-                )
-            else:
-                result = await super().call_tool(name, tool_args, ctx, tool)
-                # MCP results are plain strings that bypass tool_output() — spill here.
-                if isinstance(result, str) and info and info.source == ToolSourceEnum.MCP:
-                    threshold = (
-                        info.spill_threshold_chars
-                        if info.spill_threshold_chars is not None
-                        else SPILL_THRESHOLD_CHARS
-                    )
-                    result = spill_with_span(
-                        result,
-                        tool_name=name,
-                        tool_results_dir=ctx.deps.tool_results_dir,
-                        threshold_chars=threshold,
-                    )
-        except Exception as exc:
-            pop_span(status="ERROR", status_msg=str(exc))
-            raise
-
-        span = current_span()
-        span.set_attribute("co.tool.result", truncate_tool_result(result))
-        span.set_attribute("co.tool.result_size", len(str(result)))
-        if info:
-            span.set_attribute("co.tool.source", info.source.value)
-            span.set_attribute("co.tool.requires_approval", info.is_approval_required)
-        pop_span()
-        return result

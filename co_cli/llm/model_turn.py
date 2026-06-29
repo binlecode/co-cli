@@ -15,11 +15,8 @@ concerns co owns:
    ``ToolCallPart.args`` on the assembled ``StreamedResponse.get()`` before
    pydantic validation, via the ``RepairingStreamedResponse`` proxy.
 
-The ``chat`` span is a model-turn-boundary concern this client owns going
-forward, so the span-close helpers (``model_span_close_attributes``,
-``close_model_span``) live here. The still-live ``SurrogateRecoveryModel``
-wrapper imports them in the interim; they may re-home if a third consumer
-appears.
+The ``chat`` span is a model-turn-boundary concern this client owns, so the
+span-close helpers (``model_span_close_attributes``, ``close_model_span``) live here.
 """
 
 from __future__ import annotations
@@ -76,9 +73,8 @@ async def model_turn(
 ) -> AsyncIterator[StreamedResponse]:
     """Drive one streamed model turn over ``direct.model_request_stream``.
 
-    ``model`` is the raw provider model (``OpenAIChatModel``/``GoogleModel``), not
-    the ``SurrogateRecoveryModel`` wrapper — otherwise the wrapper's concerns would
-    double-apply. ``direct.model_request_stream`` re-wraps the model via
+    ``model`` is the raw provider model (``OpenAIChatModel``/``GoogleModel``).
+    ``direct.model_request_stream`` re-wraps the model via
     ``instrument_model``, but co keeps pydantic-ai instrumentation off
     (``Agent._instrument_default=False``, no ``instrument_pydantic_ai`` call), so
     it returns the model unwrapped.

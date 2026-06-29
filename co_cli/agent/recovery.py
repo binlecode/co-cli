@@ -1,9 +1,8 @@
 """Typed provider-error classification + length-retry decision for the owned loop.
 
-The owned (graph-free) turn loop's recovery seam — the analog of the graph path's
-scattered ``orchestrate.py`` helpers (``_transient_error_message``,
-``_handle_model_http_error``, ``_length_retry_settings``), relocated into owned-path
-code so Phase 5 can delete the graph twins.
+The owned (graph-free) turn loop's recovery seam — the single home for
+``_transient_error_message`` / ``_handle_model_http_error`` / ``_length_retry_settings``
+style provider-error handling, owned entirely by the loop.
 
 ``classify_provider_error`` turns a raised provider exception into a typed
 ``ErrorClass`` — an action (recover-overflow / reflect-400 / terminal), the

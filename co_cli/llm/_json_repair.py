@@ -1,7 +1,6 @@
 """Syntactic JSON arg repair for tool calls — package-private model-boundary primitive.
 
-Two layers, shared by the still-live ``SurrogateRecoveryModel`` wrapper and the
-owned-loop ``model_turn`` client:
+Two layers, used by the owned-loop ``model_turn`` client:
 
 - ``repair_json_args`` / ``repair_response`` — purely syntactic repair applied to
   each string ``ToolCallPart.args`` on a ``ModelResponse`` BEFORE pydantic

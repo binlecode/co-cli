@@ -49,7 +49,6 @@ def _make_ctx(deps: CoDeps, queue: deque[str] | None = None) -> CommandContext:
     return CommandContext(
         message_history=[],
         deps=deps,
-        agent=None,  # type: ignore[arg-type]  # not needed for dispatch tests
         completer=None,
         input_queue=queue,
     )

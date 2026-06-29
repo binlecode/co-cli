@@ -106,7 +106,7 @@ async def dispatch(raw_input: str, ctx: CommandContext) -> SlashOutcome:
     Returns a SlashOutcome encoding the command intent:
       - LocalOnly → command ran locally; caller returns to prompt
       - ReplaceTranscript → command replaced history; caller adopts new history and returns to prompt
-      - DelegateToAgent → skill command; caller enters run_turn() with delegated_input
+      - DelegateToAgent → skill command; caller enters run_turn_owned() with delegated_input
     """
     if not raw_input.startswith("/"):
         return LocalOnly()

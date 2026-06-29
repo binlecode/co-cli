@@ -55,11 +55,11 @@ def assemble_routing_toolset(
     mcp_toolsets: list[AbstractToolset[CoDeps]],
     name_blocklist: frozenset[str] = frozenset(),
 ) -> AbstractToolset[CoDeps]:
-    """Assemble the routing surface (native + MCP, visibility-filtered) and wrap it in the call-seam ``call_tool`` wrapper.
+    """Assemble the routing surface (native + MCP, visibility-filtered).
 
-    The call-seam wrapper sits outermost so its ``call_tool`` hosts the tool span,
-    per-model-request cap, and MCP-result spill over every dispatched tool, while
-    ``get_tools`` (and thus per-turn visibility) still flows through the filter.
+    ``get_tools`` (and thus per-turn visibility) flows through the filter; the owned
+    ``dispatch_tools`` hosts the tool span, per-model-request cap, and MCP-result spill
+    over every dispatched tool.
 
     ``name_blocklist`` (default empty — the orchestrator surface) drops the named
     tools from the surface entirely, folded into the single visibility-filter
@@ -67,7 +67,7 @@ def assemble_routing_toolset(
     this to exclude ``delegate`` (the recursion / depth-cap invariant) while
     otherwise inheriting the full orchestrator surface.
     """
-    from co_cli.agent.toolset import _CallSeamToolset, _tool_visibility_filter
+    from co_cli.agent.toolset import _tool_visibility_filter
 
     combined = CombinedToolset([native_toolset, *mcp_toolsets])
 
@@ -76,5 +76,4 @@ def assemble_routing_toolset(
             return False
         return _tool_visibility_filter(ctx, tool_def)
 
-    filtered = combined.filtered(visibility_filter)
-    return _CallSeamToolset(filtered)
+    return combined.filtered(visibility_filter)

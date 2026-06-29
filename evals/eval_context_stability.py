@@ -330,7 +330,7 @@ def _setup_isolated_spans_log(spans_log: Path) -> Path:
 
     ``create_deps`` does not configure the spans handler (only the CLI's
     ``main.py`` does), so an eval must wire it up itself to capture the
-    ``compaction.proactive_check`` records emitted inside ``run_turn``. Mirrors
+    ``compaction.proactive_check`` records emitted inside ``run_turn_owned``. Mirrors
     the ``isolated_spans_log`` fixture pattern in
     ``tests/test_flow_compaction_proactive.py``.
     """
@@ -344,7 +344,7 @@ def _setup_isolated_spans_log(spans_log: Path) -> Path:
 
 
 async def case_cs_a_text_pressure_bounded(
-    deps: Any, agent: Any, frontend: Any, run: Any, spans_log: Path
+    deps: Any, frontend: Any, run: Any, spans_log: Path
 ) -> CaseResult:
     """Drive text-heavy turns; assert the proactive loop stays bounded AND coherent.
 
@@ -383,10 +383,10 @@ async def case_cs_a_text_pressure_bounded(
     per_turn_block_tokens = 1500
 
     # Capture status strings so the real failure under test (a context-overflow
-    # event, which run_turn's recovery path announces via on_status) is told
+    # event, which run_turn_owned's recovery path announces via on_status) is told
     # apart from an unrelated transient LLM stall. This is frontend-instance
     # configuration, not a patch — the eval owns its frontend's status sink, the
-    # same spirit as EvalFrontend overriding the interactive prompts. run_turn
+    # same spirit as EvalFrontend overriding the interactive prompts. run_turn_owned
     # reads frontend.on_status to set deps.runtime.status_callback each turn.
     statuses: list[str] = []
     base_on_status = frontend.on_status
@@ -426,14 +426,12 @@ async def case_cs_a_text_pressure_bounded(
                         user_input=user_input,
                         prior_message_count=len(history),
                         run_turn_callable=lambda u=user_input, h=history: drive_turn(
-                            agent=agent,
                             user_input=u,
                             deps=deps,
                             message_history=h,
                             frontend=frontend,
                         ),
                         case_dir_path=case_dir,
-                        agent=agent,
                     )
             except TimeoutError:
                 passed = False
@@ -448,7 +446,7 @@ async def case_cs_a_text_pressure_bounded(
                 trace_id = trace.trace_ids[-1]
 
             if any("Context overflow" in s for s in statuses):
-                # run_turn's overflow-recovery path announced overflow — the exact
+                # run_turn_owned's overflow-recovery path announced overflow — the exact
                 # failure this eval guards against. A bounded proactive loop must
                 # keep the window below the hard limit so this never fires.
                 overflow_seen = True
@@ -564,14 +562,12 @@ async def case_cs_a_text_pressure_bounded(
                     user_input=_COHERENCE_PROBE_PROMPT,
                     prior_message_count=len(history),
                     run_turn_callable=lambda: drive_turn(
-                        agent=agent,
                         user_input=_COHERENCE_PROBE_PROMPT,
                         deps=deps,
                         message_history=history,
                         frontend=frontend,
                     ),
                     case_dir_path=case_dir,
-                    agent=agent,
                 )
             model_call_seconds += probe_trace.model_call_seconds
             for k, v in probe_trace.token_usage.items():
@@ -845,7 +841,7 @@ def _seed_spill_artifacts(deps: Any, count: int) -> list[str]:
 
 
 async def case_cs_c_tool_spill_precedes_summarize(
-    deps: Any, agent: Any, frontend: Any, run: Any, spans_log: Path
+    deps: Any, frontend: Any, run: Any, spans_log: Path
 ) -> CaseResult:
     """Drive tool-output pressure; assert a fitting L2 spill suppresses the L3 summarize.
 
@@ -906,14 +902,12 @@ async def case_cs_c_tool_spill_precedes_summarize(
                         user_input=user_input,
                         prior_message_count=len(history),
                         run_turn_callable=lambda u=user_input, h=history: drive_turn(
-                            agent=agent,
                             user_input=u,
                             deps=deps,
                             message_history=h,
                             frontend=frontend,
                         ),
                         case_dir_path=case_dir,
-                        agent=agent,
                     )
             except TimeoutError:
                 passed = False
@@ -1060,7 +1054,7 @@ async def main() -> int:
     _force_blocking_stdio()
     await ensure_ollama_warm()
 
-    deps, agent, frontend, stack = await make_eval_deps()
+    deps, frontend, stack = await make_eval_deps()
     # Budget simulation: lower co's accounting window to 32k and re-derive
     # spill_threshold together so compaction/spill fire under magnified pressure
     # (see apply_eval_window — model keeps its physical num_ctx).
@@ -1072,7 +1066,7 @@ async def main() -> int:
             logging.getLogger(__name__).info("spans log: %s", spans_log)
 
             # CS.A — drives the turns, asserts bounded loop + coherence-after-compaction.
-            case_a = await case_cs_a_text_pressure_bounded(deps, agent, frontend, run, spans_log)
+            case_a = await case_cs_a_text_pressure_bounded(deps, frontend, run, spans_log)
             cases.append(case_a)
             print(
                 f"[context-stability] {case_a.name}: {case_a.verdict.value.upper()} — {case_a.reason}"
@@ -1089,7 +1083,7 @@ async def main() -> int:
             # _CS_C_ENABLED): emitted as a SKIPPED case so it stays visible.
             if _CS_C_ENABLED:
                 case_c = await case_cs_c_tool_spill_precedes_summarize(
-                    deps, agent, frontend, run, spans_log
+                    deps, frontend, run, spans_log
                 )
             else:
                 case_c = _cs_c_skipped_result()

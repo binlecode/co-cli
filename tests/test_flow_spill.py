@@ -1,21 +1,23 @@
-"""Tests for tool-result spill — both the per-call helper and the routing-wrapper path.
+"""Tests for tool-result spill — the per-call helper and the owned dispatch path.
 
 Two layers:
   - spill_if_oversized(): direct helper API used by native tools.
-  - _CallSeamToolset.call_tool(): MCP-source results (plain strings that bypass
-    tool_output) are coerced through the helper; native results pass through
-    (their tools call the helper themselves).
+  - dispatch_tools(): MCP-source results (plain strings that bypass tool_output) are
+    coerced through the spill helper after dispatch; native results pass through (their
+    tools call the helper themselves). The over-threshold spill is also pinned in
+    test_flow_owned_dispatch.py; these add the under-threshold pass-through and the
+    native-not-coerced cases.
 """
 
 from pathlib import Path
 
 import pytest
-from pydantic_ai import RunContext
+from pydantic_ai.messages import ToolCallPart
 from pydantic_ai.toolsets import FunctionToolset
-from pydantic_ai.usage import RunUsage
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.agent.toolset import _CallSeamToolset
+from co_cli.agent.dispatch import dispatch_tools
+from co_cli.agent.turn_state import ToolCapState
 from co_cli.config.tuning import PERSISTED_OUTPUT_TAG, SPILL_THRESHOLD_CHARS
 from co_cli.deps import (
     CoDeps,
@@ -80,86 +82,82 @@ def test_force_spill_above_preview_size_spills(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# _CallSeamToolset.call_tool — MCP spill enforcement
+# dispatch_tools — MCP spill enforcement on the owned path
 # ---------------------------------------------------------------------------
 
 
-def _make_routing_deps(tool_results_dir: Path) -> CoDeps:
-    mcp_info = ToolInfo(
-        name="mcp_test_tool",
+def _info(name: str, *, source: ToolSourceEnum) -> ToolInfo:
+    return ToolInfo(
+        name=name,
         description="test",
         is_approval_required=False,
-        source=ToolSourceEnum.MCP,
-        visibility=VisibilityPolicyEnum.DEFERRED,
-        is_concurrent_safe=False,
-    )
-    native_info = ToolInfo(
-        name="native_test_tool",
-        description="test",
-        is_approval_required=False,
-        source=ToolSourceEnum.NATIVE,
+        source=source,
         visibility=VisibilityPolicyEnum.ALWAYS,
-        is_concurrent_safe=False,
+        is_concurrent_safe=True,
     )
-    return CoDeps(
+
+
+def _make_deps(
+    tool_results_dir: Path, catalog: dict[str, ToolInfo], inner: FunctionToolset
+) -> CoDeps:
+    deps = CoDeps(
         shell=ShellBackend(),
         config=SETTINGS_NO_MCP,
         session=CoSessionState(),
         runtime=CoRuntimeState(),
         tool_results_dir=tool_results_dir,
-        tool_catalog={"mcp_test_tool": mcp_info, "native_test_tool": native_info},
+        tool_catalog=catalog,
         model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
     )
+    deps.toolset = inner
+    return deps
 
 
-async def _call_through_wrapper(deps: CoDeps, tool_name: str, payload: str) -> str:
-    """Register a tool returning ``payload`` and call it through _CallSeamToolset."""
-    inner: FunctionToolset = FunctionToolset()
-
-    async def emit() -> str:
-        return payload
-
-    emit.__name__ = tool_name
-    inner.add_function(emit, requires_approval=False)
-    routing = _CallSeamToolset(inner)
-    ctx = RunContext(deps=deps, model=None, usage=RunUsage(), run_step=1)
-    tool = (await routing.get_tools(ctx))[tool_name]
-    return await routing.call_tool(tool_name, {}, ctx, tool)
-
-
-@pytest.mark.asyncio
-async def test_mcp_result_over_threshold_is_spilled(tmp_path: Path):
-    tool_results_dir = tmp_path / "tool_results"
-    deps = _make_routing_deps(tool_results_dir)
-    oversized = "x" * (SPILL_THRESHOLD_CHARS + 1)
-
-    result = await _call_through_wrapper(deps, "mcp_test_tool", oversized)
-
-    assert PERSISTED_OUTPUT_TAG in result
-    spilled_files = list(tool_results_dir.glob("*.txt"))
-    assert len(spilled_files) == 1
+async def _dispatch_emit(deps: CoDeps, tool_name: str) -> str:
+    parts = await dispatch_tools(
+        [ToolCallPart(tool_name=tool_name, args={}, tool_call_id="c1")],
+        deps,
+        cap_state=ToolCapState(),
+    )
+    return parts[0].content
 
 
 @pytest.mark.asyncio
 async def test_mcp_result_under_threshold_passes_through(tmp_path: Path):
     tool_results_dir = tmp_path / "tool_results"
-    deps = _make_routing_deps(tool_results_dir)
     small = "x" * (SPILL_THRESHOLD_CHARS - 1)
+    inner: FunctionToolset = FunctionToolset()
 
-    result = await _call_through_wrapper(deps, "mcp_test_tool", small)
+    async def mcp_small() -> str:
+        return small
+
+    inner.add_function(mcp_small, requires_approval=False)
+    deps = _make_deps(
+        tool_results_dir, {"mcp_small": _info("mcp_small", source=ToolSourceEnum.MCP)}, inner
+    )
+
+    result = await _dispatch_emit(deps, "mcp_small")
 
     assert result == small
     assert not tool_results_dir.exists()
 
 
 @pytest.mark.asyncio
-async def test_native_result_over_threshold_not_coerced_by_wrapper(tmp_path: Path):
+async def test_native_result_over_threshold_not_coerced_by_dispatch(tmp_path: Path):
     tool_results_dir = tmp_path / "tool_results"
-    deps = _make_routing_deps(tool_results_dir)
     oversized = "x" * (SPILL_THRESHOLD_CHARS + 1)
+    inner: FunctionToolset = FunctionToolset()
 
-    result = await _call_through_wrapper(deps, "native_test_tool", oversized)
+    async def native_big() -> str:
+        return oversized
 
-    # The wrapper defers to tool_output() for native tools — no spill here.
+    inner.add_function(native_big, requires_approval=False)
+    deps = _make_deps(
+        tool_results_dir, {"native_big": _info("native_big", source=ToolSourceEnum.NATIVE)}, inner
+    )
+
+    result = await _dispatch_emit(deps, "native_big")
+
+    # dispatch coerces only MCP-source results; native tools spill themselves.
     assert result == oversized
     assert not tool_results_dir.exists()

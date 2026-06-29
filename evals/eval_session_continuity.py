@@ -58,12 +58,11 @@ from co_cli.context._compaction_markers import (
 from co_cli.session.persistence import append_messages, load_transcript
 
 
-def _build_ctx(deps: Any, agent: Any, frontend: Any, history: list[Any]) -> CommandContext:
+def _build_ctx(deps: Any, frontend: Any, history: list[Any]) -> CommandContext:
     """Construct a ``CommandContext`` mirroring main.py's chat loop usage."""
     return CommandContext(
         message_history=history,
         deps=deps,
-        agent=agent,
         completer=None,
         frontend=frontend,
     )
@@ -92,15 +91,13 @@ def _contains_any_compaction_marker(history: list[Any]) -> bool:
 # ---------------------------------------------------------------------------
 
 
-async def case_w2_d_resume_helpers_rehydrate(
-    deps: Any, agent: Any, frontend: Any, run: Any
-) -> CaseResult:
+async def case_w2_d_resume_helpers_rehydrate(deps: Any, frontend: Any, run: Any) -> CaseResult:
     """Seed deploy id + todo, rotate, rehydrate from disk, ask follow-up.
 
     **Not an end-to-end /resume test.** ``/resume`` is interactive and can't be
     driven via ``dispatch`` today (Open Q3 in the plan). This case exercises
     the rehydration *mechanism* directly — ``load_transcript`` +
-    ``_rehydrate_todos`` — and verifies a follow-up ``run_turn`` with
+    ``_rehydrate_todos`` — and verifies a follow-up ``run_turn_owned`` with
     ``message_history=prior_messages`` still recovers the seeded fact. A
     regression in ``_cmd_resume``'s picker / ``prompt_selection`` UX is NOT
     caught here; that gap closes when ``_cmd_resume`` is refactored to call
@@ -126,21 +123,19 @@ async def case_w2_d_resume_helpers_rehydrate(
                 user_input=seed_input,
                 prior_message_count=len(history),
                 run_turn_callable=lambda: drive_turn(
-                    agent=agent,
                     user_input=seed_input,
                     deps=deps,
                     message_history=history,
                     frontend=frontend,
                 ),
                 case_dir_path=case_dir,
-                agent=agent,
             )
         model_call_seconds += seed_trace.model_call_seconds
         for k, v in seed_trace.token_usage.items():
             token_usage[k] = token_usage.get(k, 0) + v
         history = list(seed_result.messages)
         prior_session_path = deps.session.session_path
-        # run_turn does not itself persist — that's the chat-loop's job
+        # run_turn_owned does not itself persist — that's the chat-loop's job
         # (co_cli/main.py:_finalize_turn → persist_session_history). The eval
         # mimics that step so load_transcript() below can read the seed turn
         # back from disk after /new rotates.
@@ -152,7 +147,7 @@ async def case_w2_d_resume_helpers_rehydrate(
     # Drive /new to rotate the session. /new only rotates when history is
     # non-empty; the seed turn satisfies that.
     if passed:
-        ctx = _build_ctx(deps, agent, frontend, history)
+        ctx = _build_ctx(deps, frontend, history)
         outcome = await dispatch("/new", ctx)
         if not isinstance(outcome, ReplaceTranscript):
             passed = False
@@ -183,14 +178,12 @@ async def case_w2_d_resume_helpers_rehydrate(
                     user_input=followup_input,
                     prior_message_count=len(prior_messages),
                     run_turn_callable=lambda: drive_turn(
-                        agent=agent,
                         user_input=followup_input,
                         deps=deps,
                         message_history=prior_messages,
                         frontend=frontend,
                     ),
                     case_dir_path=case_dir,
-                    agent=agent,
                 )
             model_call_seconds += followup_trace.model_call_seconds
             for k, v in followup_trace.token_usage.items():
@@ -262,7 +255,7 @@ def _inflation_target_messages(deps: Any) -> int:
 
 
 async def case_w2_e_compact_replaces_with_summary(
-    deps: Any, agent: Any, frontend: Any, run: Any
+    deps: Any, frontend: Any, run: Any
 ) -> CaseResult:
     """Inflate history past compaction_ratio, then /compact.
 
@@ -310,14 +303,12 @@ async def case_w2_e_compact_replaces_with_summary(
                 user_input=marker_input,
                 prior_message_count=len(history),
                 run_turn_callable=lambda: drive_turn(
-                    agent=agent,
                     user_input=marker_input,
                     deps=deps,
                     message_history=history,
                     frontend=frontend,
                 ),
                 case_dir_path=case_dir,
-                agent=agent,
             )
             model_call_seconds += marker_trace.model_call_seconds
             for k, v in marker_trace.token_usage.items():
@@ -332,14 +323,12 @@ async def case_w2_e_compact_replaces_with_summary(
                     user_input=user_input,
                     prior_message_count=len(history),
                     run_turn_callable=lambda u=user_input, h=history: drive_turn(
-                        agent=agent,
                         user_input=u,
                         deps=deps,
                         message_history=h,
                         frontend=frontend,
                     ),
                     case_dir_path=case_dir,
-                    agent=agent,
                 )
                 model_call_seconds += turn_trace.model_call_seconds
                 for k, v in turn_trace.token_usage.items():
@@ -347,7 +336,7 @@ async def case_w2_e_compact_replaces_with_summary(
                 history = list(turn_result.messages)
 
             pre_compact_len = len(history)
-            ctx = _build_ctx(deps, agent, frontend, history)
+            ctx = _build_ctx(deps, frontend, history)
             outcome = await dispatch("/compact", ctx)
             if not isinstance(outcome, ReplaceTranscript):
                 passed = False
@@ -388,14 +377,12 @@ async def case_w2_e_compact_replaces_with_summary(
                     user_input=followup_input,
                     prior_message_count=len(post_compact_history),
                     run_turn_callable=lambda: drive_turn(
-                        agent=agent,
                         user_input=followup_input,
                         deps=deps,
                         message_history=post_compact_history,
                         frontend=frontend,
                     ),
                     case_dir_path=case_dir,
-                    agent=agent,
                 )
             model_call_seconds += followup_trace.model_call_seconds
             for k, v in followup_trace.token_usage.items():
@@ -468,13 +455,13 @@ async def main() -> int:
     _force_blocking_stdio()
     await ensure_ollama_warm()
 
-    deps, agent, frontend, stack = await make_eval_deps()
+    deps, frontend, stack = await make_eval_deps()
     apply_eval_window(deps)
     cases: list[CaseResult] = []
     try:
         async with open_eval_run("session-continuity") as run:
             # W2.D — resume continuity.
-            case_d = await case_w2_d_resume_helpers_rehydrate(deps, agent, frontend, run)
+            case_d = await case_w2_d_resume_helpers_rehydrate(deps, frontend, run)
             cases.append(case_d)
             print(
                 f"[session-continuity] {case_d.name}: "
@@ -482,7 +469,7 @@ async def main() -> int:
             )
 
             # W2.E — inflation + /compact; judges the summary preserved the marker fact.
-            case_e = await case_w2_e_compact_replaces_with_summary(deps, agent, frontend, run)
+            case_e = await case_w2_e_compact_replaces_with_summary(deps, frontend, run)
             cases.append(case_e)
             print(
                 f"[session-continuity] {case_e.name}: "

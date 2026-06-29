@@ -174,7 +174,6 @@ def _seed_reviewer_transcript(sessions_dir: Path) -> tuple[Path, str]:
 
 async def case_w3_g_forget_propagates_to_recall(
     deps: CoDeps,
-    agent: Any,
     frontend: EvalFrontend,
     run: EvalRun,
 ) -> CaseResult:
@@ -221,14 +220,12 @@ async def case_w3_g_forget_propagates_to_recall(
                 user_input=t0_input,
                 prior_message_count=len(history),
                 run_turn_callable=lambda: drive_turn(
-                    agent=agent,
                     user_input=t0_input,
                     deps=deps,
                     message_history=history,
                     frontend=frontend,
                 ),
                 case_dir_path=trace_file,
-                agent=agent,
             )
         model_call_seconds += t0_trace.model_call_seconds
         for k, v in t0_trace.token_usage.items():
@@ -252,14 +249,12 @@ async def case_w3_g_forget_propagates_to_recall(
                     user_input=t1_input,
                     prior_message_count=len(history),
                     run_turn_callable=lambda: drive_turn(
-                        agent=agent,
                         user_input=t1_input,
                         deps=deps,
                         message_history=history,
                         frontend=frontend,
                     ),
                     case_dir_path=trace_file,
-                    agent=agent,
                 )
             model_call_seconds += t1_trace.model_call_seconds
             for k, v in t1_trace.token_usage.items():
@@ -280,14 +275,12 @@ async def case_w3_g_forget_propagates_to_recall(
                     user_input=t2_input,
                     prior_message_count=len(history),
                     run_turn_callable=lambda: drive_turn(
-                        agent=agent,
                         user_input=t2_input,
                         deps=deps,
                         message_history=history,
                         frontend=frontend,
                     ),
                     case_dir_path=trace_file,
-                    agent=agent,
                 )
             model_call_seconds += _t2_trace.model_call_seconds
             for k, v in _t2_trace.token_usage.items():
@@ -339,7 +332,6 @@ async def case_w3_g_forget_propagates_to_recall(
 
 async def case_reviewer_extracts_durable_memory(
     deps: CoDeps,
-    agent: Any,
     frontend: EvalFrontend,
     run: EvalRun,
 ) -> CaseResult:
@@ -351,7 +343,7 @@ async def case_reviewer_extracts_durable_memory(
     captures the preference and does not memorialize the noise.
 
     ``agent``/``frontend`` are unused (this case calls ``process_review`` directly,
-    not ``run_turn``) but kept for the ``case_fn(deps, agent, frontend, run)``
+    not ``run_turn_owned``) but kept for the ``case_fn(deps, frontend, run)``
     tuple-dispatch signature.
     """
     case_id = "W3.R"
@@ -447,7 +439,7 @@ async def main() -> int:
     only on a hard FAIL.
     """
     await ensure_ollama_warm()
-    deps, agent, frontend, stack = await make_eval_deps()
+    deps, frontend, stack = await make_eval_deps()
     apply_eval_window(deps)
     cases: list[CaseResult] = []
     try:
@@ -457,7 +449,7 @@ async def main() -> int:
                 case_reviewer_extracts_durable_memory,
             ):
                 try:
-                    cr = await case_fn(deps, agent, frontend, run)
+                    cr = await case_fn(deps, frontend, run)
                 except Exception as exc:
                     cr = CaseResult(
                         name=case_fn.__name__,

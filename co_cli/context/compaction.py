@@ -472,7 +472,7 @@ async def recover_overflow_history(
 
     PATH 2: run ``plan_compaction_boundaries`` + ``compact_messages`` on the
             stripped history. Returns None when the planner cannot find valid
-            bounds (e.g. only one turn group total) — caller (run_turn) drives
+            bounds (e.g. only one turn group total) — caller (run_turn_owned) drives
             the terminal error path.
 
     Replaces the previous two-tier cascade. The strip primitive is more

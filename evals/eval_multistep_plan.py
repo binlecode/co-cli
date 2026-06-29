@@ -218,7 +218,6 @@ async def _drive_turns(
     *,
     case_id: str,
     deps: Any,
-    agent: Any,
     frontend: Any,
     case_dir_path: Path,
     inputs: list[str],
@@ -242,7 +241,6 @@ async def _drive_turns(
                 prior_message_count=prior_len,
                 run_turn_callable=(
                     lambda h=history, ui=user_input: drive_turn(
-                        agent=agent,
                         user_input=ui,
                         deps=deps,
                         message_history=h,
@@ -250,7 +248,6 @@ async def _drive_turns(
                     )
                 ),
                 case_dir_path=case_dir_path,
-                agent=agent,
             )
         history = list(result.messages)
         new_msgs = history[prior_len:]
@@ -268,7 +265,6 @@ async def _drive_turns(
 
 async def _case_w11_a_breakdown_before_execute(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -312,7 +308,6 @@ async def _case_w11_a_breakdown_before_execute(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -377,7 +372,6 @@ async def _case_w11_a_breakdown_before_execute(
 
 async def _case_w11_b_ask_when_unsure(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -426,7 +420,6 @@ async def _case_w11_b_ask_when_unsure(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -489,7 +482,6 @@ async def _case_w11_b_ask_when_unsure(
 
 async def _case_w11_c_synthesis_from_mixed_sources(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -531,7 +523,6 @@ async def _case_w11_c_synthesis_from_mixed_sources(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -631,7 +622,6 @@ _UNFINISHED_FLAG_PHRASES = (
 
 async def _case_w11_d_plan_skill_todo_execution(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -682,7 +672,6 @@ async def _case_w11_d_plan_skill_todo_execution(
         ctx = CommandContext(
             message_history=[],
             deps=deps,
-            agent=agent,
             completer=None,
             frontend=frontend,
         )
@@ -712,7 +701,6 @@ async def _case_w11_d_plan_skill_todo_execution(
                     prior_message_count=prior_len,
                     run_turn_callable=(
                         lambda h=history, ui=user_input: drive_turn(
-                            agent=agent,
                             user_input=ui,
                             deps=deps,
                             message_history=h,
@@ -720,7 +708,6 @@ async def _case_w11_d_plan_skill_todo_execution(
                         )
                     ),
                     case_dir_path=run.case_trace_path(case_id),
-                    agent=agent,
                 )
             history = list(result.messages)
             new_msgs = history[prior_len:]
@@ -801,7 +788,7 @@ async def main() -> int:
     """Drive W11.A-W11.D end-to-end, write trace, return exit code."""
     await ensure_ollama_warm()
 
-    async with eval_deps() as (deps, agent, frontend), open_eval_run("multistep_plan") as run:
+    async with eval_deps() as (deps, frontend), open_eval_run("multistep_plan") as run:
         apply_eval_window(deps)
         spans_log = setup_perf_spans(run.spans_path)
         cases: list[CaseResult] = []
@@ -813,7 +800,7 @@ async def main() -> int:
             _case_w11_d_plan_skill_todo_execution,
         ):
             try:
-                case = await runner(deps, agent, frontend, run, spans_log)
+                case = await runner(deps, frontend, run, spans_log)
             except Exception as exc:
                 case = CaseResult(
                     name=runner.__name__,

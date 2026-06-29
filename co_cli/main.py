@@ -15,12 +15,8 @@ import typer
 from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
-from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.messages import BinaryContent, ModelMessage
 
-from co_cli.agent.build import build_orchestrator
-from co_cli.agent.orchestrate import run_turn
-from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.agent.turn_state import TurnResult
 from co_cli.bootstrap.banner import display_welcome_banner
 from co_cli.bootstrap.core import (
@@ -180,7 +176,6 @@ async def _finalize_turn(
 async def _run_foreground_turn(
     *,
     message_history: list[ModelMessage],
-    agent: Agent[CoDeps, str | DeferredToolRequests],
     user_input: str | list[str | BinaryContent],
     saved_env: dict[str, str | None],
     deps: CoDeps,
@@ -194,38 +189,29 @@ async def _run_foreground_turn(
     session_path = deps.session.session_path
     if session_path is not None:
         set_session_context(session_path.stem[-8:])
-    try:
-        if deps.config.llm.use_owned_loop:
-            from co_cli.agent.loop import run_turn_owned
+    from co_cli.agent.loop import run_turn_owned
 
-            try:
-                turn_result = await run_turn_owned(
-                    user_input=user_input,
-                    deps=deps,
-                    message_history=message_history,
-                    frontend=frontend,
-                )
-            except asyncio.CancelledError:
-                # Esc cancels the active turn task; the owned loop stashed its
-                # drop->fill result before re-raising. This caller owns the REPL
-                # interrupt, so absorb the cancellation, clear it, and finalize the
-                # drop->fill. A cancellation with no stashed result is not ours
-                # (genuine outer cancellation) — let it propagate.
-                stashed = deps.runtime.pending_interrupt_result
-                if stashed is None:
-                    raise
-                task = asyncio.current_task()
-                if task is not None:
-                    task.uncancel()
-                turn_result = stashed
-        else:
-            turn_result = await run_turn(
-                agent=agent,
+    try:
+        try:
+            turn_result = await run_turn_owned(
                 user_input=user_input,
                 deps=deps,
                 message_history=message_history,
                 frontend=frontend,
             )
+        except asyncio.CancelledError:
+            # Esc cancels the active turn task; the owned loop stashed its
+            # drop->fill result before re-raising. This caller owns the REPL
+            # interrupt, so absorb the cancellation, clear it, and finalize the
+            # drop->fill. A cancellation with no stashed result is not ours
+            # (genuine outer cancellation) — let it propagate.
+            stashed = deps.runtime.pending_interrupt_result
+            if stashed is None:
+                raise
+            task = asyncio.current_task()
+            if task is not None:
+                task.uncancel()
+            turn_result = stashed
     finally:
         cleanup_skill_run_state(saved_env, deps)
     next_history = await _finalize_turn(turn_result, message_history, deps, frontend)
@@ -418,7 +404,6 @@ async def _handle_one_input(
     eof: bool,
     state: IterationState,
     deps: CoDeps,
-    agent: Agent,
     frontend: Frontend,
     completer: SlashCommandCompleter,
     now: float,
@@ -481,7 +466,6 @@ async def _handle_one_input(
         turn_input = _attach_user_image(user_input, image_path, deps)
         updated_history = await _run_foreground_turn(
             message_history=state.message_history,
-            agent=agent,
             user_input=turn_input,
             saved_env={},
             deps=deps,
@@ -498,7 +482,6 @@ async def _handle_one_input(
         cmd_ctx = CommandContext(
             message_history=state.message_history,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             completer=completer,
             input_queue=queue,
@@ -516,7 +499,6 @@ async def _handle_one_input(
         # Delegate to agent turn with skill env and delegated input
         updated_history = await _run_foreground_turn(
             message_history=new_history,
-            agent=agent,
             user_input=new_input,
             saved_env=saved_env,
             deps=deps,
@@ -532,7 +514,6 @@ async def _handle_one_input(
     # Plain text input — run foreground turn
     updated_history = await _run_foreground_turn(
         message_history=state.message_history,
-        agent=agent,
         user_input=user_input,
         saved_env={},
         deps=deps,
@@ -719,7 +700,6 @@ async def _chat_loop(
         deps.session.reasoning_display = reasoning_display
 
         completer.update(build_completer_entries(deps.skill_catalog))
-        agent = build_orchestrator(ORCHESTRATOR_SPEC, deps)
 
         start_session(deps, frontend)
         _sweep_tool_results(deps)
@@ -767,7 +747,6 @@ async def _chat_loop(
                     eof=eof,
                     state=runtime.state,
                     deps=deps,
-                    agent=agent,
                     frontend=frontend,
                     completer=completer,
                     now=time.monotonic(),

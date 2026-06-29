@@ -53,6 +53,8 @@ import asyncio
 import json
 import re
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -65,7 +67,7 @@ from evals._settings import apply_eval_window, eval_agent_uses_ollama
 from evals._timeouts import CALL_TIMEOUT_S
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
-from co_cli.agent.build import build_orchestrator
+import co_cli.agent.orchestrator as orchestrator_module
 from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.agent.spec import OrchestratorSpec
 from co_cli.config.llm import ModelProfile, resolve_model_profile
@@ -505,18 +507,19 @@ def _resolve_section(stem: str, title: str, profile: ModelProfile) -> Section:
     )
 
 
-def _build_arm_agent(deps: Any, ablated_block: str | None) -> Any:
-    """Build an orchestrator whose rules block is ``ablated_block`` (or the full
-    production block when ``None``).
+def _build_arm_spec(deps: Any, ablated_block: str | None) -> OrchestratorSpec:
+    """Build an ablated ``OrchestratorSpec`` whose rules block is ``ablated_block``
+    (or the full production block when ``None``).
 
     Persona is off by default, so the production base layer is the rules block
     alone (``build_base_instructions`` reduces to ``build_rules_block``), with the
     resolved profile's overlay appended after — assembled via the production
     ``build_profile_overlay`` so the arm measures the exact composed prompt the
-    deps' backend ships, not a fixed base-only block. The custom spec swaps that
-    one builder and reuses the real toolset guidance, per-turn instructions, and
-    history processors verbatim, so the only difference from the shipped prompt is
-    the ablated section.
+    deps' backend ships, not a fixed base-only block. The spec swaps the static
+    builders for (rules, toolset-guidance) and reuses the real history processors
+    verbatim; the per-turn dynamic instructions are added by the owned loop's
+    ``assemble_instructions`` regardless of spec, so the only difference from the
+    shipped prompt is the ablated section. Installed via :func:`_installed_spec`.
     """
     profile = resolve_model_profile(deps.config.llm)
     block = ablated_block if ablated_block is not None else _full_block(profile)
@@ -527,13 +530,27 @@ def _build_arm_agent(deps: Any, ablated_block: str | None) -> Any:
     def _toolset_builder(d: Any) -> str | None:
         return build_toolset_guidance(d.tool_catalog)
 
-    spec = OrchestratorSpec(
-        name="orchestrator-ablation",
+    return OrchestratorSpec(
         static_instruction_builders=(_rules_builder, _toolset_builder),
-        per_turn_instructions=ORCHESTRATOR_SPEC.per_turn_instructions,
         history_processors=ORCHESTRATOR_SPEC.history_processors,
     )
-    return build_orchestrator(spec, deps)
+
+
+@contextmanager
+def _installed_spec(spec: OrchestratorSpec) -> Iterator[None]:
+    """Install ``spec`` as the module-global ORCHESTRATOR_SPEC for one owned turn.
+
+    The owned loop composes its static prompt from ``ORCHESTRATOR_SPEC.static_instruction_builders``
+    (read fresh per turn by ``preflight.build_static_instructions``), so swapping the
+    module global is how an ablation arm drives a turn with its modified prompt. Restored
+    on exit; samples run sequentially so there is no cross-arm bleed.
+    """
+    original = orchestrator_module.ORCHESTRATOR_SPEC
+    orchestrator_module.ORCHESTRATOR_SPEC = spec
+    try:
+        yield
+    finally:
+        orchestrator_module.ORCHESTRATOR_SPEC = original
 
 
 def _tool_calls_from(messages: list[Any]) -> list[ToolCallPart]:
@@ -552,13 +569,14 @@ def _target_fired(tool_calls: list[ToolCallPart], target_tools: frozenset[str]) 
     return any(tc.tool_name in target_tools for tc in tool_calls)
 
 
-async def _run_turn(agent: Any, deps: Any, frontend: Any, user_input: str) -> list[ToolCallPart]:
-    """Drive one fresh single-turn agent run; return the turn's tool calls."""
+async def _run_turn(
+    spec: OrchestratorSpec, deps: Any, frontend: Any, user_input: str
+) -> list[ToolCallPart]:
+    """Drive one fresh single-turn owned run under ``spec``; return the turn's tool calls."""
     from evals._deps import drive_turn
 
-    async with asyncio.timeout(CALL_TIMEOUT_S):
+    async with asyncio.timeout(CALL_TIMEOUT_S), _installed_spec(spec):
         result = await drive_turn(
-            agent=agent,
             user_input=user_input,
             deps=deps,
             message_history=[],
@@ -568,14 +586,14 @@ async def _run_turn(agent: Any, deps: Any, frontend: Any, user_input: str) -> li
 
 
 async def _arm_fire_rate(
-    agent: Any, deps: Any, frontend: Any, probe: SectionProbe, arm: str, samples: int
+    spec: OrchestratorSpec, deps: Any, frontend: Any, probe: SectionProbe, arm: str, samples: int
 ) -> dict[str, Any]:
     """Run N independent samples for one arm; return the target-tool fire-rate."""
     fired = 0
     timeouts = 0
     for i in range(samples):
         try:
-            tool_calls = await _run_turn(agent, deps, frontend, probe.user_input)
+            tool_calls = await _run_turn(spec, deps, frontend, probe.user_input)
             hit = _target_fired(tool_calls, probe.target_tools)
             fired += 1 if hit else 0
             tag = f"{probe.rule_stem}/{probe.section_title}/{arm}"
@@ -626,11 +644,11 @@ async def _measure_section(
     if probe.fixture:
         load_fixture(probe.fixture, deps)
 
-    full_agent = _build_arm_agent(deps, ablated_block=None)
-    full = await _arm_fire_rate(full_agent, deps, frontend, probe, "full", samples)
+    full_spec = _build_arm_spec(deps, ablated_block=None)
+    full = await _arm_fire_rate(full_spec, deps, frontend, probe, "full", samples)
 
-    ablated_agent = _build_arm_agent(deps, ablated_block=ablated_block)
-    ablated = await _arm_fire_rate(ablated_agent, deps, frontend, probe, "ablated", samples)
+    ablated_spec = _build_arm_spec(deps, ablated_block=ablated_block)
+    ablated = await _arm_fire_rate(ablated_spec, deps, frontend, probe, "ablated", samples)
 
     delta = full["fire_rate"] - ablated["fire_rate"]
     # A zero delta at a saturated ceiling/floor (both arms 1.0 or both 0.0) is
@@ -735,7 +753,7 @@ async def main(samples: int = SAMPLES_PER_ARM, section: str | None = None) -> No
             f"{sorted(p.section_title for p in _PROBES)}"
         )
 
-    deps, _agent, frontend, stack = await make_eval_deps()
+    deps, frontend, stack = await make_eval_deps()
     try:
         # Warm-up is an Ollama-only infrastructure step (model load + KV-cache flush).
         # Gated centrally on the configured backend so it does NOT run on the gemini

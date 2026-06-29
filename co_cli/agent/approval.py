@@ -1,13 +1,11 @@
 """Inline approval collection for the owned loop — pre-fan-out, sequential.
 
-The graph path suspends the run with ``DeferredToolRequests`` and resumes it after the
-user decides (``orchestrate.py:_collect_deferred_tool_approvals``). The owned loop has no
-suspend/resume: it prompts inline, **before** the step's tool fan-out, and feeds the
-decisions into ``dispatch_tools`` as denials (denied calls) + approved ids (the in-body
-raisers' gate).
+The owned loop has no suspend/resume: it prompts inline, **before** the step's tool
+fan-out, and feeds the decisions into ``dispatch_tools`` as denials (denied calls) +
+approved ids (the in-body raisers' gate).
 
-Two approval triggers reach the collector, unified here exactly as the graph's SDK unifies
-them, plus clarify (which asks rather than approves):
+Two approval triggers reach the collector, unified here, plus clarify (which asks rather
+than approves):
 
 - **Catalog ``is_approval_required=True``** — the tool is marked sensitive in the catalog.
 - **Shell's dynamic policy gate** — ``shell_exec`` is *not* catalog-marked; it decides at
@@ -15,13 +13,12 @@ them, plus clarify (which asks rather than approves):
   policy here to decide whether to prompt; ``shell_policy`` is side-effect-free so
   evaluating it in the collector and again in the body is free.
 - **``clarify``** — asks its questions inline, stashes the answers in
-  ``deps.runtime.clarify_answers``, and marks the call approved so the unchanged clarify
-  body reads the stash and returns the answers (the stash is shared with the still-live
-  graph path; its removal is a Phase-5 item).
+  ``deps.runtime.clarify_answers``, and marks the call approved so the clarify body reads
+  the stash and returns the answers.
 
-Parity with the graph (D-A): a denial becomes a ``ToolReturnPart`` fed back to the model
-and the turn **continues** — approved siblings still execute. Headless (``frontend is
-None``) auto-denies standard approvals (``"n"``), matching ``orchestrate.py:263``.
+A denial becomes a ``ToolReturnPart`` fed back to the model and the turn **continues** —
+approved siblings still execute. Headless (``frontend is None``) auto-denies standard
+approvals (``"n"``).
 """
 
 from __future__ import annotations
@@ -98,15 +95,13 @@ async def _handle_clarify(
 ) -> None:
     """Prompt a clarify call's questions inline, stash the answers, mark it approved.
 
-    Mirrors the graph's clarify path (``orchestrate.py:222-248``): build a
-    ``QuestionPrompt`` per question, ask it, stash the answers list in
+    Build a ``QuestionPrompt`` per question, ask it, stash the answers list in
     ``deps.runtime.clarify_answers`` keyed by ``tool_call_id``, and add the call to
-    ``approved_ids`` so the unchanged clarify body reads the stash and returns the answers.
+    ``approved_ids`` so the clarify body reads the stash and returns the answers.
 
-    Headless asymmetry (CD-m-5): unlike standard approvals (which auto-deny when
-    ``frontend is None``), clarify auto-approves with empty answers — matching
-    ``orchestrate.py:240,248``. So the headless branch stays on the approve-with-empty path,
-    not the deny path.
+    Headless asymmetry: unlike standard approvals (which auto-deny when ``frontend is
+    None``), clarify auto-approves with empty answers. So the headless branch stays on the
+    approve-with-empty path, not the deny path.
     """
     questions = decode_tool_args(call.args).get("questions", [])
     answers: list[str] = []

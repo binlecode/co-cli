@@ -74,10 +74,9 @@ def make_repl_deps(tmp_path: Path) -> CoDeps:
 
     Mirrors the ``test_flow_status_command.py`` deps shape. ``/status`` reads only
     in-memory ``deps`` plus cheap local reads, so empty tool/skill catalogs (the
-    field defaults) are fine. The harness wires the accept_handler with
-    ``agent=None``: ``_handle_one_input`` routes ``/status`` through
+    field defaults) are fine. ``_handle_one_input`` routes ``/status`` through
     ``dispatch_command`` (a ``LocalOnly`` outcome) and returns before
-    ``_run_foreground_turn``, the only agent consumer — so no model is needed.
+    ``_run_foreground_turn`` — so no model is needed.
     """
     session_path = tmp_path / "sessions" / f"2026-06-14T120000.000-{_SESSION_ID}.jsonl"
     return CoDeps(
@@ -137,7 +136,6 @@ async def drive_repl(deps: CoDeps, keys: str, *, sentinel: str) -> str:
             eof=eof,
             state=runtime.state,
             deps=deps,
-            agent=None,  # type: ignore[arg-type]  # /status never reaches the agent (see make_repl_deps)
             frontend=frontend,
             completer=completer,
             now=time.monotonic(),

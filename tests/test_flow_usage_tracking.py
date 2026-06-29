@@ -1,8 +1,8 @@
 """Flow tests for token-usage capture, fork-sharing, and per-turn flush.
 
-All ledger I/O is real (CO_HOME-overridden temp dir). Both capture chokepoints
-are exercised with synthesized provider usage — no real LLM call needed to prove
-coverage, keeping the flow deterministic.
+All ledger I/O is real (CO_HOME-overridden temp dir). The owned turn-loop capture
+chokepoint is exercised with pydantic-ai's ``FunctionModel`` (the SDK's deterministic
+agent driver) — no real LLM call needed to prove coverage, keeping the flow deterministic.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from pydantic_ai import Agent, DeferredToolRequests, RunContext
+from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -26,19 +26,41 @@ from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.usage import RequestUsage
 from tests._settings import SETTINGS
 
-from co_cli.agent.orchestrate import TurnResult, run_turn
-from co_cli.agent.toolset import _CallSeamToolset
+from co_cli.agent.core import assemble_routing_toolset
+from co_cli.agent.loop import run_turn_owned
+from co_cli.agent.turn_state import TurnResult
 from co_cli.daemons.dream._loop import _flush_daemon_usage
-from co_cli.deps import CoDeps, CoSessionState, fork_deps
+from co_cli.deps import (
+    CoDeps,
+    CoSessionState,
+    ToolInfo,
+    ToolSourceEnum,
+    VisibilityPolicyEnum,
+    fork_deps,
+)
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.call import llm_call
+from co_cli.llm.factory import LlmModel
 from co_cli.main import _apply_command_outcome, _finalize_turn
 from co_cli.observability.usage import record_usage
 from co_cli.session.usage import aggregate
 from co_cli.tools.shell_backend import ShellBackend
 
 
-def _make_deps(tmp_path: Path, *, max_model_requests: int = 90) -> CoDeps:
+def _info(name: str) -> ToolInfo:
+    return ToolInfo(
+        name=name,
+        description="test",
+        is_approval_required=False,
+        source=ToolSourceEnum.NATIVE,
+        visibility=VisibilityPolicyEnum.ALWAYS,
+        is_concurrent_safe=True,
+    )
+
+
+def _make_deps(
+    tmp_path: Path, *, model: object | None = None, max_model_requests: int = 90
+) -> CoDeps:
     session_path = tmp_path / "sessions" / "2026-06-04T120000.000-abcd1234.jsonl"
     config = SETTINGS.model_copy(
         update={
@@ -49,6 +71,7 @@ def _make_deps(tmp_path: Path, *, max_model_requests: int = 90) -> CoDeps:
     )
     return CoDeps(
         shell=ShellBackend(),
+        model=model,  # type: ignore[arg-type]
         config=config,
         session=CoSessionState(session_path=session_path),
         sessions_dir=tmp_path / "sessions",
@@ -61,51 +84,55 @@ def _ledger_lines(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def _make_approval_then_text_agent(approval_requests: int) -> Agent:
-    """Agent that issues ``approval_requests`` approval-tool calls, then text.
+def _tool_then_text_model(tool_calls: int) -> FunctionModel:
+    """A model that issues ``tool_calls`` tool-call steps, then answers with text.
 
-    Each approval call ends a run with DeferredToolRequests; the approval loop
-    resumes for the next. Drives ``approval_requests + 1`` model requests across as
-    many runs, with cumulative RunUsage carried forward between them.
+    Each step is one model request; the owned loop accumulates RunUsage across them
+    and records the cumulative total once.
     """
-    call_count = {"n": 0}
+    state = {"n": 0}
 
     async def stream_fn(
         messages: list[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str | DeltaToolCalls]:
-        call_count["n"] += 1
-        n = call_count["n"]
-        if n <= approval_requests:
-            yield {0: DeltaToolCall(name="needs_approval", json_args="{}", tool_call_id=f"c{n}")}
+        state["n"] += 1
+        if state["n"] <= tool_calls:
+            yield {0: DeltaToolCall(name="noop", json_args="{}", tool_call_id=f"c{state['n']}")}
         else:
             yield "done"
 
-    toolset: FunctionToolset = FunctionToolset()
+    return FunctionModel(stream_function=stream_fn)
 
-    async def needs_approval(ctx: RunContext[CoDeps]) -> str:
-        return "approved"
 
-    toolset.add_function(needs_approval, requires_approval=True)
+def _owned_deps(tmp_path: Path, model: FunctionModel, *, max_model_requests: int = 90) -> CoDeps:
+    """Build deps wired with a noop native toolset + the supplied FunctionModel."""
+    inner: FunctionToolset = FunctionToolset()
 
-    return Agent(
-        FunctionModel(stream_function=stream_fn),
-        deps_type=CoDeps,
-        output_type=[str, DeferredToolRequests],
-        toolsets=[_CallSeamToolset(toolset)],
+    async def noop(ctx: RunContext[CoDeps]) -> str:
+        return "noop"
+
+    inner.add_function(noop, requires_approval=False)
+    deps = _make_deps(tmp_path, max_model_requests=max_model_requests)
+    deps.model = LlmModel(
+        model=model,
+        settings=deps.config.llm.noreason_model_settings(),
+        settings_noreason=deps.config.llm.noreason_model_settings(),
     )
+    deps.toolset = assemble_routing_toolset(inner, [])
+    deps.tool_catalog = {"noop": _info("noop")}
+    return deps
 
 
 @pytest.mark.asyncio
-async def test_multi_run_turn_records_final_usage_once(tmp_path: Path) -> None:
-    """A 2-run approval-resume turn records the turn's FINAL cumulative usage
-    once. Because RunUsage is cumulative, recording per-run would push the
-    accumulator above the final usage — so accumulator == turn.usage proves no
-    double-count."""
-    deps = _make_deps(tmp_path)
-    agent = _make_approval_then_text_agent(approval_requests=1)
+async def test_multi_step_turn_records_final_usage_once(tmp_path: Path) -> None:
+    """A 2-step (tool then text) turn records the turn's FINAL cumulative usage once.
 
-    turn = await run_turn(
-        agent=agent,
+    Because RunUsage is cumulative across steps, the accumulator equalling turn.usage
+    proves the turn recorded once at the boundary, not per-step (which would double-count).
+    """
+    deps = _owned_deps(tmp_path, _tool_then_text_model(tool_calls=1))
+
+    turn = await run_turn_owned(
         user_input="ping",
         deps=deps,
         message_history=[],
@@ -121,13 +148,11 @@ async def test_multi_run_turn_records_final_usage_once(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_error_outcome_turn_still_records_usage(tmp_path: Path) -> None:
-    """A cap-stopped (error-outcome) turn still appends its usage — the record sits
-    in the finally block that catches every return path, not the happy path only."""
-    deps = _make_deps(tmp_path, max_model_requests=2)
-    agent = _make_approval_then_text_agent(approval_requests=2)
+    """A cap-stopped (error-outcome) turn still records its usage — the record sits in
+    the finally block that catches every return path, not the happy path only."""
+    deps = _owned_deps(tmp_path, _tool_then_text_model(tool_calls=5), max_model_requests=2)
 
-    turn = await run_turn(
-        agent=agent,
+    turn = await run_turn_owned(
         user_input="ping",
         deps=deps,
         message_history=[],

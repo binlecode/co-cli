@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
-    from pydantic_ai import RunContext
 
     from co_cli.deps import CoDeps
 
@@ -41,13 +40,12 @@ class SurfaceModeEnum(StrEnum):
 class OrchestratorSpec:
     """Declarative spec for the always-present primary agent.
 
-    Singleton — toolset is read from deps.toolset by build_orchestrator (no
-    factory field). Output type is fixed [str, DeferredToolRequests]; retries
-    from deps.config.tool_retries.
+    Singleton — the owned loop reads the tool surface from deps.toolset and composes
+    the static instruction builders (build_static_instructions / assemble_instructions);
+    retries from deps.config.tool_retries.
     """
 
     static_instruction_builders: tuple[Callable[[CoDeps], str | None], ...]
-    per_turn_instructions: tuple[Callable[[RunContext[CoDeps]], str], ...]
     history_processors: tuple[Callable[..., Any], ...]
 
 

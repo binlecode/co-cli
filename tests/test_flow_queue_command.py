@@ -44,7 +44,6 @@ def _make_ctx(deps: CoDeps, queue: deque[str] | None) -> CommandContext:
     return CommandContext(
         message_history=[],
         deps=deps,
-        agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
         completer=None,
         input_queue=queue,

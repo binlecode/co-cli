@@ -36,7 +36,7 @@ def _make_ctx(tmp_path: Path) -> CommandContext:
         user_skills_dir=tmp_path,
         tool_results_dir=tmp_path / "tool-results",
     )
-    return CommandContext(message_history=[], deps=deps, agent=None)  # type: ignore[arg-type]
+    return CommandContext(message_history=[], deps=deps)  # type: ignore[arg-type]
 
 
 def _capture_output(fn) -> str:

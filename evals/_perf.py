@@ -18,7 +18,7 @@ traces.
 Model-request spans carry ``kind == "model"`` (both the agent-path ``chat
 <model>`` span and the direct ``llm_call <model>`` span), with ``duration_ms``
 top-level and ``attributes["co.model.tokens.input"]`` for prompt tokens
-(``co_cli/llm/surrogate_recovery_model.py``, ``co_cli/llm/call.py``).
+(``co_cli/llm/model_turn.py``, ``co_cli/llm/call.py``).
 
 Bands (calibrated)
 ------------------

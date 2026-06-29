@@ -91,7 +91,6 @@ async def _drive_turns(
     *,
     case_id: str,
     deps: Any,
-    agent: Any,
     frontend: Any,
     case_dir_path: Path,
     inputs: list[str],
@@ -115,7 +114,6 @@ async def _drive_turns(
                 prior_message_count=prior_len,
                 run_turn_callable=(
                     lambda h=history, ui=user_input: drive_turn(
-                        agent=agent,
                         user_input=ui,
                         deps=deps,
                         message_history=h,
@@ -123,7 +121,6 @@ async def _drive_turns(
                     )
                 ),
                 case_dir_path=case_dir_path,
-                agent=agent,
             )
         history = list(result.messages)
         new_msgs = history[prior_len:]
@@ -146,7 +143,6 @@ def _trace_ids_of(slices: list[_TurnSlice]) -> list[str]:
 
 async def _case_w9_a_correction_recovery(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -180,7 +176,6 @@ async def _case_w9_a_correction_recovery(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -237,7 +232,6 @@ async def _case_w9_a_correction_recovery(
 
 async def _case_w9_b_refusal_context_drift(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -269,7 +263,6 @@ async def _case_w9_b_refusal_context_drift(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -325,7 +318,6 @@ async def _case_w9_b_refusal_context_drift(
 
 async def _case_w9_c_ambiguity_escalation(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -357,7 +349,6 @@ async def _case_w9_c_ambiguity_escalation(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -416,7 +407,7 @@ async def main() -> int:
     """Drive W9.A-W9.C end-to-end, write trace, return exit code."""
     await ensure_ollama_warm()
 
-    async with eval_deps() as (deps, agent, frontend), open_eval_run("bounded_autonomy") as run:
+    async with eval_deps() as (deps, frontend), open_eval_run("bounded_autonomy") as run:
         apply_eval_window(deps)
         spans_log = setup_perf_spans(run.spans_path)
         cases: list[CaseResult] = []
@@ -427,7 +418,7 @@ async def main() -> int:
             _case_w9_c_ambiguity_escalation,
         ):
             try:
-                case = await runner(deps, agent, frontend, run, spans_log)
+                case = await runner(deps, frontend, run, spans_log)
             except Exception as exc:
                 case = CaseResult(
                     name=runner.__name__,

@@ -1,12 +1,12 @@
-"""Per-turn trace capture for eval-driven ``run_turn`` calls.
+"""Per-turn trace capture for eval-driven ``run_turn_owned`` calls.
 
-Every ``run_turn`` driven by an eval is wrapped with :func:`record_turn`,
+Every ``run_turn_owned`` driven by an eval is wrapped with :func:`record_turn`,
 which captures prompt-snapshot hashes, full message history, tool
 calls/returns, thinking, token usage, model latency, and the co trace id
 into ``evals/_outputs/<eval>-<ts>/case_<id>.jsonl``.
 
 The trace id comes from co's structured-log tracing
-(``co_cli.observability.tracing.current_trace_id``) — ``run_turn`` is
+(``co_cli.observability.tracing.current_trace_id``) — ``run_turn_owned`` is
 decorated with ``@trace("co.turn", new_trace=True)``, so each turn runs
 under a fresh trace_id that's still bound to the contextvar when the call
 returns. Use ``co tail`` to follow new records as they land or
@@ -198,15 +198,15 @@ async def record_turn(
     case_dir_path: Path,
     agent: Any | None = None,
 ) -> tuple[Any, TurnTrace]:
-    """Drive one ``run_turn`` callable and persist its ``TurnTrace``.
+    """Drive one ``run_turn_owned`` callable and persist its ``TurnTrace``.
 
     ``run_turn_callable`` is a zero-arg async callable returning a
     ``TurnResult`` (the eval composes the kwargs it needs and passes a thunk).
 
-    ``run_turn`` returns the cumulative ``all_messages()`` — the history passed
+    ``run_turn_owned`` returns the cumulative ``all_messages()`` — the history passed
     in plus this turn's new messages. To record only THIS turn's messages, the
     caller supplies ``prior_message_count`` = the number of messages it handed
-    ``run_turn`` as ``message_history`` (``0`` for a fresh turn, ``len(history)``
+    ``run_turn_owned`` as ``message_history`` (``0`` for a fresh turn, ``len(history)``
     for a continuation). The recorder slices ``messages[prior_message_count:]``.
     The cut point is the caller's exact knowledge, never inferred — a fresh
     ``message_history=[]`` turn must pass ``0`` or its own messages are dropped.
@@ -237,7 +237,7 @@ async def record_turn(
         raise
     finally:
         model_call_seconds = time.monotonic() - t0
-        # ``run_turn`` is decorated with ``@trace("co.turn", new_trace=True)`` —
+        # ``run_turn_owned`` is decorated with ``@trace("co.turn", new_trace=True)`` —
         # by the time we read here, the trace id of the just-completed turn is
         # still bound to the contextvar (``pop_span`` clears the stack, not the
         # trace id). Read once; subsequent eval-orchestration code stays on

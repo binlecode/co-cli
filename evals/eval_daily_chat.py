@@ -1,7 +1,7 @@
 """UAT eval — Workflow 1: Daily chat (multi-turn conversation).
 
 Drives the default REPL path: ``uv run co chat`` → multi-turn dialogue →
-``run_turn`` with carried ``message_history`` → tool loop with approval gates
+``run_turn_owned`` with carried ``message_history`` → tool loop with approval gates
 → reasoning display → dream-cycle merge. Each conversational case runs
 2-3 turns so context retention and tool chaining — the parts of agent
 behavior that single-turn evals can't see — are actually exercised.
@@ -189,7 +189,6 @@ async def _drive_turns(
     *,
     case_id: str,
     deps: Any,
-    agent: Any,
     frontend: Any,
     case_dir_path: Path,
     inputs: list[str],
@@ -213,7 +212,6 @@ async def _drive_turns(
                 prior_message_count=prior_len,
                 run_turn_callable=(
                     lambda h=history, ui=user_input: drive_turn(
-                        agent=agent,
                         user_input=ui,
                         deps=deps,
                         message_history=h,
@@ -221,7 +219,6 @@ async def _drive_turns(
                     )
                 ),
                 case_dir_path=case_dir_path,
-                agent=agent,
             )
         history = list(result.messages)
         new_msgs = history[prior_len:]
@@ -239,7 +236,6 @@ async def _drive_turns(
 
 async def _case_w1_a_multi_turn_coherence(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
 ) -> CaseResult:
@@ -270,7 +266,6 @@ async def _case_w1_a_multi_turn_coherence(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -330,7 +325,6 @@ async def _case_w1_a_multi_turn_coherence(
 
 async def _case_w1_d_dream_propagates_to_recall(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
 ) -> CaseResult:
@@ -386,7 +380,6 @@ async def _case_w1_d_dream_propagates_to_recall(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=[
@@ -437,7 +430,6 @@ async def _case_w1_d_dream_propagates_to_recall(
 
 async def _case_w1_f_merge_preserves_distinct_facts(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
 ) -> CaseResult:
@@ -521,7 +513,7 @@ async def main() -> int:
     """Drive W1.A / W1.D / W1.F end-to-end, write trace, return exit code."""
     await ensure_ollama_warm()
 
-    async with eval_deps() as (deps, agent, frontend), open_eval_run("daily_chat") as run:
+    async with eval_deps() as (deps, frontend), open_eval_run("daily_chat") as run:
         apply_eval_window(deps)
         cases: list[CaseResult] = []
 
@@ -531,7 +523,7 @@ async def main() -> int:
             _case_w1_f_merge_preserves_distinct_facts,
         ):
             try:
-                case = await runner(deps, agent, frontend, run)
+                case = await runner(deps, frontend, run)
             except Exception as exc:
                 case = CaseResult(
                     name=runner.__name__,

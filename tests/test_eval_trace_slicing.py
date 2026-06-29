@@ -1,6 +1,6 @@
 """``record_turn`` records only the turn's own messages, given the caller's cut point.
 
-``run_turn`` returns cumulative ``all_messages()`` (history passed in + this turn's
+``run_turn_owned`` returns cumulative ``all_messages()`` (history passed in + this turn's
 new messages). ``record_turn`` slices ``messages[prior_message_count:]`` so the trace
 captures only the current turn. These tests drive ``record_turn`` with real
 ``TurnResult`` / pydantic-ai message objects (no mocks) over two real shapes:

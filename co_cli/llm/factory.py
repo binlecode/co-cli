@@ -11,7 +11,6 @@ from pydantic_ai.providers.ollama import OllamaProvider
 from pydantic_ai.settings import ModelSettings
 
 from co_cli.config.llm import LlmSettings
-from co_cli.llm.surrogate_recovery_model import SurrogateRecoveryModel
 
 _HTTP_CONNECT_TIMEOUT = 10.0
 _HTTP_READ_TIMEOUT = 300.0
@@ -53,12 +52,9 @@ def build_model(llm: LlmSettings) -> LlmModel:
                 pool=_HTTP_POOL_TIMEOUT,
             )
         )
-        model = SurrogateRecoveryModel(
-            OpenAIChatModel(
-                llm.model,
-                provider=OllamaProvider(base_url=f"{llm.host}/v1", http_client=_http_client),
-            ),
-            repair_tool_args=True,
+        model = OpenAIChatModel(
+            llm.model,
+            provider=OllamaProvider(base_url=f"{llm.host}/v1", http_client=_http_client),
         )
         return LlmModel(
             model=model,
@@ -67,9 +63,7 @@ def build_model(llm: LlmSettings) -> LlmModel:
         )
 
     if llm.uses_gemini():
-        google_model = SurrogateRecoveryModel(
-            GoogleModel(llm.model, provider=GoogleProvider(api_key=llm.api_key))
-        )
+        google_model = GoogleModel(llm.model, provider=GoogleProvider(api_key=llm.api_key))
         return LlmModel(
             model=google_model,
             settings=llm.reasoning_model_settings(),

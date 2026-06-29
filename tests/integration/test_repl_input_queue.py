@@ -30,9 +30,7 @@ from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP, TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli.agent.build import build_orchestrator
 from co_cli.agent.core import build_native_toolset
-from co_cli.agent.orchestrator import ORCHESTRATOR_SPEC
 from co_cli.commands.completer import SlashCommandCompleter
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.app import ReplRuntime, build_key_bindings, build_repl_app
@@ -66,13 +64,12 @@ def _make_deps(tmp_path: Path) -> CoDeps:
     )
 
 
-def _make_agent(deps: CoDeps):
-    """Build a real orchestrator agent; build_model bakes noreason_model_settings()."""
+def _wire_model(deps: CoDeps) -> None:
+    """Wire the real native toolset + model onto deps; build_model bakes noreason settings."""
     toolset, tool_catalog = build_native_toolset()
     deps.toolset = toolset
     deps.tool_catalog = tool_catalog
     deps.model = build_model(deps.config.llm)
-    return build_orchestrator(ORCHESTRATOR_SPEC, deps)
 
 
 async def _wait_running(app, *, timeout: float = 10.0) -> None:
@@ -91,7 +88,7 @@ async def test_typed_ahead_enqueues_and_drains_under_real_turn(tmp_path: Path) -
     deps = _make_deps(tmp_path)
     # Writable session path so post-turn persistence succeeds (bootstrap sets this).
     deps.session.session_path = tmp_path / "co-session.jsonl"
-    agent = _make_agent(deps)
+    _wire_model(deps)
     completer = SlashCommandCompleter()
     frontend = TerminalFrontend()
     runtime = ReplRuntime(state=IterationState(message_history=[], last_interrupt_time=-3.0))
@@ -104,7 +101,6 @@ async def test_typed_ahead_enqueues_and_drains_under_real_turn(tmp_path: Path) -
             eof=eof,
             state=runtime.state,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             completer=completer,
             now=time.monotonic(),

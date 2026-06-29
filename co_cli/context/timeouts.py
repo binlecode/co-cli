@@ -10,5 +10,5 @@ Cold-model startup is infra, not behavior.
 
 The model-generation STALL window for the agent run loop is no longer defined here: it
 is operator-tunable via ``llm.run_stall_timeout_secs`` (config/llm.py), consumed by
-``_StallTimer`` / ``_execute_run`` (agent/orchestrate.py).
+the owned loop's per-event reschedule (agent/loop.py).
 """

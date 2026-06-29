@@ -40,7 +40,7 @@ async def llm_call(
     name keeps direct calls separable from agent turns in a trace. The span nests
     under any active parent (e.g. ``compaction.proactive_check``) via push_span.
 
-    Callers that need structured output or tools should use build_task_agent() instead.
+    Callers that need structured output or tools should use run_standalone_owned() instead.
     """
     messages: list[ModelMessage] = []
     if instructions:

@@ -40,7 +40,7 @@ __all__ = [
 ]
 
 CALL_TIMEOUT_S: int = LLM_TOOL_CONTEXT_TIMEOUT_SECS
-"""Default per-call ceiling for an agent run_turn at the eval layer.
+"""Default per-call ceiling for an agent run_turn_owned at the eval layer.
 
 Aliases LLM_TOOL_CONTEXT_TIMEOUT_SECS (50s) so eval call sites read as
 ``asyncio.timeout(CALL_TIMEOUT_S)`` without coupling to the tests constant

@@ -28,9 +28,7 @@ async def test_cmd_clear_wipes_history() -> None:
         shell=ShellBackend(), config=SETTINGS_NO_MCP, session=CoSessionState(), runtime=runtime
     )
     history = [_req("hello"), _resp("hi")]
-    ctx = CommandContext(
-        message_history=history, deps=deps, agent=None, frontend=TerminalFrontend()
-    )
+    ctx = CommandContext(message_history=history, deps=deps, frontend=TerminalFrontend())
     result = await _cmd_clear(ctx, "")
 
     assert result == []

@@ -3,7 +3,7 @@
 ``open_eval_run(name)`` yields an ``EvalRun`` whose artifacts are flat,
 prefix-keyed files under ``evals/_outputs/``: ``<name>-<ts>-run.jsonl`` (one
 ``CaseResult`` line per case, appended as it lands), ``<name>-<ts>-case_<id>.jsonl``
-(``TurnTrace`` lines, one per ``run_turn``, via ``_trace.record_turn``), and
+(``TurnTrace`` lines, one per ``run_turn_owned``, via ``_trace.record_turn``), and
 ``<name>-<ts>-spans.jsonl`` (the per-run span dump).
 
 Reviewers can open a case trace file directly — or ``co trace <trace_id>`` —
@@ -55,7 +55,7 @@ class CaseResult:
       name                  — case id, e.g. "W1.A", used to look up case_<id>.jsonl.
       verdict               — 4-state Verdict (see Verdict docstring).
       duration_s            — total wall time including trace I/O.
-      model_call_seconds    — sum of ``run_turn`` model-call seconds (asserted
+      model_call_seconds    — sum of ``run_turn_owned`` model-call seconds (asserted
                               against per-case latency budget per BC #13).
       token_usage           — {"prompt", "completion", "total"} summed across turns.
       trace_id              — co trace id (from observability spans log) for the case;

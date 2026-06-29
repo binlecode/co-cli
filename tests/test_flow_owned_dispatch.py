@@ -21,7 +21,6 @@ from tests._settings import SETTINGS_NO_MCP
 from co_cli.agent.core import assemble_routing_toolset, build_native_toolset
 from co_cli.agent.dispatch import dispatch_tools
 from co_cli.agent.preflight import build_tool_defs
-from co_cli.agent.toolset import _CallSeamToolset
 from co_cli.agent.turn_state import ToolCapState
 from co_cli.config.tuning import (
     MAX_TOOL_CALLS_PER_MODEL_REQUEST,
@@ -102,7 +101,7 @@ async def test_dispatch_executes_within_cap_and_sheds_the_rest(tmp_path: Path) -
         },
         model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
     )
-    deps.toolset = _CallSeamToolset(inner)
+    deps.toolset = inner
 
     issued = CAP + 2
     parts = await dispatch_tools(_calls("echo", issued), deps, cap_state=ToolCapState())
@@ -142,7 +141,7 @@ async def test_dispatch_marks_approved_call_tool_call_approved(tmp_path: Path) -
         },
         model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
     )
-    deps.toolset = _CallSeamToolset(inner)
+    deps.toolset = inner
 
     calls = [
         ToolCallPart(tool_name="probe", args={}, tool_call_id="yes"),
@@ -178,7 +177,7 @@ async def test_dispatch_spills_oversized_mcp_result_to_disk(tmp_path: Path) -> N
         },
         model_max_context_tokens=SETTINGS_NO_MCP.llm.max_context_tokens,
     )
-    deps.toolset = _CallSeamToolset(inner)
+    deps.toolset = inner
 
     parts = await dispatch_tools(_calls("mcp_big", 1), deps, cap_state=ToolCapState())
 

@@ -31,7 +31,7 @@ def _make_ctx(tmp_path: Path) -> CommandContext:
         tool_results_dir=tmp_path / "tool-results",
     )
     # agent is not accessed during skill dispatch — only deps.skill_catalog is used
-    return CommandContext(message_history=[], deps=deps, agent=None)  # type: ignore[arg-type]
+    return CommandContext(message_history=[], deps=deps)  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio

@@ -196,7 +196,6 @@ async def _drive_turns(
     *,
     case_id: str,
     deps: Any,
-    agent: Any,
     frontend: Any,
     case_dir_path: Path,
     inputs: list[str],
@@ -220,7 +219,6 @@ async def _drive_turns(
                 prior_message_count=prior_len,
                 run_turn_callable=(
                     lambda h=history, ui=user_input: drive_turn(
-                        agent=agent,
                         user_input=ui,
                         deps=deps,
                         message_history=h,
@@ -228,7 +226,6 @@ async def _drive_turns(
                     )
                 ),
                 case_dir_path=case_dir_path,
-                agent=agent,
             )
         history = list(result.messages)
         new_msgs = history[prior_len:]
@@ -246,7 +243,6 @@ async def _drive_turns(
 
 async def _case_w12_a_classify_effort(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -280,7 +276,6 @@ async def _case_w12_a_classify_effort(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -346,7 +341,6 @@ async def _case_w12_a_classify_effort(
 
 async def _case_w12_b_blocker_not_doomloop(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -377,7 +371,6 @@ async def _case_w12_b_blocker_not_doomloop(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -457,7 +450,6 @@ async def _case_w12_b_blocker_not_doomloop(
 
 async def _case_w12_c_shell_reflection_recovery(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -489,7 +481,6 @@ async def _case_w12_c_shell_reflection_recovery(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -570,7 +561,6 @@ async def _case_w12_c_shell_reflection_recovery(
 
 async def _case_w12_d_completeness_gate(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -607,7 +597,6 @@ async def _case_w12_d_completeness_gate(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -706,7 +695,7 @@ async def main() -> int:
 
     from evals._deps import eval_deps
 
-    async with eval_deps() as (deps, agent, frontend), open_eval_run("agentic_loop") as run:
+    async with eval_deps() as (deps, frontend), open_eval_run("agentic_loop") as run:
         assert deps.config.doom_loop_threshold == 2, (
             f"config pin failed: doom_loop_threshold={deps.config.doom_loop_threshold} "
             "(CO_DOOM_LOOP_THRESHOLD did not propagate — TL must resolve config timing)"
@@ -727,7 +716,7 @@ async def main() -> int:
             _case_w12_d_completeness_gate,
         ):
             try:
-                case = await runner(deps, agent, frontend, run, spans_log)
+                case = await runner(deps, frontend, run, spans_log)
             except Exception as exc:
                 case = CaseResult(
                     name=runner.__name__,

@@ -56,7 +56,6 @@ def _make_ctx(deps: CoDeps) -> CommandContext:
     return CommandContext(
         message_history=[],
         deps=deps,
-        agent=None,  # type: ignore[arg-type]  # not needed for dispatch tests
         frontend=HeadlessFrontend(),
         completer=None,
     )

@@ -159,7 +159,6 @@ async def _drive_turns(
     *,
     case_id: str,
     deps: Any,
-    agent: Any,
     frontend: Any,
     case_dir_path: Path,
     inputs: list[str],
@@ -185,7 +184,6 @@ async def _drive_turns(
                 prior_message_count=prior_len,
                 run_turn_callable=(
                     lambda h=history, ui=user_input: drive_turn(
-                        agent=agent,
                         user_input=ui,
                         deps=deps,
                         message_history=h,
@@ -193,7 +191,6 @@ async def _drive_turns(
                     )
                 ),
                 case_dir_path=case_dir_path,
-                agent=agent,
             )
         history = list(result.messages)
         new_msgs = history[prior_len:]
@@ -211,7 +208,6 @@ async def _drive_turns(
 
 async def _case_w10_a_recall_then_apply(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -249,7 +245,6 @@ async def _case_w10_a_recall_then_apply(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -303,7 +298,6 @@ async def _case_w10_a_recall_then_apply(
 
 async def _case_w10_b_contradiction_handling(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -339,7 +333,6 @@ async def _case_w10_b_contradiction_handling(
         slices = await _drive_turns(
             case_id=case_id,
             deps=deps,
-            agent=agent,
             frontend=frontend,
             case_dir_path=run.case_trace_path(case_id),
             inputs=inputs,
@@ -393,7 +386,6 @@ async def _case_w10_b_contradiction_handling(
 
 async def _case_w10_c_decay_under_disuse(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -481,7 +473,6 @@ def _seed_synthesis_sessions(deps: Any, specs: list[tuple[str, str]]) -> list[st
 
 async def _case_w10_d_profile_synthesis(
     deps: Any,
-    agent: Any,
     frontend: Any,
     run: Any,
     spans_log: Path,
@@ -508,7 +499,7 @@ async def _case_w10_d_profile_synthesis(
     completes and the judge rules on reconciliation quality.
 
     ``agent``/``frontend``/``spans_log`` are unused (this case calls the pass
-    directly, not ``run_turn``) but kept for the runner tuple signature.
+    directly, not ``run_turn_owned``) but kept for the runner tuple signature.
     """
     case_id = "W10.D"
     case_t0 = time.monotonic()
@@ -629,7 +620,7 @@ async def main() -> int:
     """Drive W10.A-W10.D end-to-end, write trace, return exit code."""
     await ensure_ollama_warm()
 
-    async with eval_deps() as (deps, agent, frontend), open_eval_run("user_model") as run:
+    async with eval_deps() as (deps, frontend), open_eval_run("user_model") as run:
         apply_eval_window(deps)
         spans_log = setup_perf_spans(run.spans_path)
         cases: list[CaseResult] = []
@@ -641,7 +632,7 @@ async def main() -> int:
             _case_w10_d_profile_synthesis,
         ):
             try:
-                case = await runner(deps, agent, frontend, run, spans_log)
+                case = await runner(deps, frontend, run, spans_log)
             except Exception as exc:
                 case = CaseResult(
                     name=runner.__name__,

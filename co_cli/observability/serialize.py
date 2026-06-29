@@ -1,8 +1,8 @@
 """Span-payload serialization helpers — compact JSON for span attributes.
 
-Shared by the agent-path ``chat`` span (``SurrogateRecoveryModel``), the
-direct-call ``llm_call`` span (``co_cli.llm.call``), and the routing tool
-wrapper (``co_cli.agent.toolset``). Kept distinct from
+Shared by the agent-path ``chat`` span (``co_cli.llm.model_turn``), the
+direct-call ``llm_call`` span (``co_cli.llm.call``), and the owned tool
+dispatch (``co_cli.agent.dispatch``). Kept distinct from
 ``co_cli.context.summarization.serialize_messages`` (which renders
 human-readable redacted text for summarizer prompts, not compact span JSON).
 """

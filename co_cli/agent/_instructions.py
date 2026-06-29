@@ -2,21 +2,13 @@
 
 The builders take ``deps`` directly (plus explicit ``messages`` / ``request_count``
 params for the two that need turn-scoped state). The owned loop calls them directly
-(``co_cli/agent/preflight.py``); the graph path registers the ``*_ctx`` shims at the
-bottom of this module via ``agent.instructions(...)`` (referenced from
-``ORCHESTRATOR_SPEC.per_turn_instructions``), threading the same values from the
-``RunContext``. Keeping one logic source with two call shapes (CD-M-2) avoids the
-blanket ``lambda ctx: builder(ctx.deps)`` shim that would silently drop the wrap-up
-nudge (reads ``ctx.usage.requests``) and the safety warnings (read ``ctx.messages``)
-on the graph path.
+(``co_cli/agent/preflight.py``).
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import TYPE_CHECKING
-
-from pydantic_ai import RunContext
 
 from co_cli.deps import CoDeps
 
@@ -42,8 +34,7 @@ def safety_prompt(deps: CoDeps, *, messages: list[ModelMessage]) -> str:
     """Per-turn: inject doom loop / shell reflection warnings when condition is active.
 
     Reads the message history to detect repeated tool calls / shell-error streaks, so
-    ``messages`` is passed explicitly (the owned loop sources it from the turn history;
-    the graph shim sources it from ``ctx.messages``).
+    ``messages`` is passed explicitly (the owned loop sources it from the turn history).
     """
     from co_cli.context.prompt_text import safety_prompt_text
 
@@ -69,9 +60,8 @@ def wrap_up_prompt(deps: CoDeps, *, request_count: int) -> str:
     on tool calls (which would be cold-truncated to an error result). Inert when the cap
     is disabled (``resolve_request_limit`` → ``None``).
 
-    The graph path passes ``request_count=ctx.usage.requests`` (completed requests); the
-    owned loop passes its own completed-request count, which must carry the same
-    "requests completed before this one" semantics so the nudge fires on the same step.
+    The owned loop passes its own completed-request count ("requests completed before
+    this one"), so the nudge fires on the last allowed step.
     """
     from co_cli.config.llm import resolve_request_limit
 
@@ -102,32 +92,3 @@ def skill_manifest_prompt(deps: CoDeps) -> str:
     from co_cli.skills.manifest import render_skill_manifest
 
     return render_skill_manifest(deps.skill_catalog, deps.skills_dir, deps.user_skills_dir)
-
-
-# ---------------------------------------------------------------------------
-# Graph-path ctx shims — thread RunContext-derived values into the deps builders.
-# Referenced from ORCHESTRATOR_SPEC.per_turn_instructions and registered via
-# agent.instructions(...) by build_orchestrator. Deleted with the graph at Phase 5;
-# the owned loop calls the builders above directly. Order here is the graph
-# registration order (must match assemble_instructions in preflight.py).
-# ---------------------------------------------------------------------------
-
-
-def safety_prompt_ctx(ctx: RunContext[CoDeps]) -> str:
-    return safety_prompt(ctx.deps, messages=ctx.messages)
-
-
-def wrap_up_prompt_ctx(ctx: RunContext[CoDeps]) -> str:
-    return wrap_up_prompt(ctx.deps, request_count=ctx.usage.requests)
-
-
-def current_time_prompt_ctx(ctx: RunContext[CoDeps]) -> str:
-    return current_time_prompt(ctx.deps)
-
-
-def deferred_tool_awareness_prompt_ctx(ctx: RunContext[CoDeps]) -> str:
-    return deferred_tool_awareness_prompt(ctx.deps)
-
-
-def skill_manifest_prompt_ctx(ctx: RunContext[CoDeps]) -> str:
-    return skill_manifest_prompt(ctx.deps)

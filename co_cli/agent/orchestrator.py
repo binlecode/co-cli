@@ -1,20 +1,13 @@
 """ORCHESTRATOR_SPEC — declarative record for the always-present primary agent.
 
-Static-part builders are thin closures over CoDeps. build_orchestrator
-composes them in order and joins with double-newlines.
+Static-part builders are thin closures over CoDeps. The owned loop's
+build_static_instructions composes them in order and joins with double-newlines.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from co_cli.agent._instructions import (
-    current_time_prompt_ctx,
-    deferred_tool_awareness_prompt_ctx,
-    safety_prompt_ctx,
-    skill_manifest_prompt_ctx,
-    wrap_up_prompt_ctx,
-)
 from co_cli.agent.spec import OrchestratorSpec
 from co_cli.context.compaction import proactive_window_processor
 from co_cli.context.history_processors import (
@@ -83,13 +76,6 @@ ORCHESTRATOR_SPEC = OrchestratorSpec(
         _user_profile_provider,
         _toolset_guidance_provider,
         _personality_critique_provider,
-    ),
-    per_turn_instructions=(
-        safety_prompt_ctx,
-        wrap_up_prompt_ctx,
-        current_time_prompt_ctx,
-        deferred_tool_awareness_prompt_ctx,
-        skill_manifest_prompt_ctx,
     ),
     history_processors=(
         elide_old_multimodal_prompts,

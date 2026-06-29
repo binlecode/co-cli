@@ -133,9 +133,7 @@ def _entity_recovered(tool_calls: list[Any], answer: str, code: str) -> bool:
     return False
 
 
-async def case_sr_a_concept_expansion(
-    deps: Any, agent: Any, frontend: Any, run: Any
-) -> CaseResult:
+async def case_sr_a_concept_expansion(deps: Any, frontend: Any, run: Any) -> CaseResult:
     """Seed a shaped-entity session, ask in different words, expect a pattern= recall."""
     case_id = "SR.A"
     t0 = time.monotonic()
@@ -161,14 +159,12 @@ async def case_sr_a_concept_expansion(
                 user_input=user_input,
                 prior_message_count=0,
                 run_turn_callable=lambda: drive_turn(
-                    agent=agent,
                     user_input=user_input,
                     deps=deps,
                     message_history=[],
                     frontend=frontend,
                 ),
                 case_dir_path=case_dir,
-                agent=agent,
             )
         model_call_seconds += turn_trace.model_call_seconds
         for k, v in turn_trace.token_usage.items():
@@ -238,12 +234,12 @@ async def main() -> int:
     """Run the cross-session concept-expansion case against the real workspace."""
     await ensure_ollama_warm()
 
-    deps, agent, frontend, stack = await make_eval_deps()
+    deps, frontend, stack = await make_eval_deps()
     apply_eval_window(deps)
     cases: list[CaseResult] = []
     try:
         async with open_eval_run("session-recall") as run:
-            case_a = await case_sr_a_concept_expansion(deps, agent, frontend, run)
+            case_a = await case_sr_a_concept_expansion(deps, frontend, run)
             cases.append(case_a)
             print(
                 f"[session-recall] {case_a.name}: "

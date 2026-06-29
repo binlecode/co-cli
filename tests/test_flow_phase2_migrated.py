@@ -4,10 +4,11 @@ These three tests were structural eval cases (W6.B, W6.C, W2.F) with no
 existing pytest equivalent. They are migrated here as deterministic,
 no-real-LLM flow tests:
 
-  - test_unknown_slash_fires_no_llm_call        (W6.B): unknown /foo returns
-        LocalOnly and never reaches the model.
+  - test_unknown_slash_returns_local_only       (W6.B): unknown /foo returns
+        LocalOnly from command dispatch (so the chat loop never starts a turn).
   - test_deny_emits_no_side_effect              (W6.C): a denied approval-gated
-        destructive tool produces no side effect (file is not deleted).
+        destructive tool produces no side effect (file is not deleted), driven
+        end-to-end through the owned loop.
   - test_compaction_idempotent                  (W2.F): a second /compact on an
         already-compacted history is a stable no-op (length holds, no new
         marker).
@@ -26,7 +27,7 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 
 import pytest
-from pydantic_ai import Agent, DeferredToolRequests, RunContext
+from pydantic_ai import RunContext
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -38,14 +39,21 @@ from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls
 from pydantic_ai.toolsets import FunctionToolset
 from tests._settings import SETTINGS_NO_MCP
 
-from co_cli.agent.orchestrate import run_turn
-from co_cli.agent.toolset import _CallSeamToolset
+from co_cli.agent.core import assemble_routing_toolset
+from co_cli.agent.loop import run_turn_owned
 from co_cli.commands.compact import _cmd_compact
 from co_cli.commands.core import dispatch
 from co_cli.commands.types import CommandContext, LocalOnly, ReplaceTranscript
 from co_cli.context._compaction_markers import STATIC_MARKER_PREFIX, SUMMARY_MARKER_PREFIX
-from co_cli.deps import CoDeps, CoSessionState
+from co_cli.deps import (
+    CoDeps,
+    CoSessionState,
+    ToolInfo,
+    ToolSourceEnum,
+    VisibilityPolicyEnum,
+)
 from co_cli.display.headless import HeadlessFrontend
+from co_cli.llm.factory import LlmModel
 from co_cli.tools.shell_backend import ShellBackend
 
 
@@ -99,40 +107,24 @@ def _marker_count(history: list[ModelMessage]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# W6.B — unknown slash returns LocalOnly and never reaches the model
+# W6.B — unknown slash returns LocalOnly (the chat loop never starts a turn)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_unknown_slash_fires_no_llm_call(co_home: Path) -> None:
-    """An unknown /foo slash returns LocalOnly without ever invoking the model.
+async def test_unknown_slash_returns_local_only(co_home: Path) -> None:
+    """An unknown /foo slash returns LocalOnly from command dispatch.
 
-    The agent is wired to a FunctionModel whose stream function increments a
-    call counter. Dispatching an unknown command must short-circuit locally —
-    so the counter stays at zero and dispatch returns LocalOnly.
+    The chat loop only starts an agent turn for non-slash input or a DelegateToAgent
+    outcome; an unknown command resolving to LocalOnly means the model is never reached.
 
-    Failure mode: if the unknown-command fallthrough delegated to the agent
-    instead of returning LocalOnly, every slash typo would burn a model call.
+    Failure mode: if the unknown-command fallthrough returned DelegateToAgent instead of
+    LocalOnly, every slash typo would burn a model call.
     """
-    model_calls = {"n": 0}
-
-    async def stream_fn(
-        messages: list[ModelMessage], info: AgentInfo
-    ) -> AsyncIterator[str | DeltaToolCalls]:
-        model_calls["n"] += 1
-        yield "should never be reached"
-
     deps = _make_deps()
-    agent = Agent(
-        FunctionModel(stream_function=stream_fn),
-        deps_type=CoDeps,
-        output_type=[str, DeferredToolRequests],
-        toolsets=[_CallSeamToolset(FunctionToolset())],
-    )
     ctx = CommandContext(
         message_history=[],
         deps=deps,
-        agent=agent,
         frontend=HeadlessFrontend(),
         completer=None,
     )
@@ -140,9 +132,6 @@ async def test_unknown_slash_fires_no_llm_call(co_home: Path) -> None:
     outcome = await dispatch("/this_is_not_a_command", ctx)
 
     assert isinstance(outcome, LocalOnly)
-    assert model_calls["n"] == 0, (
-        f"unknown slash must not reach the model; got {model_calls['n']} model call(s)"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -154,27 +143,24 @@ async def test_unknown_slash_fires_no_llm_call(co_home: Path) -> None:
 async def test_deny_emits_no_side_effect(co_home: Path, tmp_path: Path) -> None:
     """When the user denies an approval-gated delete, the target file survives.
 
-    A real approval-required tool (``destructive_delete``) unlinks a seeded
-    file as its side effect. The FunctionModel emits that tool call; the
-    HeadlessFrontend denies it ("n"). The denial must propagate through the
-    SDK resume path so the tool body never runs — the file stays on disk.
+    A real approval-required tool (``destructive_delete``) unlinks a seeded file as its
+    side effect. The FunctionModel emits that tool call; the HeadlessFrontend denies it
+    ("n"). The owned loop's inline collector must turn the denial into a denial result so
+    the tool body never runs — the file stays on disk and the turn continues.
 
-    Failure mode: if ToolDenied is not wired into the resume path, the gated
-    delete executes despite the denial and the file disappears.
+    Failure mode: if the denial is not wired into dispatch, the gated delete executes
+    despite the denial and the file disappears.
     """
     target = tmp_path / "deny_target.txt"
     target.write_text("PRESERVE_ME", encoding="utf-8")
 
-    call_count = {"n": 0}
+    state = {"n": 0}
 
     async def stream_fn(
         messages: list[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str | DeltaToolCalls]:
-        # Model call 1: emit the approval-gated delete (initial run →
-        # DeferredToolRequests). After the denial resumes, model call 2 closes
-        # the turn with text.
-        call_count["n"] += 1
-        if call_count["n"] == 1:
+        state["n"] += 1
+        if state["n"] == 1:
             yield {
                 0: DeltaToolCall(
                     name="destructive_delete",
@@ -185,25 +171,40 @@ async def test_deny_emits_no_side_effect(co_home: Path, tmp_path: Path) -> None:
         else:
             yield "done"
 
-    toolset: FunctionToolset = FunctionToolset()
+    inner: FunctionToolset = FunctionToolset()
 
     async def destructive_delete(ctx: RunContext[CoDeps], path: str) -> str:
         Path(path).unlink(missing_ok=True)
         return f"deleted {path}"
 
-    toolset.add_function(destructive_delete, requires_approval=True)
+    inner.add_function(destructive_delete, requires_approval=True)
 
-    deps = _make_deps()
-    agent = Agent(
-        FunctionModel(stream_function=stream_fn),
-        deps_type=CoDeps,
-        output_type=[str, DeferredToolRequests],
-        toolsets=[_CallSeamToolset(toolset)],
+    config = SETTINGS_NO_MCP
+    deps = CoDeps(
+        shell=ShellBackend(),
+        model=LlmModel(
+            model=FunctionModel(stream_function=stream_fn),
+            settings=config.llm.noreason_model_settings(),
+            settings_noreason=config.llm.noreason_model_settings(),
+        ),
+        config=config,
+        session=CoSessionState(),
+        toolset=assemble_routing_toolset(inner, []),
+        tool_catalog={
+            "destructive_delete": ToolInfo(
+                name="destructive_delete",
+                description="delete a file",
+                is_approval_required=True,
+                source=ToolSourceEnum.NATIVE,
+                visibility=VisibilityPolicyEnum.ALWAYS,
+                is_concurrent_safe=False,
+            )
+        },
+        model_max_context_tokens=config.llm.max_context_tokens,
     )
     frontend = HeadlessFrontend(approval_response="n")
 
-    result = await run_turn(
-        agent=agent,
+    result = await run_turn_owned(
         user_input="delete the file",
         deps=deps,
         message_history=[],
@@ -242,7 +243,6 @@ async def test_compaction_idempotent(co_home: Path) -> None:
     ctx1 = CommandContext(
         message_history=history,
         deps=deps,
-        agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
         completer=None,
     )
@@ -256,7 +256,6 @@ async def test_compaction_idempotent(co_home: Path) -> None:
     ctx2 = CommandContext(
         message_history=first_history,
         deps=deps,
-        agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
         completer=None,
     )

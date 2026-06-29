@@ -1,26 +1,23 @@
-"""Owned-loop tool dispatch — folds ``_CallSeamToolset`` into straight-line code.
+"""Owned-loop tool dispatch — the ``tool`` span, cap, and spill as straight-line code.
 
-The graph path routed tool calls through ``_CallSeamToolset`` (the outermost wrapper on
-``deps.toolset``), which hosts the ``tool`` span, the per-model-request cap, and MCP-result
-spill, while the SDK's tool manager validated args and wrapped results upstream. The owned
-loop reproduces all of that here:
+The owned loop hosts here what a wrapper toolset would otherwise host at the ``call_tool``
+boundary — the ``tool`` span, the per-model-request cap, and MCP-result spill:
 
 - ``dispatch_tools`` counts the step's calls through ``ToolCapState`` **before** fan-out
   (pre-fan-out shed, CD-m-3 — execute index ``< cap``, shed the rest with an exceeded
   payload), validates each within-cap call's args via the tool's own validator, dispatches
   over co's existing ``tool_dispatch_sem`` (concurrent calls in parallel, sequential tools
   serialized), applies MCP spill, and emits the ``co.tool.*`` span per call.
-- It dispatches on the **unwrapped** routing toolset (``deps.toolset.wrapped``) so the folded
-  span/cap/spill are not double-applied by the still-live ``_CallSeamToolset`` seam.
+- It dispatches on the visibility-filtered routing toolset (``deps.toolset``).
 - Approval is resolved upstream by ``collect_inline_approvals`` (``agent/approval.py``),
   which prompts the user before fan-out and passes ``denials`` (denied calls) +
   ``approved_ids`` (the in-body raisers' gate) into ``dispatch_tools``. Subagents register
   tools ``requires_approval=False``, so the collector is a no-op for them.
 
-Phase-2 simplifications (behind the default-off flag, read-only-tool gate): the args-retry
-loop is single-shot (a validation/``ModelRetry`` failure returns a ``RetryPromptPart`` the
-model reacts to next step, rather than re-driving in place), and a ``ToolReturn``'s secondary
-multimodal ``content`` channel (image_view pixels) is not yet spawned as a ``UserPromptPart``.
+The args-retry loop is single-shot (a validation/``ModelRetry`` failure returns a
+``RetryPromptPart`` the model reacts to next step, rather than re-driving in place), and a
+``ToolReturn``'s secondary multimodal ``content`` channel (image_view pixels) is not yet
+spawned as a ``UserPromptPart``.
 """
 
 from __future__ import annotations
@@ -82,13 +79,12 @@ def make_run_context(
 
 
 def _routing_toolset(deps: CoDeps) -> AbstractToolset[CoDeps]:
-    """Return the visibility-filtered routing toolset without the ``_CallSeamToolset`` seam.
+    """Return the visibility-filtered routing toolset.
 
-    ``deps.toolset`` is ``_CallSeamToolset(filtered(combined([native, *mcp])))``; its
-    ``.wrapped`` is the filtered routing stack. Dispatching on the unwrapped stack runs the
-    real tool while the folded span/cap/spill below replace the seam's copies.
+    ``deps.toolset`` is ``filtered(combined([native, *mcp]))``; dispatching on it runs the
+    real tool while the folded span/cap/spill below are applied by ``dispatch_tools``.
     """
-    return getattr(deps.toolset, "wrapped", deps.toolset)
+    return deps.toolset
 
 
 async def get_visible_tools(

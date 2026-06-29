@@ -1,10 +1,9 @@
-"""Owned subagent driver parity (OQ-4 option b).
+"""Owned subagent driver (OQ-4 option b).
 
-The load-bearing Phase-2 subagent gate: no existing eval drives the subagent through both
-drivers and returns its structured output, so this real-Ollama test runs one spec through the
-owned ``run_standalone_owned`` and the graph ``agent.run`` and asserts both produce a valid
-``spec.output_type`` instance — AND that the ``final_result`` tool def the model sees is
-equivalent across drivers (same name + JSON schema), since output-type validity alone can't
+The load-bearing Phase-2 subagent gate: this real-Ollama test runs one spec through the
+owned ``run_standalone_owned`` and asserts it produces a valid ``spec.output_type``
+instance — AND that the ``final_result`` tool def the model sees comes from the SDK's
+output-tool generator (same name + JSON schema), since output-type validity alone can't
 prove the tuned contract is preserved (G1-1).
 """
 
@@ -15,13 +14,11 @@ from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
-from pydantic_ai.usage import UsageLimits
 from tests._ollama import ensure_ollama_warm
 from tests._settings import SETTINGS_NO_MCP as _CONFIG_NO_MCP
 from tests._settings import TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
-from co_cli.agent.build import build_task_agent
 from co_cli.agent.core import build_native_toolset
 from co_cli.agent.loop import run_standalone_owned
 from co_cli.agent.preflight import build_output_toolset
@@ -76,10 +73,10 @@ def test_owned_subagent_final_result_def_matches_sdk_generator() -> None:
 
 
 @pytest.mark.skipif(
-    not _CONFIG_NO_MCP.llm.uses_ollama(), reason="real-LLM subagent parity needs Ollama"
+    not _CONFIG_NO_MCP.llm.uses_ollama(), reason="real-LLM subagent run needs Ollama"
 )
 @pytest.mark.asyncio
-async def test_owned_subagent_produces_schema_valid_output_at_parity_with_graph() -> None:
+async def test_owned_subagent_produces_schema_valid_output() -> None:
     await ensure_ollama_warm(TEST_LLM.model, TEST_LLM.host)
     spec = _spec()
 
@@ -89,19 +86,6 @@ async def test_owned_subagent_produces_schema_valid_output_at_parity_with_graph(
         owned_result = await run_standalone_owned(spec, owned_deps, _PROMPT)
     assert isinstance(owned_result, _ReviewNote)
     assert owned_result.summary.strip()
-
-    # Graph driver — the SDK validates final_result into the same type via agent.run.
-    graph_deps = _make_deps()
-    agent = build_task_agent(spec, graph_deps, graph_deps.model.model)
-    async with asyncio.timeout(LLM_TOOL_CONTEXT_TIMEOUT_SECS):
-        graph_run = await agent.run(
-            _PROMPT,
-            deps=graph_deps,
-            usage_limits=UsageLimits(request_limit=spec.default_budget),
-            model_settings=graph_deps.model.settings_noreason,
-        )
-    assert isinstance(graph_run.output, _ReviewNote)
-    assert graph_run.output.summary.strip()
 
 
 def _write_spec() -> TaskAgentSpec:

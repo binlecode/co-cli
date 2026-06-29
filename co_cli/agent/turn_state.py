@@ -1,14 +1,12 @@
 """Turn-scoped state for the owned (graph-free) turn loop.
 
 These types are reconstructed per turn (never agent-object counters) and drive
-``co_cli/agent/loop.py``. The owned loop is selected by ``config.llm.use_owned_loop``;
-with the flag off the graph path (``orchestrate.run_turn``) owns these concerns
-instead, so nothing here is read on the default path.
+``co_cli/agent/loop.py`` — the sole agent turn loop.
 
-``TurnExit`` enumerates how a turn ends — the typed replacement for the graph
-path's mix of exception types and string-matched signatures. In Phase 2 only the
-no-approval / no-recovery slice is reachable; ``PROVIDER_ERROR`` / ``TIMEOUT`` /
-``INTERRUPTED`` are terminal-only (their recovery routing is Phase 4).
+``TurnExit`` enumerates how a turn ends — a typed set of exit reasons replacing any
+mix of exception types and string-matched signatures: the normal ``FINAL_TEXT`` /
+``TOOL_CAP`` / ``REQUEST_CAP`` / ``REASONING_OVERFLOW`` exits plus the terminal
+``PROVIDER_ERROR`` / ``TIMEOUT`` / ``INTERRUPTED`` reasons routed by the recovery seam.
 
 ``ToolCapState`` owns the flood cap at the **step boundary** (pre-fan-out), which
 is a deliberate behavior change from the graph's per-call shed inside dispatch
@@ -62,8 +60,7 @@ class TurnExit(Enum):
 class ToolCapState:
     """Per-turn flood-cap accounting for the owned loop, counted at the step boundary.
 
-    Unlike the graph's per-call shed inside ``_CallSeamToolset.call_tool``, the owned
-    loop decides the shed boundary **before** fanning out a step's calls: it executes
+    The owned loop decides the shed boundary **before** fanning out a step's calls: it executes
     the calls at index ``< cap`` and sheds the rest with an exceeded payload. A step
     that issues more than ``cap`` calls is an over-cap step; ``hard_stop`` latches once
     ``hard_stop_threshold`` such steps occur consecutively, and a within-cap step

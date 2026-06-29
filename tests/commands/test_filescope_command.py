@@ -34,7 +34,6 @@ def _make_ctx(workspace_dir: Path, file_search_roots: list[Path]) -> CommandCont
     return CommandContext(
         message_history=[],
         deps=deps,
-        agent=None,  # type: ignore[arg-type]  # unused by this handler
         frontend=HeadlessFrontend(),
         completer=None,
     )

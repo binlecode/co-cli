@@ -175,16 +175,16 @@ class CoRuntimeState:
     should not normally reach into runtime — doing so is a design smell that
     should be explicitly justified.
 
-    Per-turn (reset by reset_for_turn() at run_turn() entry):
-      tool_progress_callback, status_callback, resume_tool_names,
+    Per-turn (reset by reset_for_turn() at run_turn_owned() entry):
+      tool_progress_callback, status_callback,
       compaction_applied_this_turn, current_request_tokens_estimate
     Cross-turn (managed by orchestration layer):
       active_skill_name, compaction_skip_count,
       consecutive_low_yield_proactive_compactions, persisted_message_count
     """
 
-    # Tool calls counted in the current model request; zeroed by the orchestrator at
-    # each model-request node boundary (agent/orchestrate.py).
+    # Tool calls counted in the current model request; zeroed by the owned loop at
+    # each model-request boundary (agent/loop.py).
     tool_calls_in_model_request: int = 0
     # Consecutive model requests where tool_calls_in_model_request exceeded the cap.
     # Reset to 0 per turn by reset_for_turn(); also reset to 0 when a non-violating
@@ -200,7 +200,7 @@ class CoRuntimeState:
     # Circuit breaker for inline compaction summarisation.
     compaction_skip_count: int = 0
     tool_progress_callback: Callable[[str], None] | None = field(default=None, repr=False)
-    # Turn-scoped display callback: set by run_turn() before the agent starts,
+    # Turn-scoped display callback: set by run_turn_owned() before the turn starts,
     # cleared by reset_for_turn(). Used by history processors (e.g. proactive
     # compaction) that run inside the agent loop without direct Frontend access.
     status_callback: Callable[[str], None] | None = field(default=None, repr=False)
@@ -213,7 +213,6 @@ class CoRuntimeState:
     frontend: Frontend | None = field(default=None, repr=False)
     active_skill_name: str | None = None
     active_skill_env: dict[str, str] = field(default_factory=dict)
-    resume_tool_names: frozenset[str] | None = None
     # Clarify answers collected during deferred-tool approval, keyed by tool_call_id.
     # Orchestration-owned transient state threaded to the clarify tool on its approved
     # resume — the deferred-resume case this docstring's "explicitly justified" carve-out
@@ -255,11 +254,10 @@ class CoRuntimeState:
     pending_interrupt_result: Any = field(default=None, repr=False)
 
     def reset_for_turn(self) -> None:
-        """Reset per-turn fields at the start of each run_turn() call."""
+        """Reset per-turn fields at the start of each run_turn_owned() call."""
         self.tool_progress_callback = None
         self.status_callback = None
         self.frontend = None
-        self.resume_tool_names = None
         self.clarify_answers = {}
         self.compaction_applied_this_turn = False
         self.skip_compaction_snapshot = False
@@ -444,7 +442,7 @@ def fork_deps(base: CoDeps, *, share_dispatch_sem: bool = True) -> CoDeps:
     held slot. A daemon fork (top-level, no parent slot held) keeps the default shared sem.
 
     toolset is intentionally excluded — task agents wire their own minimal
-    tool surface via TaskAgentSpec.tool_names resolved by build_task_agent.
+    tool surface via TaskAgentSpec.tool_names resolved by _build_subagent_toolset.
     """
     inherited_session = CoSessionState(
         google=GoogleSessionState(

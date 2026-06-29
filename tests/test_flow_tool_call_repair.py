@@ -1,11 +1,20 @@
-"""Tests for syntactic tool-call arg repair, homed in co_cli.llm._json_repair.
+"""Model-boundary JSON-arg repair + surrogate recovery, homed in ``model_turn``.
 
-Two layers:
-  - repair_json_args / repair_response: the syntactic repair, applied to each
-    string ToolCallPart.args on a ModelResponse before pydantic validation.
-  - SurrogateRecoveryModel.request gating: repair runs on the Ollama-backed model
-    (repair_tool_args=True) and is a no-op on the Gemini path (default False).
+Three layers, all owned by the owned-loop model client (``co_cli.llm.model_turn``)
+after the legacy graph model-wrapper removal:
+
+  - ``repair_json_args`` / ``repair_response`` (``co_cli.llm._json_repair``): purely
+    syntactic repair applied to each string ``ToolCallPart.args`` before pydantic
+    validation. Pure functions — asserted directly.
+  - ``model_turn(..., repair=True)``: drives the assembled streamed response through
+    ``RepairingStreamedResponse`` so malformed Ollama tool args are repaired at the
+    ``.get()`` surface the loop validates from; ``repair=False`` (Gemini) passes through.
+  - ``model_turn`` surrogate recovery: a ``UnicodeEncodeError`` raised on stream open is
+    caught, messages are re-sanitized, and the stream is retried once. A consumer-side
+    error raised after the stream opened propagates unchanged (no retry).
 """
+
+from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
@@ -14,17 +23,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    UserPromptPart,
+)
 from pydantic_ai.models import Model, ModelRequestParameters, StreamedResponse
-from pydantic_ai.models.function import AgentInfo, FunctionModel
-from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage
 
 from co_cli.llm._json_repair import repair_json_args, repair_response
-from co_cli.llm.surrogate_recovery_model import SurrogateRecoveryModel
+from co_cli.llm.model_turn import model_turn
 
 # ---------------------------------------------------------------------------
-# repair_json_args — syntactic repair passes
+# repair_json_args — syntactic repair passes (pure function)
 # ---------------------------------------------------------------------------
 
 
@@ -93,50 +106,12 @@ def test_repair_response_leaves_valid_and_dict_args_intact():
 
 
 # ---------------------------------------------------------------------------
-# SurrogateRecoveryModel.request — gated repair on the non-stream path
-# ---------------------------------------------------------------------------
-
-
-def _malformed_tool_call_model() -> FunctionModel:
-    """A FunctionModel that emits a tool call with a trailing-comma args string."""
-
-    def respond(messages, info: AgentInfo) -> ModelResponse:
-        return ModelResponse(
-            parts=[ToolCallPart(tool_name="shell_exec", args='{"cmd": "ls",', tool_call_id="c1")],
-            model_name="fn",
-        )
-
-    async def fn(messages, info: AgentInfo) -> ModelResponse:
-        return respond(messages, info)
-
-    return FunctionModel(fn)
-
-
-@pytest.mark.asyncio
-async def test_ollama_path_repairs_malformed_args():
-    """repair_tool_args=True (Ollama) produces valid JSON args ready for validation."""
-    model = SurrogateRecoveryModel(_malformed_tool_call_model(), repair_tool_args=True)
-    response = await model.request([], None, ModelRequestParameters())
-    (part,) = [p for p in response.parts if isinstance(p, ToolCallPart)]
-    assert json.loads(part.args) == {"cmd": "ls"}
-
-
-@pytest.mark.asyncio
-async def test_gemini_path_leaves_args_untouched():
-    """Default repair_tool_args=False (Gemini) passes the model output through verbatim."""
-    model = SurrogateRecoveryModel(_malformed_tool_call_model())
-    response = await model.request([], None, ModelRequestParameters())
-    (part,) = [p for p in response.parts if isinstance(p, ToolCallPart)]
-    assert part.args == '{"cmd": "ls",'
-
-
-# ---------------------------------------------------------------------------
-# SurrogateRecoveryModel.request_stream — gated repair on the streaming path
+# model_turn(repair=...) — gated repair on the assembled streamed response.
 #
-# The agent graph validates streamed tool args from StreamedResponse.get(), so
-# RepairingStreamedResponse must repair that assembled response. These tests pin
-# that seam: a future SDK change that bypasses it turns them red instead of
-# silently crashing every malformed-JSON tool call on the Ollama streaming path.
+# The owned loop validates tool args from the assembled StreamedResponse.get(),
+# so model_turn must repair that response when repair=True (Ollama). These pin
+# the seam end-to-end: a regression that bypasses it turns them red instead of
+# silently crashing every malformed-JSON tool call on the Ollama path.
 # ---------------------------------------------------------------------------
 
 
@@ -177,7 +152,7 @@ class _MalformedArgsStream(StreamedResponse):
 
 
 class _StreamingModel(Model):
-    """Fake model whose stream yields a malformed-args assembled response."""
+    """Fake provider model whose stream yields a malformed-args assembled response."""
 
     @property
     def model_name(self) -> str:
@@ -190,7 +165,7 @@ class _StreamingModel(Model):
     async def request(
         self,
         messages: list[ModelMessage],
-        model_settings: ModelSettings | None,
+        model_settings: Any,
         model_request_parameters: ModelRequestParameters,
     ) -> ModelResponse:
         raise NotImplementedError("streaming-only fake")
@@ -199,7 +174,7 @@ class _StreamingModel(Model):
     async def request_stream(
         self,
         messages: list[ModelMessage],
-        model_settings: ModelSettings | None,
+        model_settings: Any,
         model_request_parameters: ModelRequestParameters,
         run_context: Any = None,
     ) -> AsyncIterator[StreamedResponse]:
@@ -210,20 +185,161 @@ class _StreamingModel(Model):
 
 
 @pytest.mark.asyncio
-async def test_streaming_path_repairs_malformed_args():
-    """repair_tool_args=True repairs the assembled streamed response's tool-call args."""
-    model = SurrogateRecoveryModel(_StreamingModel(), repair_tool_args=True)
-    async with model.request_stream([], None, ModelRequestParameters()) as stream:
+async def test_model_turn_repairs_malformed_streamed_args_when_enabled():
+    """repair=True (Ollama) repairs the assembled streamed response's tool-call args."""
+    async with model_turn(
+        _StreamingModel(), [], ModelRequestParameters(), None, repair=True
+    ) as stream:
+        async for _ in stream:
+            pass
         response = stream.get()
     (part,) = [p for p in response.parts if isinstance(p, ToolCallPart)]
     assert json.loads(part.args) == {"cmd": "ls"}
 
 
 @pytest.mark.asyncio
-async def test_streaming_path_leaves_args_untouched_when_disabled():
-    """Default repair_tool_args=False passes the streamed args through verbatim."""
-    model = SurrogateRecoveryModel(_StreamingModel())
-    async with model.request_stream([], None, ModelRequestParameters()) as stream:
+async def test_model_turn_leaves_streamed_args_untouched_when_disabled():
+    """repair=False (Gemini) passes the streamed args through verbatim."""
+    async with model_turn(
+        _StreamingModel(), [], ModelRequestParameters(), None, repair=False
+    ) as stream:
+        async for _ in stream:
+            pass
         response = stream.get()
     (part,) = [p for p in response.parts if isinstance(p, ToolCallPart)]
     assert part.args == '{"cmd": "ls",'
+
+
+# ---------------------------------------------------------------------------
+# model_turn — surrogate recovery on UnicodeEncodeError around stream open.
+# ---------------------------------------------------------------------------
+
+
+class _CleanStream(StreamedResponse):
+    """Minimal StreamedResponse with no events — for open/close path testing only."""
+
+    def __init__(self, mrp: ModelRequestParameters) -> None:
+        super().__init__(mrp)
+
+    async def _get_event_iterator(self) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
+
+    def get(self) -> ModelResponse:
+        return ModelResponse(parts=[ToolCallPart(tool_name="t", args="{}", tool_call_id="c1")])
+
+    def usage(self) -> RequestUsage:
+        return RequestUsage()
+
+    @property
+    def model_name(self) -> str:
+        return "fake"
+
+    @property
+    def provider_name(self) -> str | None:
+        return "fake"
+
+    @property
+    def provider_url(self) -> str | None:
+        return None
+
+    @property
+    def timestamp(self) -> datetime:
+        return datetime.now(UTC)
+
+
+class _SurrogateOnOpenModel(Model):
+    """Fake model that raises UnicodeEncodeError on stream open for its first N opens.
+
+    Records the messages handed to each open so the test can assert the retry was
+    driven with sanitized (surrogate-stripped) content.
+    """
+
+    def __init__(self, raise_n_times: int = 0) -> None:
+        super().__init__()
+        self.raise_n_times = raise_n_times
+        self.opens: list[list[ModelMessage]] = []
+
+    @property
+    def model_name(self) -> str:
+        return "fake"
+
+    @property
+    def system(self) -> str:
+        return "fake"
+
+    async def request(
+        self,
+        messages: list[ModelMessage],
+        model_settings: Any,
+        model_request_parameters: ModelRequestParameters,
+    ) -> ModelResponse:
+        raise NotImplementedError("streaming-only fake")
+
+    @asynccontextmanager
+    async def request_stream(
+        self,
+        messages: list[ModelMessage],
+        model_settings: Any,
+        model_request_parameters: ModelRequestParameters,
+        run_context: Any = None,
+    ) -> AsyncIterator[StreamedResponse]:
+        self.opens.append(messages)
+        if len(self.opens) <= self.raise_n_times:
+            raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed")
+        yield _CleanStream(model_request_parameters)
+
+
+def _surrogate_msgs() -> list[ModelMessage]:
+    return [ModelRequest(parts=[UserPromptPart(content="hello\ud800world")])]
+
+
+def _clean_msgs() -> list[ModelMessage]:
+    return [ModelRequest(parts=[UserPromptPart(content="hello world")])]
+
+
+@pytest.mark.asyncio
+async def test_model_turn_recovers_surrogate_error_on_open():
+    """A UnicodeEncodeError on stream open triggers a sanitize-retry that succeeds.
+
+    The retry must be driven with surrogate-stripped messages — the lone U+D800 is
+    replaced with U+FFFD before the second open.
+    """
+    model = _SurrogateOnOpenModel(raise_n_times=1)
+    async with model_turn(model, _surrogate_msgs(), ModelRequestParameters(), None, repair=False):
+        pass
+    assert len(model.opens) == 2, "first open raised, second succeeded after sanitize"
+    retry_part = model.opens[1][0].parts[0]
+    assert isinstance(retry_part, UserPromptPart)
+    assert retry_part.content == "hello�world"
+
+
+@pytest.mark.asyncio
+async def test_model_turn_clean_open_does_not_retry():
+    """A clean open reaches the stream on the first try — no sanitize-retry."""
+    model = _SurrogateOnOpenModel(raise_n_times=0)
+    async with model_turn(model, _clean_msgs(), ModelRequestParameters(), None, repair=False):
+        pass
+    assert len(model.opens) == 1
+
+
+@pytest.mark.asyncio
+async def test_model_turn_propagates_when_retry_also_raises():
+    """If both opens raise UnicodeEncodeError, the error propagates (no infinite retry)."""
+    model = _SurrogateOnOpenModel(raise_n_times=2)
+    with pytest.raises(UnicodeEncodeError):
+        async with model_turn(
+            model, _surrogate_msgs(), ModelRequestParameters(), None, repair=False
+        ):
+            pass
+    assert len(model.opens) == 2, "one retry only — not retried again after the second failure"
+
+
+@pytest.mark.asyncio
+async def test_model_turn_propagates_post_open_consumer_error():
+    """A UnicodeEncodeError raised after the stream opened propagates — no silent recovery."""
+    model = _SurrogateOnOpenModel(raise_n_times=0)
+    with pytest.raises(UnicodeEncodeError):
+        async with model_turn(model, _clean_msgs(), ModelRequestParameters(), None, repair=False):
+            raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "consumer side")
+    assert len(model.opens) == 1, "no retry — exception happened after open"

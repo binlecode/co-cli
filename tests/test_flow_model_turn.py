@@ -312,17 +312,15 @@ async def test_failed_turn_emits_error_span(isolated_spans_log: Path):
 
 @pytest.mark.asyncio
 async def test_model_turn_streams_real_ollama_response():
-    """model_turn streams a real model response end-to-end with no wrapper involved.
+    """model_turn streams a real model response end-to-end.
 
-    Skipped unless the configured provider is Ollama — the ``.wrapped`` reach-in
-    below assumes the wrapped Ollama provider, and warming + repair-gating are
-    Ollama-specific. The reach-in is test-only and disappears at Phase 5 when the
-    factory returns a raw model.
+    Skipped unless the configured provider is Ollama — warming + repair-gating are
+    Ollama-specific. The factory returns the raw provider model directly.
     """
     if not SETTINGS_NO_MCP.llm.uses_ollama():
-        pytest.skip("model_turn integration test assumes the wrapped Ollama provider")
+        pytest.skip("model_turn integration test assumes the Ollama provider")
 
-    raw_model = build_model(SETTINGS_NO_MCP.llm).model.wrapped
+    raw_model = build_model(SETTINGS_NO_MCP.llm).model
     settings = SETTINGS_NO_MCP.llm.noreason_model_settings()
     messages = [ModelRequest.user_text_prompt("Reply with the single word: PONG")]
 

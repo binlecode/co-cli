@@ -1,26 +1,31 @@
 """Owned (graph-free) turn loop — drives the Phase-1 ``model_turn`` client.
 
-``run_turn_owned`` is the orchestrator turn loop selected by ``config.llm.use_owned_loop``;
-it reproduces the graph's per-turn control flow as straight-line code: materialize the user
+``run_turn_owned`` is the sole orchestrator turn loop;
+it drives the per-turn control flow as straight-line code: materialize the user
 prompt, then per step run the history processors, assemble instructions, build the request
 params from the tool-def schema source, drive ``model_turn`` (rendering deltas), classify the
 assembled response, dispatch tool calls through co's owned ``dispatch_tools``, and repeat
 until the model emits no tool call (final text) — or a typed terminal condition fires
 (tool-cap hard stop, request cap, reasoning overflow, provider error, interrupt).
 
-``_drive_model_request`` is the shared per-step model-request primitive (also used by the
-owned subagent driver in ``run_standalone_owned``). The two drivers share preflight,
-dispatch, and this primitive; they differ only in instruction assembly, request params
-(``output_tools``), termination predicate, rendering, and approval — realizing the
-milestone's "single driver core for both" without duplicating the request mechanics.
+**Scaffolding tenet (the canonical baseline).** ``_drive_model_request`` is the shared
+per-step model-request primitive, used by both this orchestrator loop and the owned subagent
+driver ``run_standalone_owned``. The two drivers share the construction scaffolding
+(``_build_subagent_toolset`` mirrors the orchestrator toolset), every preflight builder
+(history processors, ``assemble_instructions``, ``build_tool_defs``, ``build_request_params``,
+``clean_message_history``), ``dispatch_tools``, ``collect_inline_approvals``, ``ToolCapState``,
+and this request primitive. They differ ONLY by workflow: instruction assembly, request params
+(``output_tools``), termination predicate, rendering, recovery, and approval. The one intended
+construction divergence is the subagent's FLAT_EXACT plain ``FunctionToolset`` vs the
+orchestrator/VISIBILITY_MODEL filtered routing stack — ``dispatch_tools``/``build_tool_defs``
+read ``deps.toolset`` generically and treat both identically. No parameterized mega-loop hosts
+the two callers; identical control flow is not the tenet — shared scaffolding is.
 
-Phase 4 relocates the graph path's error/recovery machinery here as inline code: a single
-in-loop catch classifies provider errors (``recovery.classify_provider_error``) and recovers
-inline — context overflow strip-then-summarizes and retries once, an HTTP 400 tool-call
-rejection reflects to the model within a budget, length-truncated answers continue with a
-boosted token budget, and transient/timeout/malformed errors surface terminal with the graph's
-parity messages. Interrupt appends the abort marker; every step's preflight fills unanswered
-tool-call ids. The graph path stays default and byte-for-byte unchanged.
+A single in-loop catch classifies provider errors (``recovery.classify_provider_error``) and
+recovers inline — context overflow strip-then-summarizes and retries once, an HTTP 400
+tool-call rejection reflects to the model within a budget, length-truncated answers continue
+with a boosted token budget, and transient/timeout/malformed errors surface terminal. Interrupt
+appends the abort marker; every step's preflight fills unanswered tool-call ids.
 """
 
 from __future__ import annotations
@@ -109,16 +114,6 @@ def _last_assistant_text(messages: list[ModelMessage]) -> str:
     return ""
 
 
-def _unwrap_model(deps: CoDeps) -> Any:
-    """Return the raw provider model for ``model_turn`` (strip the SurrogateRecoveryModel).
-
-    ``deps.model.model`` is the ``SurrogateRecoveryModel`` wrapper, whose concerns
-    (surrogate retry, chat span, JSON repair) ``model_turn`` re-applies itself — so the
-    owned loop must pass the raw inner model to avoid double-application.
-    """
-    return getattr(deps.model.model, "wrapped", deps.model.model)
-
-
 def _is_reasoning_overflow(response: ModelResponse) -> bool:
     """True when reasoning consumed the whole output budget before any answer token.
 
@@ -151,7 +146,7 @@ async def _drive_model_request(
     not an absolute deadline). Returns the assembled (repaired, when Ollama) response and a
     ``RunUsage`` carrying this request's token counts.
     """
-    raw_model = _unwrap_model(deps)
+    raw_model = deps.model.model
     repair = deps.config.llm.uses_ollama()
     loop = asyncio.get_running_loop()
     async with asyncio.timeout(stall_window) as stall:
@@ -208,9 +203,9 @@ async def run_turn_owned(
     model_settings: ModelSettings | None = None,
     frontend: Frontend,
 ) -> TurnResult:
-    """Execute one orchestrator turn through the owned loop (flag-on path).
+    """Execute one orchestrator turn through the owned loop.
 
-    Mirrors ``run_turn``'s contract — returns a ``TurnResult`` the chat loop pattern-matches
+    Returns a ``TurnResult`` the chat loop pattern-matches
     on. Provider errors are classified and recovered inline inside the step loop (the single
     classification site, CD-M-2); the turn boundary here owns only interrupt (which can fire
     during ``dispatch_tools``, not just the model request) plus a generic last-resort.
@@ -571,17 +566,18 @@ def _interrupted_result(state: TurnState, turn_usage: RunUsage) -> TurnResult:
 
 
 def _build_subagent_toolset(spec: Any, deps: CoDeps) -> Any:
-    """Build the subagent's tool surface (mirror ``build_task_agent``) and route dispatch to it.
+    """Build the subagent's tool surface (forked-deps task agent) and route dispatch to it.
 
-    Two modes (``spec.surface_mode``). FLAT_EXACT (default): wire a plain toolset from
-    ``spec.tool_names`` (all ``requires_approval=False``) — the closed-surface specialist
-    path, byte-for-byte today's behavior. VISIBILITY_MODEL: assemble the orchestrator's
-    own surface (native + the connected MCP toolsets on ``deps.mcp_toolsets``, visibility-
-    filtered, ``_CallSeamToolset``-wrapped) minus a structural blocklist — the open general
-    worker, which sees ALWAYS tools, can self-load DEFERRED ones via ``tool_view``, and
-    carries each tool's real ``requires_approval``/``sequential`` flags. Either way the
-    forked deps carry no ``deps.toolset`` until set here, so the owned ``dispatch_tools`` /
-    ``build_tool_defs`` operate on it exactly as they do for the orchestrator's toolset.
+    Two modes (``spec.surface_mode``) — the one intended construction divergence; the owned
+    ``dispatch_tools`` / ``build_tool_defs`` read ``deps.toolset`` generically and treat both
+    identically. FLAT_EXACT (default): a plain ``FunctionToolset`` from ``spec.tool_names``
+    (all ``requires_approval=False``) — the closed-surface specialist. VISIBILITY_MODEL:
+    assemble the orchestrator's own surface (native + the connected MCP toolsets on
+    ``deps.mcp_toolsets``, visibility-filtered) minus a structural blocklist — the open
+    general worker, which sees ALWAYS tools, can self-load DEFERRED ones via ``tool_view``,
+    and carries each tool's real ``requires_approval``/``sequential`` flags. Either way the
+    forked deps carry no ``deps.toolset`` until set here, and the surface is unwrapped — the
+    ``tool`` span / cap / spill are applied by ``dispatch_tools``, not a wrapper toolset.
     """
     from co_cli.agent.spec import SurfaceModeEnum
 
@@ -596,7 +592,6 @@ def _build_subagent_toolset(spec: Any, deps: CoDeps) -> Any:
 
     from pydantic_ai.toolsets import FunctionToolset
 
-    from co_cli.agent.toolset import _CallSeamToolset
     from co_cli.tools.agent_tool import AGENT_TOOL_ATTR, TOOL_REGISTRY_BY_NAME
 
     toolset: FunctionToolset[CoDeps] = FunctionToolset()
@@ -606,7 +601,7 @@ def _build_subagent_toolset(spec: Any, deps: CoDeps) -> Any:
             raise ValueError(f"{spec.name}: unknown tool {name!r}")
         info = getattr(fn, AGENT_TOOL_ATTR)
         toolset.add_function(fn, requires_approval=False, sequential=not info.is_concurrent_safe)
-    return _CallSeamToolset(toolset)
+    return toolset
 
 
 def _subagent_instructions(spec: Any, deps: CoDeps) -> str:

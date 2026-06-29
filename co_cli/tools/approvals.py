@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from pydantic_ai import ApprovalRequired, DeferredToolResults, ToolDenied
+from pydantic_ai import ApprovalRequired
 
 from co_cli.deps import ApprovalKindEnum, ApprovalSubject, CoDeps, SessionApprovalRule, ToolInfo
 
@@ -183,21 +183,3 @@ def remember_tool_approval(subject: ApprovalSubject, deps: CoDeps) -> None:
     rule = SessionApprovalRule(kind=subject.kind, value=subject.value)
     if rule not in deps.session.session_approval_rules:
         deps.session.session_approval_rules.append(rule)
-
-
-def record_approval_choice(
-    approvals: DeferredToolResults,
-    *,
-    tool_call_id: str,
-    approved: bool,
-    subject: ApprovalSubject,
-    deps: CoDeps,
-    remember: bool = False,
-) -> None:
-    """Record one approval result and optionally persist the approval choice."""
-    if approved:
-        approvals.approvals[tool_call_id] = True
-        if remember:
-            remember_tool_approval(subject, deps)
-        return
-    approvals.approvals[tool_call_id] = ToolDenied("User denied this action")

@@ -186,7 +186,7 @@ def clean_message_history(messages: list[ModelMessage]) -> list[ModelMessage]:
 def build_static_instructions(deps: CoDeps) -> str:
     """Join the orchestrator's static instruction builders into the system prompt.
 
-    Mirrors ``build_orchestrator``'s static composition: call each builder in order, drop
+    Composes the static instruction builders: call each builder in order, drop
     empties, join with double newlines. Built once per turn by the owned driver (stable
     across steps), not once per step — the static block is the cacheable prefix.
     """

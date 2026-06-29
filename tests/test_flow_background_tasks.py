@@ -641,7 +641,6 @@ def _cmd_ctx(deps: CoDeps) -> CommandContext:
     return CommandContext(
         message_history=[],
         deps=deps,
-        agent=None,  # type: ignore[arg-type]
         frontend=HeadlessFrontend(),
     )
 

@@ -104,7 +104,7 @@ def sanitize_surrogate_codepoints_messages(
 ) -> list[ModelMessage]:
     """Replace lone Unicode surrogate code points (U+D800-U+DFFF) with U+FFFD.
 
-    Pure function — called by ``SurrogateRecoveryModel`` as a reactive
+    Pure function — called by the owned ``model_turn`` client as a reactive
     backstop on ``UnicodeEncodeError``.
 
     Byte-token reasoning models (Qwen3 quantizations, GLM-5, Kimi K2.5)

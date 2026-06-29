@@ -96,7 +96,7 @@ PERSISTED_OUTPUT_TAG = "<persisted-output>"
 PERSISTED_OUTPUT_CLOSING_TAG = "</persisted-output>"
 
 # ---------------------------------------------------------------------------
-# TOOLCAP_* — per-model-request tool-call cap (agent/toolset.py, orchestrate.py)
+# TOOLCAP_* — per-model-request tool-call cap (agent/dispatch.py, agent/loop.py)
 # ---------------------------------------------------------------------------
 
 # Small ollama models lose coherence past ~3 parallel calls per response; well

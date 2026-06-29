@@ -2,7 +2,7 @@
 
 W4.A (dispatch_follows_procedure, judged): write a user skill, dispatch it via
 ``/<skill> <args>``, apply ``skill_env`` exactly as ``main.py:_apply_command_outcome``
-does, drive a real ``run_turn``, and judge that the response followed each numbered
+does, drive a real ``run_turn_owned``, and judge that the response followed each numbered
 instruction in the skill body. This exercises slash-dispatch **mechanics**.
 
 W4.B (skill_selection_mutual_exclusivity, behavioral): the ``pdf`` and ``office``
@@ -85,12 +85,11 @@ _SKILL_REVIEWER_FIXTURE_UUID8 = "c4d5e6f7"
 # ---------------------------------------------------------------------------
 
 
-def _make_ctx(deps: CoDeps, agent, frontend: EvalFrontend) -> CommandContext:
+def _make_ctx(deps: CoDeps, frontend: EvalFrontend) -> CommandContext:
     """Build a CommandContext mirroring main.py:423 with empty history."""
     return CommandContext(
         message_history=[],
         deps=deps,
-        agent=agent,
         completer=None,
         frontend=frontend,
     )
@@ -103,7 +102,6 @@ def _make_ctx(deps: CoDeps, agent, frontend: EvalFrontend) -> CommandContext:
 
 async def case_w4_a_dispatch_user_skill(
     deps: CoDeps,
-    agent,
     frontend: EvalFrontend,
     run,
 ) -> CaseResult:
@@ -115,7 +113,7 @@ async def case_w4_a_dispatch_user_skill(
     ``dispatch()`` — outcome must be ``DelegateToAgent`` carrying both
     ``delegated_input`` (the expanded body) and ``skill_env``. Applies
     ``skill_env`` to ``os.environ`` exactly as ``main.py:_apply_command_outcome``
-    does, drives a real ``run_turn``, and asserts the literal token + the
+    does, drives a real ``run_turn_owned``, and asserts the literal token + the
     literal argument both appear in the response. Final gate is an LLM
     judge call rating instruction adherence.
     """
@@ -150,7 +148,7 @@ async def case_w4_a_dispatch_user_skill(
     token_usage: dict[str, int] = {}
     trace_id = ""
 
-    ctx = _make_ctx(deps, agent, frontend)
+    ctx = _make_ctx(deps, frontend)
     raw_input = "/eval_smoke evaluating_arg1"
     outcome: SlashOutcome = await dispatch(raw_input, ctx)
 
@@ -186,24 +184,22 @@ async def case_w4_a_dispatch_user_skill(
                     user_input=outcome.delegated_input,
                     prior_message_count=0,
                     run_turn_callable=lambda: drive_turn(
-                        agent=agent,
                         user_input=outcome.delegated_input,
                         deps=deps,
                         message_history=[],
                         frontend=frontend,
                     ),
                     case_dir_path=trace_file,
-                    agent=agent,
                 )
             model_call_seconds = turn_trace.model_call_seconds
             token_usage = dict(turn_trace.token_usage)
             trace_id = turn_trace.trace_ids[0] if turn_trace.trace_ids else ""
         except TimeoutError:
             passed = False
-            reason = f"run_turn exceeded CALL_TIMEOUT_S ({CALL_TIMEOUT_S}s)"
+            reason = f"run_turn_owned exceeded CALL_TIMEOUT_S ({CALL_TIMEOUT_S}s)"
         except Exception as exc:
             passed = False
-            reason = f"run_turn raised {type(exc).__name__}: {exc}"
+            reason = f"run_turn_owned raised {type(exc).__name__}: {exc}"
 
     if passed and turn_result is not None:
         if turn_result.outcome != "continue":
@@ -316,7 +312,6 @@ _SELECTION_PROMPTS = [
 
 async def case_w4_b_skill_selection(
     deps: CoDeps,
-    agent,
     frontend: EvalFrontend,
     run,
 ) -> CaseResult:
@@ -347,22 +342,20 @@ async def case_w4_b_skill_selection(
                     user_input=prompt,
                     prior_message_count=0,
                     run_turn_callable=lambda p=prompt: drive_turn(
-                        agent=agent,
                         user_input=p,
                         deps=deps,
                         message_history=[],
                         frontend=frontend,
                     ),
                     case_dir_path=trace_file,
-                    agent=agent,
                 )
         except TimeoutError:
             passed = False
-            reason = f"[{label}] run_turn exceeded CALL_TIMEOUT_S ({CALL_TIMEOUT_S}s)"
+            reason = f"[{label}] run_turn_owned exceeded CALL_TIMEOUT_S ({CALL_TIMEOUT_S}s)"
             break
         except Exception as exc:
             passed = False
-            reason = f"[{label}] run_turn raised {type(exc).__name__}: {exc}"
+            reason = f"[{label}] run_turn_owned raised {type(exc).__name__}: {exc}"
             break
 
         model_call_seconds += turn_trace.model_call_seconds
@@ -480,7 +473,6 @@ def _user_skill_bodies(user_skills_dir: Path) -> dict[Path, str]:
 
 async def case_skill_reviewer_encodes_correction(
     deps: CoDeps,
-    agent,
     frontend: EvalFrontend,
     run,
 ) -> CaseResult:
@@ -494,7 +486,7 @@ async def case_skill_reviewer_encodes_correction(
     procedure absent from the transcript.
 
     ``agent``/``frontend`` are unused (this case calls ``process_review`` directly,
-    not ``run_turn``) but kept for the ``case_fn(deps, agent, frontend, run)``
+    not ``run_turn_owned``) but kept for the ``case_fn(deps, frontend, run)``
     tuple-dispatch signature.
     """
     case_id = "W4.R"
@@ -657,7 +649,6 @@ def _write_merge_skill(user_skills_dir: Path, name: str, distinct_step: str) -> 
 
 async def case_w4_m_skill_merge_preserves_distinct_steps(
     deps: CoDeps,
-    agent,
     frontend: EvalFrontend,
     run,
 ) -> CaseResult:
@@ -767,13 +758,13 @@ async def main() -> int:
     constraint #3.
     """
     await ensure_ollama_warm()
-    deps, agent, frontend, stack = await make_eval_deps()
+    deps, frontend, stack = await make_eval_deps()
     apply_eval_window(deps)
     cases: list[CaseResult] = []
     try:
         async with open_eval_run("skills") as run:
             try:
-                cr_a = await case_w4_a_dispatch_user_skill(deps, agent, frontend, run)
+                cr_a = await case_w4_a_dispatch_user_skill(deps, frontend, run)
             except Exception as exc:
                 cr_a = CaseResult(
                     name="W4.A",
@@ -788,7 +779,7 @@ async def main() -> int:
                 f"{cr_a.reason or 'ok'}"
             )
             try:
-                cr_b = await case_w4_b_skill_selection(deps, agent, frontend, run)
+                cr_b = await case_w4_b_skill_selection(deps, frontend, run)
             except Exception as exc:
                 cr_b = CaseResult(
                     name="W4.B",
@@ -803,7 +794,7 @@ async def main() -> int:
                 f"{cr_b.reason or 'ok'}"
             )
             try:
-                cr_r = await case_skill_reviewer_encodes_correction(deps, agent, frontend, run)
+                cr_r = await case_skill_reviewer_encodes_correction(deps, frontend, run)
             except Exception as exc:
                 cr_r = CaseResult(
                     name="W4.R",
@@ -820,9 +811,7 @@ async def main() -> int:
             )
             print(f"[skills] {cr_r.name}: {label} — {cr_r.reason or 'ok'}")
             try:
-                cr_m = await case_w4_m_skill_merge_preserves_distinct_steps(
-                    deps, agent, frontend, run
-                )
+                cr_m = await case_w4_m_skill_merge_preserves_distinct_steps(deps, frontend, run)
             except Exception as exc:
                 cr_m = CaseResult(
                     name="W4.M",
