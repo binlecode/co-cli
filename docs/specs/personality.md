@@ -12,22 +12,23 @@ Three personalities ship: `finch` (preparation-first mentor), `jeff` (warm colla
 set `personality` to one of the role names to enable it. Each personality lives in its own
 subdirectory under `co_cli/personality/prompts/souls/{role}/`.
 
-Personality enters the agent via the static prompt — set once at construction and immutable for the session. The model has no tool path to query personality content; canon is doctrine, not memory.
+Personality enters the agent via the static prompt block — assembled once per turn (`build_static_instructions`) from session-static config, so it never changes within a session. The model has no tool path to query personality content; canon is doctrine, not memory.
 
 ```
-Session start
+Session start → each turn
     ↓
-build_orchestrator(ORCHESTRATOR_SPEC, deps)
+build_static_instructions(deps)  (co_cli/agent/preflight.py)
     ↓
     iterates ORCHESTRATOR_SPEC.static_instruction_builders in order:
     [1] _base_instructions_provider   → soul seed, mindsets, behavioral rules, recency advisory
     [2] _toolset_guidance_provider      — tool-specific guidance (conditional on tool presence)
     [3] _personality_critique_provider  — ## Review lens, last (conditional on personality + critique file)
-    → joined and set as Agent.instructions (static, once per session)
+    → joined into the static block (stable across the turn)
 
-    then registers ORCHESTRATOR_SPEC.per_turn_instructions via agent.instructions():
-    [safety_prompt, current_time_prompt, deferred_tool_awareness_prompt, skill_manifest_prompt]
-    → each emitted as InstructionPart(dynamic=True), evaluated fresh per request
+    then per step the owned loop calls assemble_instructions(): the static block becomes one
+    InstructionPart(dynamic=False), and the per-turn builders
+    [safety_prompt, wrap_up_prompt, current_time_prompt, deferred_tool_awareness_prompt,
+     skill_manifest_prompt] are evaluated fresh and appended as InstructionPart(dynamic=True)
 
 Character canon (souls/{role}/canon/*.md) is indexed at bootstrap by `_sync_canon_store()`
 for personality-system consumption only — it is never returned by any model-callable tool.
@@ -103,7 +104,7 @@ section_3 = _collect_rule_files()               # Rules from context/rules/NN_ru
 return "\n\n".join(non_empty_sections)
 ```
 
-`build_orchestrator()` then iterates `ORCHESTRATOR_SPEC.static_instruction_builders`, calling each closure with `deps`:
+`build_static_instructions(deps)` (`co_cli/agent/preflight.py`) then iterates `ORCHESTRATOR_SPEC.static_instruction_builders`, calling each closure with `deps`:
 
 ```
 parts = []
@@ -117,7 +118,7 @@ static_instructions = "\n\n".join(parts)
 ```
 
 The `<available_skills>` manifest and deferred-tool awareness are NOT in this static
-block; they are emitted by per-turn `agent.instructions()` callbacks
+block; they are emitted as per-turn dynamic instruction parts by `assemble_instructions()`
 (`skill_manifest_prompt`, `deferred_tool_awareness_prompt`) so that `skill_catalog` /
 `tool_catalog` mutations do not invalidate the cached prefix. See [prompt-assembly.md](prompt-assembly.md) §2.2–2.3.
 
@@ -126,8 +127,9 @@ bootstrap into the shared FTS index under `source='canon'` for personality-syste
 only — there is no model-callable read path. See §2.5 below.
 
 The curation lens (`curation.md`) is NOT included in the static prompt either. It is loaded
-only by the dream daemon's reviewers (`load_soul_curation`), never by `build_orchestrator`,
-so it shapes background curation but never the interactive agent's behavior. See the Soul
+only by the dream daemon's reviewers (`load_soul_curation`), never by the orchestrator's
+static instruction assembly, so it shapes background curation but never the interactive
+agent's behavior. See the Soul
 File Layout note above.
 
 **Placement rationale:** Soul seed is first because early context has the strongest influence
@@ -249,6 +251,6 @@ for missing mindset files.
 | `co_cli/context/rules/` | Universal behavioral rule files `01_interaction.md` – `07_memory_protocol.md` |
 | `co_cli/personality/_profiles/` | Human-readable character narrative docs (`finch.md`, `jeff.md`, `tars.md`) — not loaded into agent |
 | `co_cli/config/core.py` | `personality` config field, `_validate_personality_name()`, startup validation call |
-| `co_cli/agent/build.py` | `build_orchestrator()` — iterates `ORCHESTRATOR_SPEC.static_instruction_builders` and registers per-turn instruction callbacks |
-| `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` and its 3 static-instruction builder closures + 4 per-turn instruction callbacks |
-| `co_cli/agent/_instructions.py` | Per-turn callbacks: `safety_prompt`, `current_time_prompt`, `deferred_tool_awareness_prompt`, `skill_manifest_prompt` |
+| `co_cli/agent/preflight.py` | `build_static_instructions()` — iterates `ORCHESTRATOR_SPEC.static_instruction_builders`; `assemble_instructions()` — static part + per-turn dynamic parts |
+| `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` and its 5 static-instruction builder closures + the history-processor tuple |
+| `co_cli/agent/_instructions.py` | Per-turn builders: `safety_prompt`, `wrap_up_prompt`, `current_time_prompt`, `deferred_tool_awareness_prompt`, `skill_manifest_prompt` |

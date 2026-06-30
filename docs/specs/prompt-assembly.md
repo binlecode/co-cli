@@ -7,40 +7,35 @@ Covers how `co-cli` shapes the prompt for each model request. Startup sequencing
 
 The agent has no persistent state in model weights. Each request is reconstructed from three layers with different lifecycles:
 
-- **Static instructions** — assembled once at agent construction; never mutated during the session.
-- **Dynamic instruction layers** — `@agent.instructions` callbacks evaluated fresh on every model request.
+- **Static instructions** — assembled once per turn by the owned loop; never mutated within the turn.
+- **Dynamic instruction layers** — per-turn instruction builders evaluated fresh on every model request (every step of the owned loop).
 - **Message history** — transformed before every request by an ordered processor pipeline whose detailed behavior is owned by the relevant subsystem specs.
 
 ```mermaid
 flowchart TD
-    subgraph Build["agent construction (once)"]
-        Static[build_base_instructions]
-        MainAgent[build_orchestrator]
-        Static --> MainAgent
+    subgraph Build["per turn (once)"]
+        Static[build_static_instructions]
     end
 
-    subgraph PerRequest["per model request"]
-        Dynamic["@agent.instructions callbacks"]
-        Processors["history processors 1..4"]
-        Model[model request]
-        Dynamic --> Processors --> Model
+    subgraph PerStep["per model request (owned loop step)"]
+        Assemble["assemble_instructions:<br/>static InstructionPart + dynamic builders"]
+        Processors["history processors 1..5"]
+        Model[model request via ModelRequestParameters.instruction_parts]
+        Static --> Assemble
+        Assemble --> Processors --> Model
     end
 
     subgraph ResumeRequest["approval resume (same turn)"]
-        ResumeModel["deferred_tool_results path"]
-        ResumeNote["SDK skips ModelRequestNode"]
-        ResumeModel -. zero tokens .- ResumeNote
+        ResumeNote["resume continues the owned step loop"]
+        ResumeNote -. zero new tokens .- ResumeNote
     end
-
-    MainAgent --> PerRequest
-    MainAgent --> ResumeRequest
 ```
 
 ## 2. Core Logic
 
 ### 2.1 Static Instruction Assembly
 
-`build_orchestrator()` assembles `static_instructions` by calling each builder in `ORCHESTRATOR_SPEC.static_instruction_builders` in order — five thin closures, each taking `deps` and returning `str | None`. All evaluated once at agent construction:
+`build_static_instructions(deps)` (`co_cli/agent/preflight.py`) assembles `static_instructions` by calling each builder in `ORCHESTRATOR_SPEC.static_instruction_builders` in order — five thin closures, each taking `deps` and returning `str | None`. The owned loop calls it once at turn start (`run_turn_owned`, `co_cli/agent/loop.py`), so the static block is stable across every step of the turn — it is the cacheable prefix:
 
 1. **`_base_instructions_provider(deps)`** — wraps `build_base_instructions(deps.config)`: soul seed, mindsets, numbered rules (`co_cli/context/rules/NN_rule_id.md`), recency advisory. The numbered rules are the profile-agnostic **base** (shared intersection). Character memories and critique are NOT included here.
 2. **`_model_profile_overlay_provider(deps)`** — wraps `build_profile_overlay(resolve_model_profile(deps.config.llm))`: the resolved model profile's **append-only overlay** (`co_cli/context/overlays/<profile>.md`), placed immediately after the base so the composed prompt is `base + overlay(profile)`. Append-only — the overlay only ADDS profile-specific prose; nothing in the base is filtered or removed. Returns `None` when the profile's overlay file is absent or empty. `overlays/weak_local.md` ships the weak-model scaffolding relocated out of the (now profile-agnostic) base — the intent taxonomy, act-this-turn Execution, sub-goal Completeness, over-planning calibration, error-recovery loop-prevention, and the no-preamble half of the conciseness reflex; `overlays/frontier.md` is absent today, so the frontier composition reduces to base alone (its planned cost-cliff conciseness delta is deferred to the frontier-overlay plan). The universal conciseness *floor* (density, lead-with-outcome, don't-restate) is NOT weak-specific — it lives in BASE `01_interaction` and reaches every profile; each overlay adds only its profile-specific delta on top. `ModelProfile` is resolved from the configured provider (Ollama → `WEAK_LOCAL`, otherwise `FRONTIER`) in `co_cli/config/llm.py`.
@@ -48,7 +43,7 @@ flowchart TD
 4. **`_toolset_guidance_provider(deps)`** — wraps `build_toolset_guidance(deps.tool_catalog)`: tool-specific guidance blocks, each gated on the tool being present. Currently gated: `capabilities_check` → `CAPABILITIES_GUIDANCE`. Empty when no matching tools exist.
 5. **`_personality_critique_provider(deps)`** — wraps `load_soul_critique(deps.config.personality)` and prefixes with `## Review lens` heading; appended last when a personality is configured and a critique file exists. Placed after operational guidance so the review frame wraps the complete prompt.
 
-The parts are joined with `"\n\n"` and passed as the `instructions=` string to `Agent(...)`. The string is stable for the entire session — it never changes between turns. The skill manifest and deferred-tool awareness are NOT in this block — they live in per-turn instruction callbacks (§2.2) so that `skill_catalog` / `tool_catalog` mutations do not churn the cached prefix bytes.
+The parts are joined with `"\n\n"` into the static `static_instructions` string (`build_static_instructions`). Per step, `assemble_instructions()` (`co_cli/agent/preflight.py`) wraps it in a single `InstructionPart(dynamic=False)` — the cacheable prefix — placed first in the request's instruction-part list. The string is stable for the entire turn — it never changes between steps. The skill manifest and deferred-tool awareness are NOT in this block — they are emitted as the per-turn dynamic instruction parts (§2.2) so that `skill_catalog` / `tool_catalog` mutations do not churn the cached prefix bytes.
 
 Each personality role is fully self-contained under `souls/{role}/`. Adding a role requires only a new directory — no Python changes. Adding a tool-specific guidance block requires adding a constant to `co_cli/context/guidance.py` and a gate in `build_toolset_guidance`.
 
@@ -87,37 +82,37 @@ Exactly one overlay is active per request — `resolve_model_profile` picks a si
 
 ### 2.2 Dynamic Instruction Layers
 
-Registered in `build_orchestrator()` (`co_cli/agent/build.py`) from `ORCHESTRATOR_SPEC.per_turn_instructions`, evaluated fresh per request:
+Called directly by `assemble_instructions()` (`co_cli/agent/preflight.py`) each step, in this fixed order, each taking `deps` (plus turn-scoped state where needed). They live in `co_cli/agent/_instructions.py`; empty returns are dropped:
 
 | Layer | Condition | Content |
 | --- | --- | --- |
-| `safety_prompt` | doom loop or shell-error streak active | warning text injected into instructions context |
-| `wrap_up_prompt` | `ctx.usage.requests == request_limit - 1` (final permitted step this turn) | instruction to stop calling tools and produce the final answer now from what is already gathered, before the model-request budget cuts off the next call |
+| `safety_prompt` | doom loop or shell-error streak active | warning text; reads the step's `messages` (passed explicitly) to detect repeated-tool-call / shell-error streaks |
+| `wrap_up_prompt` | `request_count == request_limit - 1` (final permitted step this turn) | instruction to stop calling tools and produce the final answer now from what is already gathered, before the model-request budget cuts off the next call; `request_count` is the owned loop's completed-request count |
 | `current_time_prompt` | always | current date string, day-only granularity (`"Current date: Monday, April 28, 2026"`) — day-only so the system block stays byte-stable across same-day turns and the Ollama prefix cache extends through it into history |
-| `deferred_tool_awareness_prompt` | any `VisibilityPolicyEnum.DEFERRED` tools present | per-tool stub list (one `` - `name`: one-liner `` line per deferred tool) grouped by integration family — native primitives first with no sub-header, then each family under a `` `<label>` (load before use): `` sub-header (e.g. `Google Workspace`) — telling the model to load a tool via `tool_view` (by exact name) before calling it; wraps `build_deferred_tool_awareness_prompt(ctx.deps.tool_catalog)` |
-| `skill_manifest_prompt` | `skill_catalog` non-empty | `<available_skills>` XML manifest of bundled + user-installed skills; wraps `render_skill_manifest(ctx.deps.skill_catalog, ctx.deps.skills_dir, ctx.deps.user_skills_dir)` |
+| `deferred_tool_awareness_prompt` | any `VisibilityPolicyEnum.DEFERRED` tools present | per-tool stub list (one `` - `name`: one-liner `` line per deferred tool) grouped by integration family — native primitives first with no sub-header, then each family under a `` `<label>` (load before use): `` sub-header (e.g. `Google Workspace`) — telling the model to load a tool via `tool_view` (by exact name) before calling it; wraps `build_deferred_tool_awareness_prompt(deps.tool_catalog, deps.runtime.revealed_tools)` |
+| `skill_manifest_prompt` | `skill_catalog` non-empty | `<available_skills>` XML manifest of bundled + user-installed skills; wraps `render_skill_manifest(deps.skill_catalog, deps.skills_dir, deps.user_skills_dir)` |
 
-These layers are **not** persisted into `message_history`. They are emitted as `InstructionPart(dynamic=True)` in registration order, joined by `\n\n` and appended after the static literal in the system prompt block — see §2.3 for how cache-aware providers separate them from the cached prefix.
+These layers are **not** persisted into `message_history`. `assemble_instructions()` emits each non-empty return as an `InstructionPart(dynamic=True)` in the order above, after the single static `InstructionPart(dynamic=False)`. The model joins all parts with `\n\n` static-first, so the dynamic parts follow the static literal in the system prompt block — see §2.3 for how cache-aware providers separate them from the cached prefix.
 
 **Signature-coherence invariant.** The instruction floor (rules, mindsets, toolset guidance) carries *behavioral triggers* — WHEN and WHY to use a capability — never a tool's *call signature* (its HOW). A signature lives in the tool's schema: on the cached prefix for `ALWAYS` tools, loaded on demand via `tool_view` for `DEFERRED` tools (whose floor presence is the one-line stub above, not a signature). Hard-coding a deferred tool's `name(args…)` syntax in rule or guidance prose is a defect on two counts — it re-encodes on the floor the schema cost deferral removed, and it instructs a direct call to a tool that is not callable until loaded (contradicting the deferred-load mechanic). `tests/test_instruction_floor_coupling.py` guards this: it derives the `DEFERRED` set live from `tool_catalog` and fails if any deferred tool's call signature appears in the assembled floor (`build_rules_block() + build_toolset_guidance(...)`).
 
 ### 2.3 Static vs Dynamic Split — Cache-Friendliness
 
-pydantic-ai distinguishes static and dynamic instructions at the `InstructionPart` level: the literal passed to `Agent(instructions=...)` becomes one `InstructionPart(dynamic=False)`; each `@agent.instructions` callback becomes a separate `InstructionPart(dynamic=True)` in registration order. All parts are joined by `\n\n` and emitted as the system prompt block.
+The `InstructionPart` carries a `dynamic` flag that cache-aware providers read. `assemble_instructions()` (`co_cli/agent/preflight.py:199`) builds the per-step list: the static block becomes one `InstructionPart(dynamic=False)` placed first, then each non-empty per-turn builder return becomes a separate `InstructionPart(dynamic=True)` in the §2.2 order. The owned loop bridges this list onto `ModelRequestParameters.instruction_parts` (`build_request_params`, `co_cli/agent/preflight.py`); the model joins all parts with `\n\n`, static-first, into the system prompt block.
 
 Cache-aware providers act on the static/dynamic flag:
 - **Anthropic** (`pydantic_ai/models/anthropic.py`) places `cache_control` on the *last static* block when any dynamic part is present, leaving dynamic parts outside the cached prefix.
 - **Ollama / llama.cpp** has no explicit `cache_control`, but the KV cache automatically reuses matching prefix bytes across consecutive requests. The static literal sits first; any per-turn variance lives in the dynamic suffix.
 
-The cache-friendliness invariant therefore reduces to one rule: **content that can vary within a session MUST NOT be inside the literal `instructions=` string passed to `Agent(...)`**. It belongs in either:
-- An `@agent.instructions` callback (becomes `dynamic=True`, kept outside the cached prefix), OR
+The cache-friendliness invariant therefore reduces to one rule: **content that can vary within a turn MUST NOT be inside the static block returned by `build_static_instructions`**. It belongs in either:
+- A per-turn builder called by `assemble_instructions()` (emitted as `dynamic=True`, kept outside the cached prefix), OR
 - The message tail via a history processor (`[*messages, injection]`).
 
-The skill manifest, deferred-tool awareness, safety warnings, and current time all use the `@agent.instructions` path. Audit every new static builder registration against this rule — anything reading `deps.skill_catalog`, `deps.tool_catalog`, or runtime state must live in the per-turn path.
+The static block is the cacheable prefix because the dynamic parts always follow it (`assemble_instructions` appends them after the `dynamic=False` part — `co_cli/agent/preflight.py:216-225`). The skill manifest, deferred-tool awareness, safety warnings, wrap-up nudge, and current time all use the per-turn path. Audit every new static builder against this rule — anything reading `deps.skill_catalog`, `deps.tool_catalog`, or runtime state must live in the per-turn path.
 
 ### 2.4 History Processors And Dynamic Instructions
 
-Pure-transformer processors run in this exact order (registered in `build_orchestrator()` from `ORCHESTRATOR_SPEC.history_processors`):
+Pure-transformer processors run in this exact order (`run_history_processors`, `co_cli/agent/preflight.py:60`, iterating `ORCHESTRATOR_SPEC.history_processors`):
 
 | Processor | Behavior |
 | --- | --- |
@@ -126,24 +121,25 @@ Pure-transformer processors run in this exact order (registered in `build_orches
 | `spill_largest_tool_results` | force-spills the largest unspilled `ToolReturnPart`s across the full message list when total tokens exceed `deps.spill_threshold_tokens`; cheap (non-LLM) per-request cap that runs before `proactive_window_processor`. See [compaction.md](compaction.md) §2.4. |
 | `proactive_window_processor` | when history exceeds compaction threshold, replaces the middle with an LLM summary or static marker; full design in [compaction.md](compaction.md) |
 
-Four dynamic instruction functions are registered via `agent.instructions()` and run before every model request:
+The five per-turn dynamic instruction builders run inside `assemble_instructions()` before every model request:
 
 | Dynamic instruction | Behavior |
 | --- | --- |
-| `safety_prompt` | detects identical-tool-call streaks and shell-error streaks; returns warning text injected into the instructions context |
-| `current_time_prompt` | returns the current date string at day-only granularity — a dynamic instruction kept out of the static literal, and coarsened to day precision so it does not change within a session-day; minute precision here previously broke the Ollama prefix cache for the whole history that follows the system block |
-| `deferred_tool_awareness_prompt` | re-reads `ctx.deps.tool_catalog` each turn — newly registered deferred tools surface immediately without restart |
-| `skill_manifest_prompt` | re-reads `ctx.deps.skill_catalog` each turn — newly created skills become visible to the model on the very next turn |
+| `safety_prompt` | detects identical-tool-call streaks and shell-error streaks; returns warning text added as a dynamic instruction part |
+| `wrap_up_prompt` | on the last allowed step (`request_count == limit - 1`), nudges the model to stop calling tools and answer now; empty otherwise |
+| `current_time_prompt` | returns the current date string at day-only granularity — a dynamic part kept out of the static block, and coarsened to day precision so it does not change within a session-day; minute precision here previously broke the Ollama prefix cache for the whole history that follows the system block |
+| `deferred_tool_awareness_prompt` | re-reads `deps.tool_catalog` each step — newly registered deferred tools surface immediately without restart |
+| `skill_manifest_prompt` | re-reads `deps.skill_catalog` each step — newly created skills become visible to the model on the very next turn |
 
 **Ordering rationale:**
-- **#1–2 before #3–4**: dedup and eviction run before size enforcement and summarization. The summarizer sees a smaller, deduped history; size enforcement fires after cheap reductions but before the LLM call.
-- **`safety_prompt` before `current_time_prompt`**: structural behavioral guidance sits above ephemeral grounding.
+- **History processors #1–2 before #3–4**: dedup and eviction run before size enforcement and summarization. The summarizer sees a smaller, deduped history; size enforcement fires after cheap reductions but before the LLM call.
+- **`safety_prompt` / `wrap_up_prompt` before `current_time_prompt`**: structural behavioral guidance sits above ephemeral grounding.
 - **`deferred_tool_awareness_prompt` and `skill_manifest_prompt` last**: capability surfaces are the freshest layer — they reflect live `deps` state — and sit closest to the user turn so the model resolves "what can I call right now" against the most recent snapshot.
-- **Dynamic instructions before model request**: these functions run via the SDK's `agent.instructions()` mechanism; their output is ephemeral — not stored back to `turn_state.current_history`.
+- **Dynamic instructions before model request**: `assemble_instructions()` recomputes them every step; their output is ephemeral — emitted as `dynamic=True` instruction parts, never stored back to the turn history.
 
 ### 2.5 Approval Resume
 
-Approval resumes reuse the main agent with zero additional tokens. The pydantic-ai SDK skips `ModelRequestNode` entirely on the `deferred_tool_results` path, so the run continues from exactly where the deferred call paused. No separate resume agent is needed. Approval subject resolution and the resume loop live in [core-loop.md](core-loop.md) §2.3.
+Approval handling is inline in the owned step loop: `collect_inline_approvals` resolves each step's gated calls before `dispatch_tools` runs (`co_cli/agent/loop.py`), so an approved call dispatches within the same step with no extra model request — zero additional tokens to re-decide the call. There is no separate resume agent and no instruction reassembly for it. Approval subject resolution lives in [core-loop.md](core-loop.md).
 
 ## 3. Config
 
@@ -163,7 +159,7 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | --- | --- | --- |
 | `build_base_instructions(config) -> str` | `co_cli/context/assembly.py` | Returns soul seed + mindsets + numbered rules, joined with `\n\n`; called once at agent construction |
 | `build_toolset_guidance(tool_catalog) -> str` | `co_cli/context/guidance.py` | Returns tool-specific guidance blocks, gated on tool presence (`CAPABILITIES_GUIDANCE`) |
-| `build_deferred_tool_awareness_prompt(tool_catalog) -> str` | `co_cli/tools/deferred_prompt.py` | Returns a per-tool stub list (one `` - `name`: one-line purpose `` per `DEFERRED` tool, name-only when description is empty) grouped by integration family: native primitives render first with no sub-header, then each family under a `` `<label>` (load before use): `` sub-header. Family key = segment before first `_` for native integrations (so all `google_*` cluster), whole string for MCP integrations; deterministic ordering. Empty when no deferred tools exist. Called per-turn via `deferred_tool_awareness_prompt` |
+| `build_deferred_tool_awareness_prompt(tool_catalog, revealed_tools) -> str` | `co_cli/tools/deferred_prompt.py` | Returns a per-tool stub list (one `` - `name`: one-line purpose `` per `DEFERRED` tool, name-only when description is empty) grouped by integration family: native primitives render first with no sub-header, then each family under a `` `<label>` (load before use): `` sub-header. Family key = segment before first `_` for native integrations (so all `google_*` cluster), whole string for MCP integrations; deterministic ordering. Empty when no deferred tools exist. Called per-turn via `deferred_tool_awareness_prompt` |
 | `render_skill_manifest(skill_catalog, skills_dir, user_skills_dir) -> str` | `co_cli/skills/manifest.py` | Renders the `<available_skills>` XML block. Called per-turn via `skill_manifest_prompt` |
 
 ### Personality asset loaders
@@ -178,18 +174,22 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 
 | Symbol | Source | Contract |
 | --- | --- | --- |
-| `safety_prompt(ctx) -> str` | `co_cli/agent/_instructions.py` | `@agent.instructions` — doom-loop / shell-error warning; output is ephemeral, not persisted to history |
-| `current_time_prompt(ctx) -> str` | `co_cli/agent/_instructions.py` | `@agent.instructions` — current date/time string; ephemeral grounding |
-| `deferred_tool_awareness_prompt(ctx) -> str` | `co_cli/agent/_instructions.py` | `@agent.instructions` — wraps `build_deferred_tool_awareness_prompt(ctx.deps.tool_catalog)`; live deferred-tool surface, not cached |
-| `skill_manifest_prompt(ctx) -> str` | `co_cli/agent/_instructions.py` | `@agent.instructions` — wraps `render_skill_manifest(ctx.deps.skill_catalog, ...)`; live skill surface, not cached |
+| `safety_prompt(deps, *, messages) -> str` | `co_cli/agent/_instructions.py` | Per-turn builder — doom-loop / shell-error warning; output is ephemeral, not persisted to history |
+| `wrap_up_prompt(deps, *, request_count) -> str` | `co_cli/agent/_instructions.py` | Per-turn builder — last-allowed-step nudge to finish; empty except on `request_count == limit - 1` |
+| `current_time_prompt(deps) -> str` | `co_cli/agent/_instructions.py` | Per-turn builder — current date string (day-only); ephemeral grounding |
+| `deferred_tool_awareness_prompt(deps) -> str` | `co_cli/agent/_instructions.py` | Per-turn builder — wraps `build_deferred_tool_awareness_prompt(deps.tool_catalog, deps.runtime.revealed_tools)`; live deferred-tool surface, not cached |
+| `skill_manifest_prompt(deps) -> str` | `co_cli/agent/_instructions.py` | Per-turn builder — wraps `render_skill_manifest(deps.skill_catalog, ...)`; live skill surface, not cached |
+| `assemble_instructions(deps, *, static_instructions, messages, request_count) -> list[InstructionPart]` | `co_cli/agent/preflight.py` | Owned-loop per-step assembly — one static `InstructionPart(dynamic=False)` first, then the five dynamic builders' non-empty returns as `dynamic=True` parts; bridged onto `ModelRequestParameters.instruction_parts` |
+| `build_static_instructions(deps) -> str` | `co_cli/agent/preflight.py` | Joins `ORCHESTRATOR_SPEC.static_instruction_builders` with `\n\n`; called once per turn by `run_turn_owned` — the cacheable prefix |
 
 ## 5. Files
 
 | File | Purpose |
 | --- | --- |
-| `co_cli/agent/build.py` | `build_orchestrator()` — composes static instructions from `ORCHESTRATOR_SPEC.static_instruction_builders`, registers `per_turn_instructions` callbacks, attaches history processors |
-| `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` — static builders (`_base_instructions_provider`, `_toolset_guidance_provider`, `_personality_critique_provider`) and per-turn instructions (`safety_prompt`, `current_time_prompt`, `deferred_tool_awareness_prompt`, `skill_manifest_prompt`) |
-| `co_cli/agent/_instructions.py` | per-turn instruction callbacks: `safety_prompt`, `current_time_prompt`, `deferred_tool_awareness_prompt`, `skill_manifest_prompt` |
+| `co_cli/agent/preflight.py` | `build_static_instructions()` (composes `ORCHESTRATOR_SPEC.static_instruction_builders`), `assemble_instructions()` (static part + per-turn dynamic parts → `instruction_parts`), `run_history_processors()`, `build_request_params()` |
+| `co_cli/agent/loop.py` | `run_turn_owned()` / `_orchestrator_step_loop` — the owned turn loop: builds static instructions once, then per step runs history processors, calls `assemble_instructions`, builds request params, drives the model |
+| `co_cli/agent/orchestrator.py` | `ORCHESTRATOR_SPEC` — static builders (`_base_instructions_provider`, `_model_profile_overlay_provider`, `_user_profile_provider`, `_toolset_guidance_provider`, `_personality_critique_provider`) and the history-processor tuple |
+| `co_cli/agent/_instructions.py` | per-turn instruction builders: `safety_prompt`, `wrap_up_prompt`, `current_time_prompt`, `deferred_tool_awareness_prompt`, `skill_manifest_prompt` |
 | `co_cli/context/assembly.py` | `build_base_instructions()` — soul + mindsets + rules; `build_rules_block()` (BASE) and `build_profile_overlay(profile)` (per-profile overlay); rule-file validation |
 | `co_cli/context/rules/NN_*.md` | BASE rule files (model-agnostic), read in filename order by `build_rules_block()` |
 | `co_cli/context/overlays/<profile>.md` | per-profile overlay delta appended by `build_profile_overlay()`; absent/empty → nothing appended |
@@ -197,5 +197,5 @@ Only the settings that directly shape prompt text are listed here. Compaction th
 | `co_cli/skills/manifest.py` | `render_skill_manifest()` — `<available_skills>` XML block; called per-turn from `skill_manifest_prompt` |
 | `co_cli/personality/prompts/loader.py` | `load_soul_seed`, `load_soul_critique`, `load_soul_mindsets` — personality asset loaders |
 | `co_cli/personality/prompts/validator.py` | personality discovery and file validation |
-| `co_cli/context/prompt_text.py` | `safety_prompt_text` — called via `agent.instructions()` wrapper in `co_cli/agent/_instructions.py` |
+| `co_cli/context/prompt_text.py` | `safety_prompt_text` — wrapped by the per-turn `safety_prompt` builder in `co_cli/agent/_instructions.py` |
 | `co_cli/tools/deferred_prompt.py` | `build_deferred_tool_awareness_prompt()` — per-tool stub list (name + one-liner) for deferred tools, grouped by integration family under sub-headers; called per-turn from `deferred_tool_awareness_prompt` |

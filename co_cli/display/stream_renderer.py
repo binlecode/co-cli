@@ -1,8 +1,8 @@
 """Stream rendering state machine — text/thinking buffering and flush policy.
 
 StreamRenderer owns all text/thinking buffer state for one run.
-It is instantiated once per _execute_run() call and is not shared
-across runs or turns.
+It is instantiated once per turn (in run_turn_owned) and is not shared
+across turns.
 
 Ownership contract:
 - append_text / append_thinking: accumulate content, throttle live renders at 20 FPS

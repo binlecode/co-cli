@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.0]
+
+**Loop-decoupling milestone — capstone.** The owned agent loop is now co's sole turn engine; the pydantic-ai graph path (`agent.iter`, `SurrogateRecoveryModel`, `_CallSeamToolset`, `DeferredToolRequests` suspend/resume) was deleted at the v0.8.506 cutover. This release reconciles the runtime spec layer to that reality and closes the milestone. A docs + version capstone: **zero runtime behavior change** — full real-LLM suite green (887 passed).
+
+- **All thirteen stale runtime specs reconciled to the owned loop (`docs/specs/`)** — nine primary (`core-loop`, `pydantic-ai-integration`, `agents`, `tools`, `observability`, `compaction`, `prompt-assembly`, `personality`, `tui`) plus four secondary (`01-system`, `skills`, `sessions`, `uat_evals`). The vocabulary moves from `turn ⊇ run ⊇ model request` to `turn ⊇ step`; the model boundary is `model_turn` over `direct.model_request_stream`; tool dispatch is `dispatch_tools` + step-boundary `ToolCapState`; approval is inline `collect_inline_approvals` (no deferred resume); entrypoints are `run_turn_owned` / `run_standalone_owned`. `01-system.md` no longer cites the deleted `agent/orchestrate.py`. Every retained mechanism claim is source-verified at `file:line`.
+- **Design §2.1 "Why two levels, not three" merged into `core-loop.md`** — the turn-and-step-are-intrinsic / run-is-a-graph-artifact rationale is now canonical present-tense architecture (also carried as the framing half of `pydantic-ai-integration.md`), reframing the SDK from agent engine to provider + message library.
+- **R3 delegation divergences recorded (`agents.md`)** — co deliberately omits async/parallel delegation (synchronous owned loop, holds a tool slot) and per-call model/scope overrides (full agent inherits parent), with peer counts as context.
+- **`sdk-coupling-cleanup` plan refreshed** — the obsolete pre-cutover S1–S6 census is retired (S2/S6 landed at cutover; S1/S4 were sited in deleted modules); the plan now owns the two surviving SDK reaches with a verdict each: `_output.OutputToolset` (`preflight.py`, private-module → actionable) and `make_run_context` (`dispatch.py`, SDK-toolset-API-forced → no-action).
+- **Two stale source comments fixed (`tools/tool_io.py`, `display/stream_renderer.py`)** — dead `_execute_run` references replaced with current symbols (comment-only, no behavior change).
+
 ## [0.8.512]
 
 Rules-conformance cleanup — the mechanical R1–R12 remainder pass after the loop-decoupling milestone (5.6 → `/audit-conformance` → this). The whole-tree audit found the high-churn loop surface conformant; only three findings survived, none in the loop region. A no-behavior-change pass: full real-LLM suite green (794 passed).

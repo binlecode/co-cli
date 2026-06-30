@@ -9,11 +9,11 @@ co-cli emits structured JSON-line trace records to a local log file. No OpenTele
 ┌──────────────────────────────────────────────────────────────┐
 │                         co CLI                                │
 │                                                                │
-│   Agent.run() ──▶ Model Call ──▶ Tool Execution                │
+│   owned loop  ──▶ Model Call ──▶ Tool Execution                │
 │        │               │               │                       │
 │        ▼               ▼               ▼                       │
-│   run-call-site    SurrogateRecovery   _CallSeamToolset        │
-│   agent span    +  Model chat span  +  tool span  +  @trace()  │
+│   run-call-site    model_turn      dispatch_tools             │
+│   agent span    +  chat span     +  tool span  +  @trace()    │
 │                           (push/pop spans)                     │
 │                              │                                 │
 │                              ▼                                 │
@@ -99,15 +99,15 @@ The `new_trace=True` flag resets `trace_id` BEFORE pushing — used at the top o
 
 ### Span emission on co-owned seams
 
-There is no pydantic-ai capability middleware. The agent/model/tool spans are pushed and popped on three explicit seams co already owns, each as straight-line ordered code — no `capabilities=[...]` attachment, no inter-component ordering invariant, no silent `_NoOpSpan` failure on reorder.
+There is no pydantic-ai graph or capability middleware. The agent/model/tool spans are pushed and popped on three explicit seams the owned loop already owns, each as straight-line ordered code — no `capabilities=[...]` attachment, no inter-component ordering invariant, no silent `_NoOpSpan` failure on reorder.
 
 | Span | Seam | Push / pop |
 |------|------|-----------|
-| `invoke_agent {name}` (`agent`) | the run call site — `_execute_run` (`agent/orchestrate.py`) for the orchestrator, `run_standalone` (`agent/run.py`) for task agents | `push_span` with `co.agent.role`/`co.agent.model`/`co.agent.request_limit` before the run; `pop_span` with `co.agent.requests_used`/`co.agent.final_result` after (ERROR + re-raise on exception) |
-| `chat {model}` (`model`) | `SurrogateRecoveryModel` (`llm/surrogate_recovery_model.py`), covering BOTH `request` (non-stream) and `request_stream` (streaming) | `push_span` with `co.model.name`/`co.model.input` on entry; `pop_span` with `co.model.output`/`co.model.tokens.input/output`/`co.model.name`/`co.model.finish_reason` once the response (or assembled stream) is read. On the streaming path the final response/usage is only available after the stream is consumed, so the span closes on context-manager exit reading `StreamedResponse.get()`/`.usage()` |
-| `tool {name}` (`tool`) | `_CallSeamToolset.call_tool` (`agent/toolset.py`) | `push_span` with `co.tool.name`/`co.tool.args`/`co.tool.args_chars`; on close sets `co.tool.result`/`co.tool.result_size`/`co.tool.source`/`co.tool.requires_approval`, then `pop_span` (ERROR + re-raise on tool error) |
+| `invoke_agent {name}` (`agent`) | the standalone-runner call site — `run_standalone_owned` (`agent/loop.py:664`), reached via `run_standalone` (`agent/run.py`) for task/delegated agents. The orchestrator turn is the `co.turn` root span (`@trace("co.turn", new_trace=True)` on `run_turn_owned`, `agent/loop.py:197`), not a separate `invoke_agent` push | `push_span` with `co.agent.role`/`co.agent.model`/`co.agent.request_limit` before the run; `pop_span` with `co.agent.final_result` after (ERROR + re-raise on exception) |
+| `chat {model}` (`model`) | `model_turn` (`llm/model_turn.py:66`), the graph-free streamed model client over `direct.model_request_stream` | `push_span` with `co.model.name`/`co.model.input` on entry; `pop_span` with `co.model.output`/`co.model.tokens.input/output`/`co.model.name`/`co.model.finish_reason` once the assembled stream is read. The final response/usage is only available after the stream is consumed, so the span closes on context-manager exit reading `StreamedResponse.get()`/`.usage()` via `close_model_span` |
+| `tool {name}` (`tool`) | `dispatch_tools` (`agent/dispatch.py:234`) | `push_span` with `co.tool.name`/`co.tool.args`/`co.tool.args_chars`; on close sets `co.tool.result`/`co.tool.result_size`/`co.tool.source`/`co.tool.requires_approval`, then `pop_span` (ERROR + re-raise on tool error) |
 
-The tool span body is linear and ordered: push span → per-model-request cap check (rejection payload past the cap) → `super().call_tool(...)` → MCP-result spill if oversized → set `co.tool.*` → pop span. All three concerns that must live at the `call_tool` boundary (span, cap, spill) sit there together; nothing depends on the ordering of a separate component's hooks. See [tools.md](tools.md) for the cap and spill detail.
+The tool seam is linear and ordered: `dispatch_tools` computes the pre-fan-out cap boundary (calls past the cap get an exceeded payload, never execute) → per within-cap call push span → run the tool body → MCP-result spill if oversized → set `co.tool.*` → pop span. All three concerns that must live at the dispatch boundary (span, cap, spill) sit there together; nothing depends on the ordering of a separate component's hooks. See [tools.md](tools.md) for the cap and spill detail.
 
 ### Record schema
 
@@ -161,11 +161,11 @@ One JSON object per closed span, one line per record. Schema version 1:
 
 | Span name | Kind | Key attributes |
 |-----------|------|----------------|
-| `co.turn` | `agent` (wrapping) | `co.user_prompt.chars`, `turn.outcome` (`continue`/`error`), `turn.interrupted` (bool), `turn.input_tokens`, `turn.output_tokens`, `turn.model_requests` (int) — root span for every user turn; `@trace("co.turn", new_trace=True)` on `run_turn()`. On terminal `ModelHTTPError`, adds a `provider_error` event with `http.status_code` and `error.body` (capped at 500 chars). |
-| `invoke_agent {name}` | `agent` | `co.agent.role`, `co.agent.model`, `co.agent.request_limit`, `co.agent.requests_used`, `co.agent.final_result` — pushed at the run call site (`_execute_run` for the orchestrator, `run_standalone` for task agents). |
-| `chat {model}` | `model` | `co.model.name`, `co.model.input` (JSON list of message dicts preserving role + part types incl. `thinking`), `co.model.output` (same shape), `co.model.tokens.input`, `co.model.tokens.output`, `co.model.finish_reason` — emitted by `SurrogateRecoveryModel` on both the streaming and non-stream request paths. |
+| `co.turn` | `agent` (wrapping) | `co.user_prompt.chars`, `turn.outcome` (`continue`/`error`), `turn.interrupted` (bool), `turn.input_tokens`, `turn.output_tokens`, `turn.model_requests` (int) — root span for every user turn; `@trace("co.turn", new_trace=True)` on `run_turn_owned()`. On terminal `ModelHTTPError`, adds a `provider_error` event with `http.status_code` and `error.body` (capped at 500 chars). |
+| `invoke_agent {name}` | `agent` | `co.agent.role`, `co.agent.model`, `co.agent.request_limit`, `co.agent.final_result` — pushed by `run_standalone_owned` (`agent/loop.py`) for task/delegated agents. The orchestrator turn is the `co.turn` root span (above), not a separate `invoke_agent`. |
+| `chat {model}` | `model` | `co.model.name`, `co.model.input` (JSON list of message dicts preserving role + part types incl. `thinking`), `co.model.output` (same shape), `co.model.tokens.input`, `co.model.tokens.output`, `co.model.finish_reason` — emitted by `model_turn` (`co_cli/llm/model_turn.py`) on the streamed request path. |
 | `llm_call {model}` | `model` | Same attribute keys as `chat {model}` (BC-1 parity — renders identically) but emitted by the direct-call primitive `llm_call()` (`co_cli/llm/call.py`) via explicit `push_span`/`pop_span`, NOT the agent loop. Covers the compaction summarizer, dream merges, and eval judge calls. The distinct name keeps direct calls separable from agent turns; the span nests under the active parent (e.g. `compaction.proactive_check`). Reuses `serialize_messages`/`serialize_response` from `observability/serialize.py`. |
-| `tool {name}` | `tool` | `co.tool.name`, `co.tool.args` (JSON string), `co.tool.result` (JSON string, size-capped), `co.tool.result_size`, `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.args_chars` — all set in one place by `_CallSeamToolset.call_tool` (`co_cli/agent/toolset.py`). |
+| `tool {name}` | `tool` | `co.tool.name`, `co.tool.args` (JSON string), `co.tool.result` (JSON string, size-capped), `co.tool.result_size`, `co.tool.source` (`native`/`mcp`), `co.tool.requires_approval` (bool), `co.tool.args_chars` — all set in one place by `dispatch_tools` (`co_cli/agent/dispatch.py`). |
 | `background_task_execute` | `co` | `task.command`, `task.description`, `task.cwd` — `@trace("background_task_execute")` on `task_start`. |
 | `tool_budget.resolved` | `co` | `budget.context_window_tokens`, `budget.spill_ratio`, `budget.tool_call_limit`, `budget.spill_threshold_chars`, `budget.spill_threshold_tokens` — emitted once at bootstrap by `@trace("tool_budget.resolved")` on `_emit_tool_budget_span()`. |
 | `sync_memory` | `co` | `count`, `backend`, `status` — `@trace("sync_memory")` on `_sync_memory_domain()`. |
@@ -186,7 +186,7 @@ These small attribute-only blocks were previously zero-duration spans; they are 
 | `tool_budget.spill_tool_result` | active `tool` span | `tool.name`, `spill.threshold_chars`, `spill.content_chars`, `spill.fired`, `spill.forced`, `spill.savings_chars` |
 | `tool_budget.spill_largest_tool_results` | active model span | `request.threshold_tokens`, `request.tokens_before`, `request.tokens_after`, `request.spilled_count`, `request.spill_fired`, `request.skip_reason` (one of `""`, `below_threshold`, `no_candidates`, `all_spilled`, `fallback_to_summarize`) |
 | `provider_error` | active `co.turn` span | `http.status_code`, `error.body` (capped at 500 chars) |
-| `surrogate_recovery` | active model span (`chat` or `llm_call`) | `method` (`request` / `request_stream`) — emitted when `SurrogateRecoveryModel` catches a `UnicodeEncodeError`, re-sanitizes, and retries (`co_cli/llm/surrogate_recovery_model.py`). Makes recovery frequency visible in the trace. |
+| `surrogate_recovery` | active model span (`chat` or `llm_call`) | `method` (`model_turn`) — emitted when `model_turn` catches a `UnicodeEncodeError` around stream *open*, re-sanitizes the messages, and retries once (`co_cli/llm/model_turn.py`). Makes recovery frequency visible in the trace. |
 | `compaction_fallback` | active `compaction.proactive_check` span | `reason` (one of `model_absent`, `circuit_breaker_open`, `summarizer_error`, `empty_summary`) — emitted when a compaction pass degrades to a static marker instead of an LLM summary (`co_cli/context/compaction.py`). Distinct reason per cause so a silent degradation is separable at triage. |
 
 ### Live Tail Viewer (`co tail`)
@@ -311,8 +311,8 @@ All data stays local. Tool responses and full conversation history are captured 
 
 | Symbol | Source | Contract |
 |--------|--------|---------|
-| `serialize_messages(messages) -> str` / `serialize_response(response) -> str` | `co_cli/observability/serialize.py` | Compact JSON for `co.model.input` / `co.model.output`; shared by the `chat` span (`SurrogateRecoveryModel`) and the direct-call `llm_call` span |
-| `serialize_tool_args(args) -> str` / `truncate_tool_result(value) -> str` | `co_cli/observability/serialize.py` | Compact JSON for `co.tool.args` and a length-bounded render for `co.tool.result`; used by `_CallSeamToolset.call_tool` |
+| `serialize_messages(messages) -> str` / `serialize_response(response) -> str` | `co_cli/observability/serialize.py` | Compact JSON for `co.model.input` / `co.model.output`; shared by the `chat` span (`model_turn`) and the direct-call `llm_call` span |
+| `serialize_tool_args(args) -> str` / `truncate_tool_result(value) -> str` | `co_cli/observability/serialize.py` | Compact JSON for `co.tool.args` and a length-bounded render for `co.tool.result`; used by `dispatch_tools` |
 
 ### Viewers (CLI entrypoints)
 
@@ -327,6 +327,7 @@ All data stays local. Tool responses and full conversation history are captured 
 |------|---------|
 | `co_cli/observability/tracing.py` | `setup_log`, `@trace` decorator, `current_span`, `push_span`/`pop_span`, `new_trace`, `set_session_context`/`clear_session_context`, `run_with_context`; contextvars-based span stack; redaction pipeline; JSON-line emit via dedicated logger |
 | `co_cli/observability/serialize.py` | `serialize_messages`/`serialize_response`/`serialize_tool_args`/`truncate_tool_result` — compact-JSON span-payload helpers shared by the `chat`/`llm_call` model spans and the `tool` span |
+| `co_cli/agent/loop.py` | `run_turn_owned` (`co.turn` root span) and `run_standalone_owned` (`invoke_agent {name}` span) — the owned turn loops |
 | `co_cli/observability/setup.py` | `setup_observability()` shared coordinator + `SUPPRESS_LOGGERS`; the single wiring path for both the main app and the dream daemon |
 | `co_cli/observability/file_logging.py` | `setup_file_logging()` — attaches rotating JSONL handlers to root logger: app log (INFO+, caller-named, default `co-cli.jsonl`) and optional errors log (WARNING+, 2 MB/2 backups hardcoded, default `errors.jsonl`, skipped when `errors_log_name=None`) |
 | `co_cli/observability/tail.py` | `run_tail()` — JSONL follow loop, per-kind attribute extraction, `--detail` rendering for agent/model/tool |
@@ -334,9 +335,9 @@ All data stays local. Tool responses and full conversation history are captured 
 | `co_cli/main.py` | `@app.command()` wrappers for `tail` and `trace`; module-level `_setup_observability()` calls the `setup_observability()` coordinator with the `co-cli*` filenames |
 | `co_cli/config/core.py` | `USER_DIR`, `LOGS_DIR` — user-global path constants |
 | `co_cli/config/observability.py` | `ObservabilitySettings` — file-logging settings, spans-log settings, redaction patterns |
-| `co_cli/agent/build.py` | Builds orchestrator and task agents; no capability attachment — tracing/cap/spill ride the toolset wrapper and model wrapper |
-| `co_cli/agent/toolset.py` | `_CallSeamToolset.call_tool` — the single `tool`-span / cap / MCP-spill seam |
-| `co_cli/llm/surrogate_recovery_model.py` | `SurrogateRecoveryModel` — the `chat`-span seam (both request paths) plus surrogate recovery and gated tool-arg repair |
+| `co_cli/agent/dispatch.py` | `dispatch_tools` — the single `tool`-span / pre-fan-out cap / MCP-spill seam |
+| `co_cli/llm/model_turn.py` | `model_turn` — the `chat`-span seam over `direct.model_request_stream`, plus surrogate recovery; drives gated tool-arg repair via `RepairingStreamedResponse` |
+| `co_cli/llm/_json_repair.py` | `repair_json_args`, `repair_response`, `RepairingStreamedResponse` — syntactic tool-arg JSON repair driven from `model_turn` on the Ollama path |
 | `~/.co-cli/logs/co-cli.jsonl` | Rotating app log — INFO+ Python `logging` records (`"kind": "log"`); independent stream from spans |
 | `~/.co-cli/logs/co-cli-spans.jsonl` | Rotating spans log — one JSON line per closed span |
 | `~/.co-cli/logs/errors.jsonl` | Rotating WARNING+ app log — 2 MB / 2 backups; for fast error triage |

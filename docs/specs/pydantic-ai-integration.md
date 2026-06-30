@@ -4,7 +4,9 @@ How `co-cli` consumes the **pydantic-ai** SDK: the integration surface, the seam
 
 **Pinned version:** `pydantic-ai==1.92.0` (`pyproject.toml`). co is a deep structural consumer — version bumps must be validated against every seam below.
 
-**Integration philosophy:** co owns the *policy*; the SDK provides the *plumbing*. Tool deferral, approval decisions, the per-call cap, MCP-result spill, JSON repair, surrogate sanitization, schema-budget accounting, and the final-request wrap-up nudge are all co-implemented around SDK primitives. The SDK contributes the agent graph, message/part types, toolset composition, the model-request transport, and the pause/resume mechanics for deferred tools. Where co diverges from an SDK feature (e.g. `defer_loading`/`search_tools`), the divergence is deliberate and documented in §7.
+**Integration philosophy:** co owns the *loop and the policy*; the SDK provides *providers and a message library*. co drives its own turn loop (`agent/loop.py`) directly over the SDK's `direct.model_request_stream` transport — there is no `Agent`, no graph engine, and no SDK-owned run lifecycle. co uses the SDK for: provider model objects (`OpenAIChatModel`+`OllamaProvider`, `GoogleModel`+`GoogleProvider`), the `ModelMessage`/`*Part` type system, `ToolDefinition`/`ModelRequestParameters`/`ModelSettings`, the `direct.model_request[_stream]` transport, and the exception taxonomy. Tool deferral, dispatch, the per-step cap, approval decisions, MCP-result spill, JSON repair, surrogate sanitization, schema-budget accounting, and the final-request wrap-up nudge are all co-implemented around these primitives. Where co diverges from an SDK feature (e.g. `defer_loading`/`search_tools`), the divergence is deliberate and documented in §7.
+
+**Why two levels, not three.** A turn and a step are intrinsic to any agentic loop; the "run" is intrinsic to *graph engines*, not to agentic loops. Stripped to its primitive, co's loop has exactly two natural scopes — the **turn** (one user message, possibly many round-trips) and the **step** (one model request + its tool dispatch, repeated until the model emits no tool call). Done-ness is a one-line local predicate ("no tool calls"), not a typed completion contract. pydantic-ai's middle "run" layer is the `pydantic_graph` execution unit: `agent.run()` traverses the graph from start to a typed `End`, carrying a validated `output_type` contract that is a completion boundary co never wanted, and whose natural unit (one clean walk to `End`) is finer than co's turn yet coarser than a single model request — so an SDK-driven co had to wedge a turn-wrapper around N runs. Driving the transport directly collapses co's vocabulary to those two intrinsic levels: the model request is a codec + transport that does *one* call and never loops, and co's loop owns everything above it.
 
 ---
 
@@ -18,79 +20,76 @@ flowchart TD
         MCP["build_mcp_entries<br/>(agent/mcp.py)"]
         ASM["assemble_routing_toolset<br/>(agent/core.py)"]
         SB["measure_always_schema_budget<br/>(bootstrap/schema_budget.py)"]
-        BLD["build_orchestrator<br/>(agent/build.py)"]
     end
 
     subgraph SDKwrap["co wrappers over SDK types"]
-        SRM["SurrogateRecoveryModel(WrapperModel)<br/>surrogate retry · chat span · JSON repair"]
-        CST["_CallSeamToolset(WrapperToolset)<br/>tool span · per-request cap count · MCP spill"]
         SMT["_SequentialMCPToolset(WrapperToolset)<br/>patch ToolDefinition.sequential · sanitize schema"]
+        RSR["RepairingStreamedResponse<br/>(thin StreamedResponse proxy · repairs .get())"]
     end
 
-    subgraph Runtime["Turn runtime (co_cli/context, co_cli/agent)"]
-        ORC["orchestrate.run_turn<br/>agent.iter() per-node loop"]
-        APR["deferred-tool approval loop"]
-        RUN["run_standalone (task agents)<br/>agent.run"]
+    subgraph Runtime["Turn runtime (co_cli/agent, co_cli/llm)"]
+        LOOP["run_turn_owned<br/>(agent/loop.py) — owned step loop"]
+        PRE["preflight<br/>instructions · tool_defs · request params"]
+        MT["model_turn<br/>(llm/model_turn.py) · direct.model_request_stream"]
+        DSP["dispatch_tools + collect_inline_approvals<br/>(agent/dispatch.py, agent/approval.py)"]
+        RUN["run_standalone_owned (task agents)<br/>(agent/loop.py)"]
         CALL["llm_call (direct)<br/>pydantic_ai.direct.model_request"]
     end
 
-    FAC --> SRM
+    FAC --> MT
     NTS --> ASM
     MCP --> SMT
-    ASM --> CST
+    SMT --> ASM
     NTS --> SB
-    ASM --> BLD
-    SRM --> BLD
-    BLD --> ORC
-    ORC --> APR
-    ORC -. "tool dispatch" .-> CST
-    ORC -. "model request" .-> SRM
-    RUN -.-> CST
-    CALL --> SRM
+    LOOP --> PRE
+    PRE -. "tool-def schema source" .-> ASM
+    LOOP --> MT
+    MT --> RSR
+    LOOP --> DSP
+    RUN --> MT
+    RUN --> DSP
 ```
 
 co touches the SDK across **eight layers**:
 
 | # | Layer | SDK surface | co's seam | Home |
 |---|-------|-------------|-----------|------|
-| 1 | Agent + run lifecycle | `Agent`, `AgentRunResult`, `iter` (+ `is_model_request_node`/`is_call_tools_node`/`node.stream`/`run.result`), `run`, `.output`/`.usage()`/`.new_messages()`, `RunUsage`, `UsageLimits` | `build_orchestrator`, `build_task_agent`, `run_turn`, `run_standalone` | `agent/build.py`, `agent/run.py`, `agent/orchestrate.py` |
+| 1 | Loop + turn lifecycle | *(none — owned)* `direct.model_request_stream`, `RunUsage` | `run_turn_owned`, `run_standalone_owned`, `_orchestrator_step_loop`; co owns turn/step scoping, done-ness, request cap | `agent/loop.py` |
 | 2 | Message/part types | `pydantic_ai.messages` (~22 part types, 6 stream events), `ModelMessagesTypeAdapter` | pattern-match / build / serialize / rewrite | `context/`, `observability/serialize.py`, `session/persistence.py` |
-| 3 | Toolset composition | `FunctionToolset`, `CombinedToolset`, `WrapperToolset`, `AbstractToolset`, `.filtered()`, `ToolDefinition`, `ToolsetTool` | `_CallSeamToolset`, `assemble_routing_toolset`, `_tool_visibility_filter` | `agent/toolset.py`, `agent/core.py` |
-| 4 | Tool registration + RunContext | `RunContext`, `prepare_tool_def`, `add_function` | `@agent_tool` registry → `ToolInfo` catalog; schema-budget measurement | `agent/toolset.py`, `deps.py`, `bootstrap/schema_budget.py` |
-| 5 | Deferred-tool / approval | `DeferredToolRequests`, `DeferredToolResults`, `ApprovalRequired`, `ToolApproved`, `ToolDenied` | approval loop drives pause/resume | `agent/orchestrate.py`, `tools/approvals.py` |
-| 6 | Model wrapping + providers | `WrapperModel`, `StreamedResponse`, `ModelRequestParameters`, `ModelSettings`, `OpenAIChatModel`+`OllamaProvider`, `GoogleModel`+`GoogleProvider` | `SurrogateRecoveryModel`, `_RepairingStreamedResponse` | `llm/factory.py`, `llm/surrogate_recovery_model.py` |
+| 3 | Toolset composition (schema source) | `FunctionToolset`, `CombinedToolset`, `WrapperToolset`, `AbstractToolset`, `.filtered()`, `ToolDefinition`, `ToolsetTool` | `assemble_routing_toolset`, `_tool_visibility_filter`; toolset used as a `get_tools` schema source, dispatch is co's own | `agent/toolset.py`, `agent/core.py`, `agent/dispatch.py` |
+| 4 | Tool registration + RunContext | `RunContext`, `prepare_tool_def`, `add_function` | `@agent_tool` registry → `ToolInfo` catalog; synthetic `make_run_context`; schema-budget measurement | `agent/toolset.py`, `agent/dispatch.py`, `deps.py`, `bootstrap/schema_budget.py` |
+| 5 | Inline approval | *(none — owned)* `ApprovalRequired` raised in-body | inline collector decides per call before dispatch | `agent/approval.py`, `agent/dispatch.py` |
+| 6 | Model providers + streaming | `StreamedResponse`, `ModelRequestParameters`, `ModelSettings`, `OpenAIChatModel`+`OllamaProvider`, `GoogleModel`+`GoogleProvider` | `build_model`; `model_turn` (surrogate retry + chat span + JSON repair); `RepairingStreamedResponse` | `llm/factory.py`, `llm/model_turn.py`, `llm/_json_repair.py` |
 | 7 | MCP | `MCPServerSSE`/`Stdio`/`StreamableHTTP`, `.approval_required()` | `_SequentialMCPToolset` (sequential patch + schema sanitize), `discover_mcp_tools` | `agent/mcp.py` |
-| 8 | Direct inference + exceptions | `pydantic_ai.direct.model_request`, `ModelHTTPError`, `ModelAPIError`, `UnexpectedModelBehavior`, `ModelRetry` | `llm_call`; orchestrator error taxonomy; tool retries | `llm/call.py`, `context/`, `tools/` |
+| 8 | Direct inference + exceptions | `pydantic_ai.direct.model_request[_stream]`, `ModelHTTPError`, `ModelAPIError`, `UnexpectedModelBehavior`, `ModelRetry` | `llm_call`; `model_turn`; loop error taxonomy; tool retries | `llm/call.py`, `llm/model_turn.py`, `agent/loop.py`, `agent/recovery.py`, `tools/` |
 
-co holds **no private-module imports** (`pydantic_ai._*`) — verified zero. The one synthetic-internal *assumption* that remains (the streaming-repair seam, §2.6) is pinned by a regression test, not an import.
+co holds **one documented private-module reach** — `pydantic_ai._output.OutputToolset` for the subagent's `final_result` output tool (§2.6) — and **one documented SDK-internal *assumption*** (the streaming-repair seam, §2.5), pinned by a regression test rather than an import.
 
 ---
 
 ## 2. Core Logic
 
-### 2.1 Model construction & wrapping — `llm/factory.py`
+### 2.1 Model construction — `llm/factory.py`
 
-`build_model(llm)` resolves a provider-specific raw model, then wraps it in `SurrogateRecoveryModel`. The wrapper is unconditional; only the JSON-repair flag differs by provider.
+`build_model(llm)` resolves a provider-specific **raw** model object — no co wrapper. The owned loop drives the raw model directly via `model_turn` (§2.4); the per-provider JSON-repair decision lives at that call site, not on the model object.
 
 ```
 build_model(llm) -> LlmModel:
     if llm.uses_ollama():
-        raw = OpenAIChatModel(llm.model,
-                              provider=OllamaProvider(base_url=llm.host+"/v1",
-                                                      http_client=AsyncClient(timeouts)))
-        model = SurrogateRecoveryModel(raw, repair_tool_args=True)   # Ollama needs JSON repair
+        model = OpenAIChatModel(llm.model,
+                                provider=OllamaProvider(base_url=llm.host+"/v1",
+                                                        http_client=AsyncClient(timeouts)))
     elif llm.uses_gemini():
-        raw = GoogleModel(llm.model, provider=GoogleProvider(api_key=llm.api_key))
-        model = SurrogateRecoveryModel(raw)                          # repair off (Gemini emits valid JSON)
+        model = GoogleModel(llm.model, provider=GoogleProvider(api_key=llm.api_key))
     else: raise ValueError
     return LlmModel(model, settings=reasoning_settings, settings_noreason=noreason_settings)
 ```
 
-`LlmModel` (frozen-ish container on `CoDeps.model`) carries the wrapped model plus two `ModelSettings` variants (reasoning vs noreason). `build_judge_model` clones `llm` with a distinct model name for eval judges.
+`LlmModel` (dataclass container on `CoDeps.model`) carries the raw provider model plus two `ModelSettings` variants (reasoning vs noreason). `build_judge_model` clones `llm` with a distinct model name for eval judges.
 
-### 2.2 Toolset composition — `agent/core.py`, `agent/toolset.py`
+### 2.2 Toolset composition (schema source) — `agent/core.py`, `agent/toolset.py`
 
-Native tools self-register into `TOOL_REGISTRY` via `@agent_tool` import side-effects (`agent/toolset.py` imports every tool module for this). Composition is a three-step assembly, wrapped outermost by the call-seam:
+Native tools self-register into `TOOL_REGISTRY` via `@agent_tool` import side-effects (`agent/toolset.py` imports every tool module for this). Composition is a two-step assembly; the assembled toolset is a **`get_tools` schema source only** — co's owned loop never calls `toolset.call_tool` (dispatch is `dispatch_tools`, §2.3):
 
 ```
 build_native_toolset() -> (FunctionToolset, tool_catalog):
@@ -106,16 +105,17 @@ build_native_toolset() -> (FunctionToolset, tool_catalog):
 assemble_routing_toolset(native, mcp_toolsets, name_blocklist=frozenset()):
     combined = CombinedToolset([native, *mcp_toolsets])
     # name_blocklist (default empty = orchestrator surface) folds into the single
-    # filter; the delegated agent passes {delegate} to drop it from its surface.
-    filtered = combined.filtered(visibility_filter)         # SDK per-turn get_tools gate
-    return _CallSeamToolset(filtered)                       # outermost call_tool seam
+    # filter; the delegated agent passes its blocklist to drop tools from its surface.
+    return combined.filtered(visibility_filter)             # get_tools schema source
 ```
 
-The outermost `_CallSeamToolset` means **`get_tools` (visibility) flows through the filter, `call_tool` (dispatch) flows through the seam** — the two boundaries co cares about are cleanly separated.
+`assemble_routing_toolset` returns the filtered `CombinedToolset` directly — **`get_tools` (visibility) flows through the filter**, and the owned loop reads its `ToolDefinition`s as the request schema (`build_tool_defs`, §2.3). The cap, tool span, and MCP spill live in `dispatch_tools`, not a wrapper toolset.
 
-### 2.3 Per-turn tool visibility — `_tool_visibility_filter` (`agent/toolset.py`)
+### 2.3 Tool dispatch & visibility — `agent/dispatch.py`, `_tool_visibility_filter` (`agent/toolset.py`)
 
-A `.filtered()` predicate the SDK calls on every `get_tools`. Two independent gates:
+The owned loop dispatches tool calls itself. `dispatch_tools(tool_calls, deps, cap_state, …)` reads the visible `ToolsetTool`s from the routing toolset's `get_tools` (the schema source), then runs each call directly — there is no `toolset.call_tool` round-trip. It computes the shed boundary up front (`cap_state.shed_boundary`), sheds over-cap calls to an exceeded payload, fills denials, then executes the rest (concurrent tools in parallel under `tool_dispatch_sem`, sequential serialized), preserving input order. The per-call tool span, args-display, and MCP-result spill happen inside `_execute_one`.
+
+Per-turn visibility is a `.filtered()` predicate the SDK calls on every `get_tools`. Two independent gates:
 
 ```
 _tool_visibility_filter(ctx, tool_def) -> bool:
@@ -129,97 +129,82 @@ _tool_visibility_filter(ctx, tool_def) -> bool:
     return tool_def.name in resume or entry is None or entry.visibility == ALWAYS
 ```
 
-This is co's **sole deferral mechanism** — applied uniformly to native and MCP tools. The SDK's keyword loader (`defer_loading`/`search_tools`) is deliberately unused (§7); visibility lives only in `tool_catalog`.
+This is co's **sole deferral mechanism** — applied uniformly to native and MCP tools. The SDK's keyword loader (`defer_loading`/`search_tools`) is deliberately unused (§7); visibility lives only in `tool_catalog`. `make_run_context(deps)` (`agent/dispatch.py:51`) builds the synthetic `RunContext` (deps + raw model + fresh usage) the owned loop passes to the toolset's `get_tools` — the graph used to supply a real `RunContext`; co owns the loop, so it constructs a minimal one.
 
-### 2.4 The call-seam — `_CallSeamToolset.call_tool` (`agent/toolset.py`)
+### 2.4 Streaming model turn + JSON repair — `model_turn` (`llm/model_turn.py`), `RepairingStreamedResponse` (`llm/_json_repair.py`)
 
-One explicit seam at the routing `call_tool` boundary, hosting three concerns as straight-line code (replacing the per-tool hooks of the former SDK lifecycle middleware):
-
-```
-call_tool(name, args, ctx, tool):
-    # 1. Per-model-request cap accounting — counting only. The orchestrator zeros
-    #    the counter and finalizes the prior request's streak at the model-request
-    #    node boundary (agent/orchestrate.py); call_tool does not infer boundaries.
-    increment per-request count
-    if count == cap+1: increment consecutive-violation streak (latch hard-stop at threshold)
-
-    # 2. tool span (co.tool.* attributes)
-    push_span("tool {name}", kind=tool, attrs={name, args, args_chars})
-
-    # 3. dispatch (or shed) + MCP spill
-    if count > cap:  result = json.dumps(make_exceeded_payload(count))   # shed over-cap calls (JSON string)
-    else:
-        result = super().call_tool(...)                          # SDK dispatch
-        if result is str and info.source == MCP:                 # MCP results bypass tool_output()
-            result = spill_with_span(result, threshold=info.spill_threshold_chars or default)
-    set span result attrs; pop_span()  (pop with ERROR on exception)
-    return result
-```
-
-The cap streak feeds the orchestrator's hard-stop (`TOOL_CAP_HARD_STOP_CONSECUTIVE`); the orchestrator zeros the counter and finalizes the prior request's streak at the model-request node boundary (`_execute_run`, §2.5) — `call_tool` no longer infers the boundary from `ctx.run_step`.
-
-### 2.5 Agent build & run lifecycle — `agent/build.py`, `agent/orchestrate.py`, `agent/run.py`
-
-**Orchestrator** (singleton, built once, reused across turns):
+`model_turn` (`llm/model_turn.py:66`) is the single model-request primitive. It drives `pydantic_ai.direct.model_request_stream` directly against the raw provider model and co-locates three model-boundary concerns, as an async context manager:
 
 ```
-build_orchestrator(spec, deps) -> SessionAgent:          # SessionAgent = Agent[CoDeps, str | DeferredToolRequests]
-    Agent(raw_model = deps.model.model,                  # unwrapped from LlmModel
-          deps_type = CoDeps,
-          instructions = join(spec.static_instruction_builders(deps)),
-          model_settings = deps.model.settings,
-          tool_retries = config.tool_retries,
-          output_type = [str, DeferredToolRequests],      # fixed union — drives approval pause
-          history_processors = spec.history_processors,
-          toolsets = [deps.toolset])                       # the assembled _CallSeamToolset
-    for per_turn in spec.per_turn_instructions: agent.instructions(per_turn)   # dynamic InstructionPart
-```
-
-**Orchestrator run** (`run_turn` → `_execute_run`): drives the loop via `async with agent.iter(...) as run:` then `async for node in run:`, streaming each node via `async with node.stream(run.ctx) as s:` — the per-node form gives co the real `ModelRequestNode`/`CallToolsNode` boundary that the stall timer and tool-cap reset key on, instead of inferring it from a flat event stream. Uses `usage_limits=UsageLimits(request_limit=resolve_request_limit(deps.config.llm))` — the turn-cumulative model-request cap (`max_model_requests_per_turn`, default 40; `0` resolves to `None` = unbounded). This is the turn-spanning circuit breaker (see [core-loop.md](core-loop.md) §1): co threads one `RunUsage` across all runs so the SDK's before-request check bounds the whole turn and fires mid-run. Per node, model-request nodes yield `PartStart/Delta/End` + `FinalResultEvent` and call-tools nodes yield `FunctionToolCall/ResultEvent`; the final `AgentRunResult` is read from `run.result` (`AgentRunResultEvent` is **not** emitted under `iter()`), and its `.output` (str or `DeferredToolRequests`) drives the approval branch.
-
-**Task agents** (`build_task_agent` + `run_standalone`): a fresh `FunctionToolset` (selected tools, all `requires_approval=False`) wrapped in its own `_CallSeamToolset` for span/cap/spill parity. `output_type = spec.output_type` (genuinely variable per spec — stays `Agent[CoDeps, Any]`). Run via `agent.run(prompt, usage_limits=UsageLimits(request_limit=budget))` — task agents keep a **real** request limit (unlike the orchestrator). The budget resolves as `budget if budget else spec.default_budget` (`run.py`), so `0` and `None` both fall back to the spec default — task agents have **no unbounded path**, deliberately unlike the orchestrator where `0` resolves to `None` (§2.5, §3). The `0`-as-falsy sentinel diverges from `resolve_request_limit`'s `0`-as-unbounded.
-
-### 2.6 Streaming + JSON repair — `SurrogateRecoveryModel` (`llm/surrogate_recovery_model.py`)
-
-A `WrapperModel` overriding `request` and `request_stream`, co-locating three model-boundary concerns:
-
-```
-request(messages, settings, params):
-    push chat span
-    try: response = wrapped.request(...)
-    except UnicodeEncodeError: response = wrapped.request(sanitize_surrogates(messages), ...)   # retry once
-    if repair_tool_args: response = _repair_response(response)        # repair each ToolCallPart.args
-    pop span with tokens/output
-    return response
-
-request_stream(...) (async context manager):
-    push chat span
-    open wrapped.request_stream(...) → stream
-    yield (repair_tool_args ? _RepairingStreamedResponse(stream) : stream)
+model_turn(model, messages, params, settings, *, repair) (async context manager):
+    push chat span (kind="model"; co.model.input)
+    open direct.model_request_stream(model, messages, params, settings) -> stream
+    yield (repair ? RepairingStreamedResponse(stream) : stream)
     on UnicodeEncodeError before open: retry once with sanitized messages
-    _close_model_span(spanned_stream)   # reads .get()/.usage() after consumer done
+    close_model_span(spanned_stream)   # reads .get()/.usage() after consumer done
 ```
 
-`_repair_response` rebuilds the response only when a part changed (identity-preserving). `_repair_json_args` applies ordered syntactic passes (control-char re-serialize → trailing-comma strip → bracket-balance → excess-closer trim), falling back to `{}` so pydantic raises `ModelRetry` rather than crashing.
+A `UnicodeEncodeError` raised *before* the stream opens (lone surrogates in the request) triggers one sanitize-and-retry; an error raised *after* open (consumer-side) propagates unchanged. The `repair` flag is set by the caller from `deps.config.llm.uses_ollama()` (`drive_model_request`, `agent/loop.py`) — Ollama needs JSON repair, Gemini emits valid JSON.
 
-`_RepairingStreamedResponse` is a thin `StreamedResponse` proxy: it repairs the assembled `.get()` (everything else delegates via `__getattr__`). **This is the one remaining SDK-internal *assumption*:** the agent graph validates streamed tool args from `StreamedResponse.get()` (the private `_agent_graph` `_streaming_handler`), so repairing `.get()` lands the fix before validation. There is no public alternative; the assumption is pinned by a regression test (§6), so an SDK change that moves stream validation turns the test red instead of silently breaking the Ollama streaming path.
+`RepairingStreamedResponse` (`llm/_json_repair.py:132`) is a thin `StreamedResponse` proxy: it repairs the assembled `.get()` (`__aiter__`/`usage()` delegate verbatim; everything else via `__getattr__`). `repair_response` rebuilds the response only when a part changed (identity-preserving), and `repair_json_args` applies ordered syntactic passes (control-char re-serialize → trailing-comma strip → bracket-balance → excess-closer trim), falling back to `{}` so pydantic raises `ModelRetry` rather than crashing. **This is the one SDK-internal *assumption*:** pydantic-ai validates streamed tool args from `StreamedResponse.get()` (the private `_agent_graph` `_streaming_handler`), so repairing `.get()` lands the fix before validation. There is no public alternative; the assumption is pinned by a regression test (§6), so an SDK change that moves stream validation turns the test red instead of silently breaking the Ollama streaming path.
 
-### 2.7 Deferred-tool approval protocol — `agent/orchestrate.py`
+### 2.5 The owned turn loop — `agent/loop.py`, `agent/preflight.py`
 
-co drives the entire approval loop; the SDK contributes the pause (`DeferredToolRequests` output), the resume payload shape (`DeferredToolResults`), and the decision carriers.
+**Orchestrator turn** (`run_turn_owned` → `_orchestrator_step_loop`): a straight-line `while` loop with no `Agent` object. Each step:
 
 ```
-run result.output is DeferredToolRequests:
-    approvals = _collect_deferred_tool_approvals(result, deps, frontend):
-        decisions = DeferredToolResults()
-        for each pending call:
-            if auto-approved or user approves: decisions.approvals[id] = True (or ToolApproved())
-            if user denies:                    decisions.approvals[id] = ToolDenied(reason)
-        return decisions
-    resume: _execute_run(..., deferred_tool_results=approvals)   # next run executes the tools
+_orchestrator_step_loop(deps, state, …):
+    while True:
+        if requests_completed >= request_limit: return REQUEST_CAP   # turn-cumulative cap
+        processed = run_history_processors(state.history, deps)        # preflight
+        processed = fill_unanswered_tool_calls(processed)
+        instr     = assemble_instructions(deps, static, processed, requests_completed)
+        tool_defs = build_tool_defs(deps)                              # get_tools ToolDefinitions
+        params    = build_request_params(instruction_parts=instr, function_tools=tool_defs)
+        request_messages = clean_message_history(processed)            # throwaway request copy
+        try:    response, usage = drive_model_request(deps, request_messages, params, settings, …)
+        except provider error: recover inline (overflow / 400 / length) or return terminal
+        calls = tool_calls(response)
+        if not calls: return FINAL_TEXT  (or reasoning-overflow / length-continuation branch)
+        resolution = collect_inline_approvals(calls, deps, frontend)   # §2.7
+        parts = dispatch_tools(calls, deps, cap_state, …)              # §2.3
+        state.history += [response, ModelRequest(parts)]
+        if cap_state.hard_stop: return TOOL_CAP
 ```
 
-Approval decisions carry **no** tool execution — execution and `ToolReturnPart` output happen in the resumed run. `QuestionRequired` (an `ApprovalRequired` subclass) carries `metadata={"questions": ...}`; clarify answers are threaded via `runtime.clarify_answers` (keyed by `tool_call_id`) rather than `ToolApproved.override_args`, to keep `user_answers` out of the model-facing schema.
+Done-ness is the local predicate `not tool_calls(response)`. The turn-cumulative model-request cap is `request_limit = resolve_request_limit(deps.config.llm)` (`max_model_requests_per_turn`, default 40; `0` → `None` = unbounded) — co's own circuit breaker, checked at the top of each step (see [core-loop.md](core-loop.md) §1), not delegated to an SDK `UsageLimits`. `drive_model_request` (`agent/loop.py:135`) drives one `model_turn`, re-arming an `asyncio.timeout` stall window on every streamed event, and returns the assembled (repaired, when Ollama) `ModelResponse` plus this step's `RunUsage`. Provider errors are classified at the single in-loop catch (`classify_provider_error`, `agent/recovery.py`) and recovered inline: overflow strip-then-summarizes, an HTTP 400 reflects to the model within a budget, length-truncated answers continue with a boosted token budget.
+
+Preflight (`agent/preflight.py`) reproduces, as straight-line code, the request-assembly the graph did per `ModelRequestNode`: `run_history_processors` (five processors in canonical order), `assemble_instructions` (static system prompt + per-turn dynamic `InstructionPart`s), `build_tool_defs` (visibility-filtered `ToolDefinition`s from the routing toolset's `get_tools`), `build_request_params` (assembles `ModelRequestParameters`), and `clean_message_history` (a verbatim port of the graph's removed private `_clean_message_history`, applied only to the throwaway request copy, never persisted).
+
+**Task agents** (`run_standalone_owned`, `agent/loop.py:618`): the owned subagent driver. Shares every preflight builder, `dispatch_tools`, `collect_inline_approvals`, `ToolCapState`, and `drive_model_request` with the orchestrator loop — differing only by workflow. It builds a fresh tool surface (`build_subagent_toolset`: a flat `FunctionToolset` of selected tools all `requires_approval=False`, or the orchestrator's own visibility-filtered surface minus a blocklist) plus the `final_result` output tool (`output_tools` + `allow_text_output=False`, §2.6), dispatches the subagent's real tool calls, and on a `final_result` call validates its args into the `spec.output_type` instance (re-prompting on `ValidationError`, bounded by `spec.default_budget`). `request_limit = spec.default_budget` — task agents have **no unbounded path**, deliberately unlike the orchestrator where `0` resolves to `None`.
+
+### 2.6 Subagent structured output — `build_output_toolset` (`agent/preflight.py`)
+
+The owned subagent driver needs the model to emit a structured `final_result` tool call. `build_output_toolset(output_type)` (`agent/preflight.py:244`) builds the `final_result` `ToolDefinition`s plus an `ObjectOutputProcessor` whose `.validate(args)` turns the call's args into the `output_type` instance.
+
+```
+build_output_toolset(output_type) -> (output_tool_defs, processor):
+    toolset = pydantic_ai._output.OutputToolset.build([output_type])   # documented private reach
+    return list(toolset._tool_defs), next(iter(toolset.processors.values()))
+```
+
+This is co's **single documented reach into a pydantic-ai private module** (`_output.OutputToolset`, at `agent/preflight.py:251-264`; it is not re-exported). It emits the exact `final_result` tool name + `ObjectOutputProcessor` JSON schema the dream-reviewer model was tuned to, so a hand-built public `ToolDefinition` would have to be proven byte-equivalent before swapping in. The reach is logged at call time and flagged in §7 as the open carve-out (the v2 break point).
+
+### 2.7 Inline tool approval — `agent/approval.py`, `agent/dispatch.py`
+
+co decides approvals inline, within the step, before dispatch — there is no suspend/resume. `collect_inline_approvals(calls, deps, frontend)` runs per step and returns a resolution carrying approved ids and per-call denial parts:
+
+```
+collect_inline_approvals(calls, deps, frontend) -> Resolution:
+    for each call:
+        if catalog tool requires approval (or in-body raiser):
+            decision = auto-decision or frontend prompt
+            if approved: approved_ids.add(call.tool_call_id)
+            if denied:   denials[call.tool_call_id] = ToolReturnPart(<denial>)
+    return Resolution(approved_ids, denials)
+```
+
+`dispatch_tools` then runs only the within-cap, non-denied calls; a call whose id is in `approved_ids` runs with `ctx.tool_call_approved=True` so the two in-body raisers (shell `execute.py`, clarify `user_input.py`) execute instead of raising `ApprovalRequired`/`QuestionRequired`. A denied call's `ToolReturnPart` is the model-facing result; no tool runs. For the delegated agent, `run_standalone_owned(propagate_approvals=True)` runs the same collector so an approval-required delegated call surfaces on the parent's frontend (a headless parent auto-denies — a write-capable agent never acts unprompted).
 
 ### 2.8 Message/part type system — `context/`, `observability/serialize.py`, `session/persistence.py`
 
@@ -227,18 +212,16 @@ The breadth here (~22 part types) is intrinsic to **client-side compaction**, no
 
 ### 2.13 Final-request wrap-up nudge — `agent/_instructions.py`
 
-A dynamic instruction callback (registered via `agent.instructions()`) that softens the cumulative model-request cap (§2.5, [core-loop.md](core-loop.md) §1). Because `UsageLimits(request_limit)` hard-blocks the request that *would* exceed the cap mid-stream — no chance for the model to answer — `wrap_up_prompt` emits a one-shot instruction on the last allowed request instead:
+A dynamic instruction builder (`wrap_up_prompt`, called by `assemble_instructions` per step) that softens the cumulative model-request cap (§2.5, [core-loop.md](core-loop.md) §1). Because the loop aborts the turn the moment the completed-request count reaches the limit — no chance for the model to answer — `wrap_up_prompt` emits a one-shot instruction on the last allowed step instead:
 
 ```
-wrap_up_prompt(ctx):
-    limit = resolve_request_limit(ctx.deps.config.llm)        # None when cap disabled
-    if limit is None or ctx.usage.requests != limit - 1: return ""   # not the final request
-    return WRAP_UP_TEXT                                              # emit the nudge as an instruction
+wrap_up_prompt(deps, *, request_count):
+    limit = resolve_request_limit(deps.config.llm)        # None when cap disabled
+    if limit is None or request_count != limit - 1: return ""   # not the final step
+    return WRAP_UP_TEXT                                          # emit the nudge as an instruction
 ```
 
-Two SDK behaviors this relies on (both documented, stable in 1.92.0):
-- **`ctx.usage.requests` is the live turn-cumulative count at callback time.** The SDK increments it *after* each request, so inside the callback (run in `_prepare_request` before the request is sent) it reads `limit - 1` exactly on the last request the SDK will still permit — fires at most once (next request makes it `limit`).
-- **Instructions are recomputed fresh every request and historical instructions are ignored.** The agent flow rebuilds `instruction_parts` per request (`_get_instruction_parts`) and never replays a past `ModelRequest.instructions`. So the nudge lands in the request's `instructions` (not as a `UserPromptPart`) and never reaches the next turn — **no strip step is needed**. It persists harmlessly on that one `ModelRequest.instructions` field, exactly as `safety_prompt` / `current_time_prompt` already do.
+`request_count` is the owned loop's count of requests completed before this step (`requests_completed`, `agent/loop.py`), so it reads `limit - 1` exactly on the last step the loop will still permit — fires at most once. The nudge lands in the step's `ModelRequestParameters.instruction_parts` (not as a `UserPromptPart`), so it is recomputed fresh per step and never replayed next turn — **no strip step is needed** — exactly as `safety_prompt` / `current_time_prompt` already are.
 
 ### 2.9 Schema-budget measurement — `bootstrap/schema_budget.py`
 
@@ -270,7 +253,7 @@ discover_mcp_tools: connect all servers concurrently via entry.server (raw); lis
 
 - `_SequentialMCPToolset.get_tools` does both at the `ToolsetTool` layer: it patches `ToolDefinition.sequential` from `tool_catalog[name].is_concurrent_safe`, and rewrites `ToolDefinition.parameters_json_schema` through `sanitize_mcp_schema`. The SDK's MCP toolset assigns the raw `Tool.inputSchema` **verbatim** to `parameters_json_schema` (`pydantic_ai/mcp.py`), so sanitizing post-conversion at this seam is identical to the former pre-conversion sanitize — **one wrapper, not two** (§7).
 - The raw server handle (`MCPToolsetEntry.server`) is kept only for discovery: `discover_mcp_tools` → `entry.server.list_tools()` reads `name`/`description` only, never the schema, so the discovery path needs no sanitization.
-- MCP tool results are plain strings that bypass `tool_output()`, so spill happens in the call-seam (§2.4).
+- MCP tool results are plain strings that bypass `tool_output()`, so spill happens in `dispatch_tools` (§2.3).
 
 ### 2.11 Direct inference — `llm/call.py`
 
@@ -278,9 +261,9 @@ discover_mcp_tools: connect all servers concurrently via entry.server (raw); lis
 
 ### 2.12 Exception taxonomy
 
-- `ModelHTTPError` — inspected by `_http_error_classifier.py` for context-overflow (drives emergency compaction); caught in `orchestrate.py` and dispatched via `_handle_model_http_error` (returns `None` to retry the run loop, else a terminal `TurnResult`).
-- `ModelAPIError`, `UnexpectedModelBehavior` — caught in orchestration error handling.
-- `ModelRetry` — raised by tools (`tool_io.py` and 20+ tool modules) for transient failures; the SDK retries up to `config.tool_retries`.
+- `ModelHTTPError` — inspected by `is_context_overflow` (`context/compaction.py`, via `context/_http_error_classifier.py`) for context-overflow (drives emergency compaction); the owned loop's single in-loop catch routes it through `classify_provider_error` (`agent/recovery.py`) and `_recover_provider_error` (`agent/loop.py`) returns `None` to retry the step loop (overflow compacted, 400 reflected), else a terminal `TurnResult`.
+- `ModelAPIError`, `UnexpectedModelBehavior` — caught at the same in-loop catch and classified terminal.
+- `ModelRetry` — raised by tools (`tool_io.py` and 20+ tool modules) for transient failures; `dispatch_tools`/the tool wrapper retries up to `config.tool_retries`.
 
 ---
 
@@ -288,18 +271,18 @@ discover_mcp_tools: connect all servers concurrently via entry.server (raw); lis
 
 | Setting | Where | Effect on SDK seam |
 |---------|-------|--------------------|
-| `llm.provider` / `llm.model` / `llm.host` / `llm.api_key` | `config/llm.py` | Selects `OpenAIChatModel`+`OllamaProvider` vs `GoogleModel`+`GoogleProvider`; sets `repair_tool_args` |
+| `llm.provider` / `llm.model` / `llm.host` / `llm.api_key` | `config/llm.py` | Selects `OpenAIChatModel`+`OllamaProvider` vs `GoogleModel`+`GoogleProvider`; `uses_ollama()` sets the `model_turn` `repair` flag |
 | `llm.judge_model` | `config/llm.py` | Builds a distinct judge model handle |
 | reasoning/noreason `ModelSettings` | `config/llm.py` | `LlmModel.settings` / `.settings_noreason` |
-| `tool_retries` | `config/core.py` | `Agent(tool_retries=…)` and per-tool `ModelRetry` budget |
+| `tool_retries` | `config/core.py` | per-tool `ModelRetry` retry budget |
 | `mcp_servers` (url / command / args / env / prefix / approval / connect_timeout_seconds / call_timeout_seconds) | `config/core.py` | `_build_mcp_toolsets` transport + `approval_required()` + discovery timeout (`connect`, pydantic-ai `timeout`) + per-call response timeout (`call`, pydantic-ai `read_timeout`) |
 | HTTP timeouts (connect/read/write/pool) | `llm/factory.py` constants | Ollama `httpx.AsyncClient` |
-| `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `TOOL_CAP_HARD_STOP_CONSECUTIVE` | `config/tuning.py` | Call-seam cap + hard-stop |
-| `llm.max_model_requests_per_turn` | `config/llm.py` | Orchestrator `UsageLimits(request_limit=…)` via `resolve_request_limit` (40; `0` → unbounded); wrap-up nudge trigger (§2.13) |
-| `llm.run_stall_timeout_secs` | `config/llm.py` | `_execute_run` `asyncio.timeout(...)` + `_StallTimer` window (default 120; model-generation stall, not a run deadline) |
+| `MAX_TOOL_CALLS_PER_MODEL_REQUEST`, `TOOL_CAP_HARD_STOP_CONSECUTIVE` | `config/tuning.py` | `dispatch_tools` per-step cap + `ToolCapState` hard-stop |
+| `llm.max_model_requests_per_turn` | `config/llm.py` | Loop's turn-cumulative `request_limit` via `resolve_request_limit` (40; `0` → unbounded); wrap-up nudge trigger (§2.13) |
+| `llm.run_stall_timeout_secs` | `config/llm.py` | `drive_model_request` `asyncio.timeout(...)` stall window (default 120; model-generation stall, not a run deadline) |
 | `SPILL_THRESHOLD_CHARS` | `config/tuning.py` | MCP-result spill threshold default |
 
-Orchestrator `usage_limits` **is** config-driven — `request_limit` resolves from `max_model_requests_per_turn` via `resolve_request_limit` (default 40; `0` → `None` = unbounded). Task-agent `request_limit` comes from `spec.default_budget` or a per-call override, resolved as `budget if budget else spec.default_budget` — `0`/`None` both fall back to the default (no unbounded path), an intentional asymmetry with the orchestrator's `0 → None`.
+The loop's turn-cumulative `request_limit` is config-driven — it resolves from `max_model_requests_per_turn` via `resolve_request_limit` (default 40; `0` → `None` = unbounded), checked at the top of each step rather than delegated to an SDK `UsageLimits`. Task-agent `request_limit` is `spec.default_budget` — no unbounded path, an intentional asymmetry with the orchestrator's `0 → None`.
 
 ---
 
@@ -307,21 +290,23 @@ Orchestrator `usage_limits` **is** config-driven — `request_limit` resolves fr
 
 | Symbol | Signature (types only) | Contract |
 |--------|------------------------|----------|
-| `build_model` | `(LlmSettings) -> LlmModel` | Provider-aware model build; wraps in `SurrogateRecoveryModel` |
+| `build_model` | `(LlmSettings) -> LlmModel` | Provider-aware **raw** model build (no co wrapper) |
 | `build_judge_model` | `(LlmSettings) -> LlmModel \| None` | Distinct judge handle; `None` when unset |
-| `LlmModel` | dataclass `{model, settings, settings_noreason}` | Model + inference settings container on `CoDeps.model` |
-| `build_native_toolset` | `(Settings) -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]` | Unfiltered native `FunctionToolset` + catalog |
-| `assemble_routing_toolset` | `(AbstractToolset, list[AbstractToolset], frozenset[str] = frozenset()) -> AbstractToolset` | Combine + visibility-filter (with optional `name_blocklist`) + call-seam wrap |
-| `build_orchestrator` | `(OrchestratorSpec, CoDeps) -> SessionAgent` | Singleton orchestrator; `output_type=[str, DeferredToolRequests]` |
-| `build_task_agent` | `(TaskAgentSpec, CoDeps, model) -> Agent[CoDeps, Any]` | Per-spec task agent with own call-seam |
-| `run_standalone` | `(TaskAgentSpec, CoDeps, str, int\|None, Any) -> tuple[Any, RunUsage, str]` | Daemon task-agent run with real `UsageLimits` |
-| `llm_call` | `(CoDeps, str, *, str\|None, list[ModelMessage]\|None, ModelSettings\|None, LlmModel\|None) -> str` | Single prompt→response via `model_request` |
+| `LlmModel` | dataclass `{model, settings, settings_noreason}` | Raw model + inference settings container on `CoDeps.model` |
+| `build_native_toolset` | `() -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]` | Unfiltered native `FunctionToolset` + catalog |
+| `assemble_routing_toolset` | `(AbstractToolset, list[AbstractToolset], frozenset[str] = frozenset()) -> AbstractToolset` | Combine + visibility-filter (with optional `name_blocklist`); `get_tools` schema source |
+| `run_turn_owned` | `(*, user_input, deps, message_history, model_settings=None, frontend) -> TurnResult` | Owned orchestrator turn loop (no `Agent`) |
+| `run_standalone_owned` | `(spec, deps, prompt, settings=None, propagate_approvals=False, frontend=None) -> Any` | Owned task-agent driver; structured `final_result` output |
+| `run_standalone` | `(TaskAgentSpec, CoDeps, str) -> None` | Daemon task-agent runner (forked deps, own span, no merge) |
+| `model_turn` | `(Model, list[ModelMessage], ModelRequestParameters, ModelSettings\|None, *, repair) -> AsyncIterator[StreamedResponse]` | Streamed model request over `direct.model_request_stream` + surrogate retry + chat span + gated JSON repair |
+| `llm_call` | `(CoDeps, str, *, str\|None, list[ModelMessage]\|None, ModelSettings\|None, LlmModel\|None) -> str` | Single prompt→response via `direct.model_request` |
+| `build_request_params` | `(*, instruction_parts, function_tools=None, output_tools=None, allow_text_output=True) -> ModelRequestParameters` | Assemble one step's `ModelRequestParameters` |
+| `build_output_toolset` | `(type[BaseModel]) -> tuple[list[ToolDefinition], Any]` | Subagent `final_result` defs + validation processor (private `_output` reach) |
 | `measure_always_schema_budget` | `(CoDeps, FunctionToolset[CoDeps]) -> AlwaysSchemaBudget` | ALWAYS-schema char bucket from the native toolset |
-| `SurrogateRecoveryModel` | `WrapperModel` subclass; `(wrapped, *, repair_tool_args=False)` | Surrogate retry + chat span + gated JSON repair |
-| `SessionAgent` / `SessionRunResult` | `Agent[CoDeps, str \| DeferredToolRequests]` / `AgentRunResult[...]` | Orchestrator type aliases |
+| `TurnResult` | dataclass `{outcome, interrupted, messages, output, usage, model_requests}` | Owned-loop turn return (chat loop pattern-matches) |
 | `ToolInfo` | frozen dataclass | Canonical per-tool metadata (is_approval_required, visibility, source, retries, check_fn, …) |
 
-Package-private (not callable cross-package, listed for the map): `_CallSeamToolset`, `_SequentialMCPToolset`, `_RepairingStreamedResponse`, `_tool_visibility_filter`, `_build_native_toolset`, `_build_mcp_toolsets`.
+Package-private (not callable cross-package, listed for the map): `_SequentialMCPToolset`, `RepairingStreamedResponse`, `_tool_visibility_filter`, `_build_native_toolset`, `_build_mcp_toolsets`, `make_run_context`, `dispatch_tools`, `collect_inline_approvals`.
 
 ---
 
@@ -329,18 +314,23 @@ Package-private (not callable cross-package, listed for the map): `_CallSeamTool
 
 | File | Role |
 |------|------|
-| `co_cli/llm/factory.py` | Provider-aware model build; `LlmModel`; `SurrogateRecoveryModel` wrapping |
-| `co_cli/llm/surrogate_recovery_model.py` | `WrapperModel`: surrogate retry, chat span, JSON repair, `_RepairingStreamedResponse` |
+| `co_cli/llm/factory.py` | Provider-aware **raw** model build; `LlmModel` |
+| `co_cli/llm/model_turn.py` | `model_turn`: streamed request over `direct.model_request_stream`, surrogate retry, chat span, gated JSON repair |
+| `co_cli/llm/_json_repair.py` | `RepairingStreamedResponse`, `repair_response`, `repair_json_args` |
+| `co_cli/llm/_message_sanitize.py` | `sanitize_surrogate_codepoints_messages` (surrogate-retry input) |
 | `co_cli/llm/call.py` | `llm_call` direct prompt→response via `pydantic_ai.direct.model_request` |
 | `co_cli/agent/core.py` | `build_native_toolset`, `build_mcp_entries`, `assemble_routing_toolset` |
-| `co_cli/agent/toolset.py` | Native registry import, `_tool_visibility_filter`, `_build_native_toolset`, `_CallSeamToolset` |
+| `co_cli/agent/toolset.py` | Native registry import, `_tool_visibility_filter`, `_build_native_toolset` |
 | `co_cli/agent/mcp.py` | `_SequentialMCPToolset` (sequential patch + schema sanitize), transport build, `discover_mcp_tools` |
-| `co_cli/agent/build.py` | `build_orchestrator`, `build_task_agent` |
-| `co_cli/agent/run.py` | `run_standalone` task-agent runner with real `UsageLimits` |
+| `co_cli/agent/loop.py` | `run_turn_owned`, `_orchestrator_step_loop`, `drive_model_request`, `run_standalone_owned`, `build_subagent_toolset`; error taxonomy |
+| `co_cli/agent/preflight.py` | Per-step request assembly (`run_history_processors`, `assemble_instructions`, `build_tool_defs`, `build_request_params`, `clean_message_history`, `build_output_toolset`) |
+| `co_cli/agent/dispatch.py` | `dispatch_tools`, `get_visible_tools`, `make_run_context`; tool span + cap shed + MCP spill |
+| `co_cli/agent/approval.py` | `collect_inline_approvals` (per-step inline approval) |
+| `co_cli/agent/recovery.py` | `classify_provider_error`, `ErrorClass`, `length_retry_settings` |
+| `co_cli/agent/run.py` | `run_standalone` daemon task-agent runner |
 | `co_cli/bootstrap/schema_budget.py` | `measure_always_schema_budget` (synthetic `RunContext` + `prepare_tool_def`) |
-| `co_cli/agent/orchestrate.py` | `run_turn`, stream-event loop, deferred-tool approval loop, error taxonomy |
 | `co_cli/context/history_processors.py` | Part-rewriting processors (`_rewrite_tool_returns`) |
-| `co_cli/agent/_instructions.py` | Dynamic `agent.instructions()` callbacks; `wrap_up_prompt` (§2.13) emits the final-request cap nudge |
+| `co_cli/agent/_instructions.py` | Dynamic instruction builders; `wrap_up_prompt` (§2.13) emits the final-request cap nudge |
 | `co_cli/observability/serialize.py` | Part/message → span-attribute serialization |
 | `co_cli/session/persistence.py` | `ModelMessagesTypeAdapter` JSONL round-trip |
 | `co_cli/deps.py` | `ToolInfo`, `VisibilityPolicyEnum`, `ToolSourceEnum`, runtime cap counters |
@@ -352,13 +342,13 @@ Package-private (not callable cross-package, listed for the map): `_CallSeamTool
 | Property | Gated by |
 |----------|----------|
 | ALWAYS-schema bucket stays within budget; measured value stable across refactor | `tests/test_orchestrator_schema_budget.py` |
-| Tool-call cap fires after consecutive violations; hard-stop; final-request wrap-up nudge reaches the model, is suppressed when the cap is disabled, and is stripped from persisted history | `tests/test_flow_model_request_cap.py` |
-| Streaming-path JSON repair fires (and is gated off when disabled) | `tests/test_flow_tool_call_repair.py` |
-| Surrogate-codepoint retry on `request` / `request_stream`; no silent post-open recovery | `tests/test_surrogate_recovery_model.py` |
-| Non-stream JSON repair gating (Ollama on / Gemini off) | `tests/test_flow_tool_call_repair.py` |
-| Deferred-tool approval: clarify resume returns answers as tool output | `tests/test_flow_approval_subject.py` |
-| Real turn populates `model_requests` from `AgentRunResult.new_messages()` | `tests/test_flow_turn_result_model_requests.py` |
-| Length-retry completes truncated noreason responses | `tests/test_flow_orchestrate_length_retry.py` |
+| Model-request cap stops a runaway loop; tool-call-cap hard-stop fires; final-request wrap-up nudge reaches the model and is suppressed when the cap is disabled | `tests/test_flow_model_request_cap.py` |
+| Surrogate-codepoint retry around stream open (no silent post-open recovery); streaming-path JSON repair fires and is gated off when disabled | `tests/test_flow_model_turn.py` |
+| JSON-repair gating end-to-end (Ollama on / Gemini off) | `tests/test_flow_tool_call_repair.py` |
+| Inline approval: catalog approve/deny, auto-approve, headless auto-deny; clarify approves + stashes answers and dispatch returns them as tool output | `tests/test_owned_inline_approval.py` |
+| Real owned turn populates `model_requests` | `tests/test_flow_owned_turn.py` |
+| Owned subagent emits SDK-built `final_result` and validates into `output_type` | `tests/test_flow_owned_subagent.py` |
+| Length-retry completes truncated responses; overflow / HTTP 400 recovery and terminal classification | `tests/test_flow_owned_recovery.py` |
 | HTTP 400 / overflow classification | `tests/test_flow_http_error_classifier.py` |
 | Instruction floor (incl. ALWAYS schema) within budget | `tests/test_instruction_budget.py` |
 
@@ -370,27 +360,29 @@ Load-bearing, intentional, or rejected couplings — recorded so they are not re
 
 **Intentional divergences from SDK features:**
 - **No `defer_loading`/`search_tools`.** co owns deferral via `_tool_visibility_filter` + `tool_view` + `runtime.revealed_tools`, uniformly over native and MCP tools (§2.3). Registering tools with `defer_loading=True` would re-engage the SDK keyword loader and split the mechanism.
-- **Orchestrator `usage_limits=UsageLimits(request_limit=resolve_request_limit(...))`** is load-bearing, not ceremony — passing the resolved cap (default 40) is co's deliberate circuit breaker, set *tighter* than the SDK's default 50 so an in-cap doom-loop is bounded (rationale in [core-loop.md](core-loop.md) §1). Dropping the arg would silently fall back to the SDK's 50; setting `max_model_requests_per_turn=0` resolves to `None` for a genuinely unbounded run. Task agents pass their own per-spec limit (`agent/run.py`).
+- **Owned request cap, not an SDK `UsageLimits`.** The turn-cumulative `request_limit = resolve_request_limit(...)` (default 40) is co's deliberate circuit breaker, checked at the top of each step in `_orchestrator_step_loop` (rationale in [core-loop.md](core-loop.md) §1). `max_model_requests_per_turn=0` resolves to `None` for a genuinely unbounded run; task agents use their own `spec.default_budget` (`agent/loop.py`).
 
 **Minimum-necessary wrappers (do not merge or remove):**
-- **`_CallSeamToolset` + `_SequentialMCPToolset`** — two `WrapperToolset` subclasses for two distinct boundaries: call-time (span/cap-count/spill) vs list-time (`get_tools`: `sequential` patch + schema sanitize). Textbook usage.
-- **MCP schema sanitization lives in `_SequentialMCPToolset.get_tools`, not a separate server proxy.** The SDK's MCP toolset assigns the raw `Tool.inputSchema` **verbatim** to `ToolDefinition.parameters_json_schema` (`pydantic_ai/mcp.py`), so the former separate `_SanitizingMCPServer.list_tools()` proxy was redundant — sanitizing the converted schema at the existing `get_tools` seam is identical and removes a wrapper. (This supersedes an earlier "cannot be merged — different object layers" note: the layers carry the *same dict*, so they can.) The raw server handle survives only for discovery (name/description, no schema).
-- **`SurrogateRecoveryModel`** isolates the two ugliest Ollama realities (lone surrogates, malformed tool-arg JSON) in one `WrapperModel` instead of polluting the agent loop. JSON repair lives entirely here, independent of any approval/capability surface.
+- **`_SequentialMCPToolset`** — the one surviving `WrapperToolset` subclass, a legitimate MCP-context base class (`agent/mcp.py:19`). It does both MCP list-time concerns at the `get_tools` `ToolsetTool` layer: `sequential` patch + schema sanitize. (It is the *only* wrapper toolset co keeps — the tool span, cap count, and spill that a former call-seam wrapper carried now live in `dispatch_tools`, §2.3.)
+- **MCP schema sanitization lives in `_SequentialMCPToolset.get_tools`, not a separate server proxy.** The SDK's MCP toolset assigns the raw `Tool.inputSchema` **verbatim** to `ToolDefinition.parameters_json_schema` (`pydantic_ai/mcp.py:667`), so sanitizing the converted schema at the existing `get_tools` seam is identical to a pre-conversion sanitize and removes a wrapper. The raw server handle survives only for discovery (name/description, no schema).
 
 **Required synthetic construction:**
-- **`measure_always_schema_budget`'s synthetic `RunContext(model=None)`** (with its `# type: ignore[arg-type]`) is required. `ToolInfo` carries no `parameters_json_schema`; the schema is SDK-generated from the function signature and obtainable only via `tool.prepare_tool_def(ctx)` (which also honors per-turn `prepare` callbacks). Measuring from co's own metadata is not viable.
+- **`measure_always_schema_budget`'s synthetic `RunContext(model=None)`** (with its `# type: ignore[arg-type]`) is required. `ToolInfo` carries no `parameters_json_schema`; the schema is SDK-generated from the function signature and obtainable only via `tool.prepare_tool_def(ctx)` (which also honors per-turn `prepare` callbacks). Measuring from co's own metadata is not viable. The owned loop's `make_run_context` (`agent/dispatch.py:51`) is the same kind of required synthetic context, supplied to `get_tools`/`prepare_tool_def` at step time since there is no graph to hand co a real `RunContext`.
+
+**Documented private-module reach (the open carve-out):**
+- **`pydantic_ai._output.OutputToolset.build`** (`build_output_toolset`, `agent/preflight.py:251-264`) is co's single reach into a pydantic-ai private module — it is not re-exported. It builds the subagent's `final_result` tool def + `ObjectOutputProcessor` the dream-reviewer model was tuned to. Logged at call time and flagged as the v2 break point: replace with a hand-built public `ToolDefinition` only when proven byte-equivalent at the cutover.
 
 **Documented internal assumption (no public alternative):**
-- **`_RepairingStreamedResponse.get()`** repairs the assembled response because the agent graph validates streamed tool args from `StreamedResponse.get()` (the private `_agent_graph` `_streaming_handler`). Pinned by `tests/test_flow_tool_call_repair.py` (§6) — an SDK change here goes red instead of silently breaking Ollama streaming.
+- **`RepairingStreamedResponse.get()`** (`llm/_json_repair.py:132`) repairs the assembled response because pydantic-ai validates streamed tool args from `StreamedResponse.get()` (the private `_agent_graph` `_streaming_handler`, :637). Pinned by `tests/test_flow_model_turn.py` / `tests/test_flow_tool_call_repair.py` (§6) — an SDK change here goes red instead of silently breaking Ollama streaming.
 
 **Owned elsewhere:**
-- The **deferred-tool / approval protocol types** (`DeferredToolRequests`/`Results`, `ApprovalRequired`, `ToolApproved`/`Denied`) are thin data carriers. co drives the entire approval loop (§2.7); whether co ever re-implements pause/resume around its own dispatch is a separate design decision, not a mechanical cleanup.
+- **Approval is inline, not suspend/resume.** co decides approvals within the step before dispatch (`collect_inline_approvals` → `dispatch_tools`, §2.7), using only the `ApprovalRequired` carrier raised in-body by shell/clarify. There is no SDK pause/resume protocol in the loop.
 
 **Coding practices to preserve under any future refactor:**
 - Non-mutating history processors (never mutate the input list/objects); the single `_rewrite_tool_returns` contract; identity-preserving `replace(...)`. All registered processors are rewrite-only — there is no additive processor. The final-request wrap-up nudge (§2.13) is a dynamic instruction (`wrap_up_prompt`), not a history processor, so it requires no strip step.
 - Intra-call `id(part)` locality in `evict_old_tool_results` and `spill_largest_tool_results` (`history_processors.py`): each builds and consumes its id-set entirely within a single processor invocation, over the same `messages` list the processor receives (list slicing preserves element identity by Python guarantee). The id-set never crosses a processor boundary, so SDK message-copying between processors cannot affect it — each processor rebuilds from its own input. Preserve this build-and-consume-within-one-call locality under refactor. (`dedup_tool_results` keys on `tool_call_id` strings, not `id()`, and is unaffected either way.)
 - Frozen registration metadata (`ToolInfo`, `AlwaysSchemaBudget`, `MCPToolsetEntry`).
-- Thin proxies over deep subclassing (`_RepairingStreamedResponse` delegates via `__getattr__`, overriding only `get()`/`usage()` — its read surface is an explicit documented contract, §2.6).
+- Thin proxies over deep subclassing (`RepairingStreamedResponse` delegates via `__getattr__`, overriding only `get()` and exposing `__aiter__`/`usage()` verbatim — its read surface is an explicit documented contract, §2.4).
 
 **Latent risks (recorded, not addressed):**
 - String-based part fallbacks (`getattr(part, "part_kind", part.__class__.__name__)` in `serialize.py`) duck-type instead of `isinstance` — defensive, but signals the part taxonomy isn't fully trusted.

@@ -17,9 +17,9 @@ graph LR
         C4 --> D["deps.toolset + deps.tool_catalog"]
     end
     subgraph Orchestrator
-        D -->|"toolset"| E["Orchestrator Agent"]
-        E --> F["_CallSeamToolset.call_tool\ntool span + co.tool.*\nper-request cap\nMCP-result spill"]
-        F -->|"DeferredToolRequests"| G["Approval Loop\n_collect_deferred_tool_approvals\n+ resume run"]
+        D -->|"toolset"| E["Owned turn loop\n(run_turn_owned)"]
+        E -->|"per step, pre-fan-out"| G["collect_inline_approvals\n(prompt → denials + approved_ids)"]
+        G --> F["dispatch_tools\ntool span + co.tool.*\npre-fan-out cap\nMCP-result spill"]
     end
 ```
 
@@ -68,7 +68,7 @@ A tool has **two parallel representations joined by name**: co's *policy* metada
 | `ToolInfo` | frozen dataclass · `deps.py` | — | per-tool **policy**: all fields below | every policy seam |
 | `TOOL_REGISTRY` | `list[Callable]` · `agent_tool.py` | insertion order | every decorated native fn | `_build_native_toolset` (iterates) |
 | `TOOL_REGISTRY_BY_NAME` | `dict[str, Callable]` · `agent_tool.py` | name | the same fns | `build_task_agent` (resolves `tool_names`) |
-| `tool_catalog` | `dict[str, ToolInfo]` · `deps.tool_catalog` | name | native ToolInfos **+** MCP ToolInfos (added at discovery) | `_tool_visibility_filter`, `_CallSeamToolset`, `_SequentialMCPToolset`, approvals |
+| `tool_catalog` | `dict[str, ToolInfo]` · `deps.tool_catalog` | name | native ToolInfos **+** MCP ToolInfos (added at discovery) | `_tool_visibility_filter`, `dispatch_tools`, `_SequentialMCPToolset`, approvals |
 | `FunctionToolset` | pydantic-ai | name | the callable the SDK runs | the agent run |
 | `ToolDefinition` | pydantic-ai | name | the schema the model sees | the model |
 
@@ -78,14 +78,14 @@ A tool has **two parallel representations joined by name**: co's *policy* metada
 |-------|------|---------|--------------|-------|
 | `name` | `str` | required | span attribute `co.tool.name`; `tool_catalog` key; deferred-reveal key in `revealed_tools` | Taken from `fn.__name__` by `@agent_tool`; must be unique across the registry |
 | `description` | `str` | required | stub one-liner (DEFERRED tools); `co.tool.name` span | First line of `fn.__doc__`, stripped. Truncated to `_ONE_LINER_MAX_CHARS` (100 chars) in the deferred stub; full description goes into the SDK `ToolDefinition` |
-| `source` | `ToolSourceEnum` | required | span attribute `co.tool.source` | `NATIVE` for `@agent_tool`-decorated functions; `MCP` for tools synthesized by `discover_mcp_tools`. Controls the `co.tool.source` span attribute and is used to identify MCP results for the spill check in `_CallSeamToolset` |
+| `source` | `ToolSourceEnum` | required | span attribute `co.tool.source` | `NATIVE` for `@agent_tool`-decorated functions; `MCP` for tools synthesized by `discover_mcp_tools`. Controls the `co.tool.source` span attribute and is used to identify MCP results for the spill check in `dispatch_tools` |
 | `visibility` | `VisibilityPolicyEnum` | required | `_tool_visibility_filter` gate every turn | `ALWAYS` — full schema on every request (static prefix); `DEFERRED` — schema withheld, one-liner stub emitted per turn (only until revealed), full schema loaded on demand via `tool_view` after `revealed_tools` admits the name. The filter hides a DEFERRED tool until `name ∈ runtime.revealed_tools` |
-| `is_approval_required` | `bool` | `False` | `_build_native_toolset` → `add_function(requires_approval=…)`; span attribute `co.tool.requires_approval` | When `True`, the SDK suspends the call into the approval loop (`DeferredToolRequest`) |
+| `is_approval_required` | `bool` | `False` | `_build_native_toolset` → `add_function(requires_approval=…)`; span attribute `co.tool.requires_approval`; read by `collect_inline_approvals` | When `True`, the owned loop prompts for the call **before** fan-out via `collect_inline_approvals` (`agent/approval.py`); a denial becomes a `ToolReturnPart` and approved ids run with `tool_call_approved=True` (no SDK suspend/resume) |
 | `integration` | `str \| None` | `None` | `deferred_prompt.py` grouping; MCP `tool_catalog` | Governs stub grouping in the deferred-tool awareness prompt. Native tools derive their family from the first `_`-delimited segment of the tool name (e.g. `google_*` → `google`). MCP tools receive the user-configured server prefix as `integration`. `None` (no prefix) → the tool falls in the general (un-headered) family, rendered first |
 | `is_concurrent_safe` | `bool` | required (no dataclass default; the `@agent_tool` decorator defaults native tools to `True`, MCP sets `False`) | `_build_native_toolset` → `add_function(sequential=not …)` | `False` forces sequential ordering in a multi-tool batch. `file_write` and `file_patch` are the only ALWAYS native tools that opt out. MCP tools set `False` explicitly (sequential until proven concurrent-safe); `_SequentialMCPToolset` stamps `sequential` from this field |
 | `retries` | `int \| None` | `None` | `_build_native_toolset` → `add_function(retries=…)` when set | Per-tool retry budget overriding the session default (`tool_retries` config, default 3). `None` means inherit the agent-level default |
 | `check_fn` | `Callable[[CoDeps], bool] \| None` | `None` | `_build_native_toolset` → `add_function(prepare=_make_prepare(check_fn))` | Per-turn prepare hook: the tool is hidden on any turn where `check_fn(deps)` returns `False`. Used by Google tools (`_google_available`, credential presence) and `image_view` (`_vision_available` → `deps.agent_vision_capable`, the agent model can see). Runs inside the pydantic-ai prepare callback before each model request. `tool_view` also consults `check_fn` on an exact-name match — when it currently returns `False` the loader returns a remediation instead of revealing, so it never unlocks a tool the per-turn filter would keep hidden |
-| `spill_threshold_chars` | `int \| float \| None` | `None` | `_CallSeamToolset.call_tool` → `spill_with_span` | Per-tool override for the char threshold above which a result is spilled to disk. `None` → falls back to the session-wide `SPILL_THRESHOLD_CHARS` constant. `float('inf')` disables spill for that tool |
+| `spill_threshold_chars` | `int \| float \| None` | `None` | `dispatch_tools` → `spill_with_span` (MCP results) | Per-tool override for the char threshold above which a result is spilled to disk. `None` → falls back to the session-wide `SPILL_THRESHOLD_CHARS` constant. `float('inf')` disables spill for that tool |
 | `approval_subject_fn` | `Callable[[dict], ApprovalSubject] \| None` | `None` | `resolve_approval_subject` (highest priority) | Custom resolver for the approval-subject kind and value shown in the approval prompt. When set, bypasses the default kind-detection logic in `approvals.py` (`shell` by path, `domain` for web, `tool` fallback). Used when a tool's meaningful scoping key differs from the defaults (e.g. a tool whose approval should scope to a custom resource key) |
 
 `_build_native_toolset` is the **bridge** between the two: iterating `TOOL_REGISTRY`, it reads each fn's `ToolInfo` (off `__co_tool_info__`), maps policy fields onto `add_function` kwargs (`is_approval_required → requires_approval`, `is_concurrent_safe → sequential`, `retries`, `check_fn → prepare`), and records that same `ToolInfo` into `tool_catalog`. At runtime every seam recovers policy by name — `ctx.deps.tool_catalog.get(name)` — for the tool the SDK is about to run. MCP tools carry no `@agent_tool` decorator: `discover_mcp_tools` synthesizes a `ToolInfo` per tool (`source=MCP`, `visibility=DEFERRED`) and merges it into the same `tool_catalog`, so native and MCP tools are policy-homogeneous everywhere downstream.
@@ -105,24 +105,23 @@ co has **no keyword "tool search" stage**: tools are never registered with `defe
 2. **Assemble (bootstrap).** `_build_native_toolset()` (`co_cli/agent/toolset.py`) adds every registered tool to one `FunctionToolset` and returns it with `tool_catalog` (`name → ToolInfo`). MCP tools join via `build_mcp_entries` / `assemble_routing_toolset` (`co_cli/agent/core.py`), wrapping native + MCP in `CombinedToolset([...]).filtered(_tool_visibility_filter)`. Visibility lives only in `tool_catalog`; the registry is visibility-agnostic.
 3. **Discover (every turn).** An ALWAYS tool's full schema rides the cached static prefix; a DEFERRED tool's schema is withheld and replaced by its per-turn stub (above).
 4. **Load (DEFERRED only).** `_tool_visibility_filter` (`co_cli/agent/toolset.py`) hides a DEFERRED tool until its name is in `deps.runtime.revealed_tools`. The model copies the exact name from the stub into `tool_view` (itself ALWAYS — `co_cli/tools/system/tool_view.py`): a normalized-exact match (case / `-` / whitespace folded) reveals it — unless the tool carries a `check_fn` that currently returns `False`, in which case `tool_view` returns a remediation and reveals nothing (so a check_fn-gated tool like `image_view` or a Google tool is never phantom-loaded into a turn the visibility filter would hide it from); a near-miss returns `difflib` "did you mean" candidates and reveals nothing; no match errors "does not exist — do not retry." The full schema appears on the next model step, and the per-turn stub generator (`deferred_prompt.py`) reads the same `revealed_tools` set, so a revealed tool stops emitting its stub. Because `revealed_tools` is runtime state, not message history, reveals survive compaction. ALWAYS tools skip this stage.
-5. **Call.** `_CallSeamToolset.call_tool` (`co_cli/agent/toolset.py`) is the single per-call seam: it stamps the `tool {name}` span (`co.tool.*` attributes), enforces the per-model-request tool-call cap, and spills oversized MCP string results. Approval-gated tools (`ToolInfo.is_approval_required`, or `shell_exec`'s dynamic path check) suspend into the approval loop and resume via `deferred_tool_results` — see the [Approval Loop](#approval-loop) below and [core-loop.md](core-loop.md).
+5. **Call.** `dispatch_tools` (`co_cli/agent/dispatch.py`) is the single per-step dispatch seam: it stamps the `tool {name}` span (`co.tool.*` attributes), enforces the per-model-request tool-call cap pre-fan-out, and spills oversized MCP string results. Approval-gated tools (`ToolInfo.is_approval_required`, or `shell_exec`'s dynamic path check) are resolved **before** fan-out by `collect_inline_approvals` (`co_cli/agent/approval.py`), which passes `denials` + `approved_ids` into `dispatch_tools` — see the [Inline Approval](#inline-approval) below and [core-loop.md](core-loop.md).
 
 ### Toolset composition stack
 
-`assemble_routing_toolset` (`co_cli/agent/core.py`) nests five toolset layers into the single `deps.toolset` object the orchestrator runs on. Each layer does one thing; **co** owns the two `WrapperToolset` subclasses, **pydantic-ai (SDK)** owns the rest:
+`assemble_routing_toolset` (`co_cli/agent/core.py`) nests the routing toolset — the single `deps.toolset` object the owned loop dispatches over. The span / cap / spill concerns no longer ride a toolset wrapper: the owned `dispatch_tools` (`co_cli/agent/dispatch.py`) hosts them directly. **co** owns the `_SequentialMCPToolset` `WrapperToolset` subclass, **pydantic-ai (SDK)** owns the rest:
 
 ```
-_CallSeamToolset                 co   per-call seam: tool span + co.tool.*, per-request cap, MCP-result spill
- └─ FilteredToolset (.filtered)  SDK  per-turn gate: runs _tool_visibility_filter — the only layer that drops tools
-     └─ CombinedToolset          SDK  merges the native toolset with every MCP toolset into one surface
-         ├─ FunctionToolset      SDK  the native @agent_tool functions added by _build_native_toolset
-         └─ _SequentialMCPToolset co   one per MCP server; stamps each MCP tool's ToolDefinition.sequential
-              └─ _SanitizingMCPServer [.approval_required()]   sanitize inputSchema; per-server approval wrap
+FilteredToolset (.filtered)    SDK  per-turn gate: runs _tool_visibility_filter — the only layer that drops tools
+ └─ CombinedToolset            SDK  merges the native toolset with every MCP toolset into one surface
+     ├─ FunctionToolset        SDK  the native @agent_tool functions added by _build_native_toolset
+     └─ _SequentialMCPToolset  co   one per MCP server; stamps each MCP tool's ToolDefinition.sequential
+          └─ _SanitizingMCPServer [.approval_required()]   sanitize inputSchema; per-server approval wrap
 ```
 
-A tool call enters at `_CallSeamToolset` (outermost); the per-turn tool list is decided one layer in, where `FilteredToolset` applies `_tool_visibility_filter` (hide DEFERRED until revealed, narrow to approved tools on a resume turn) — no other layer removes tools. `_CallSeamToolset.call_tool` is the only seam for the three concerns that must live at the per-call boundary, as straight-line ordered code — there is no pydantic-ai capability and no inter-component ordering invariant. `_SequentialMCPToolset` exists only because an MCP server reports no concurrency policy: it copies `sequential` from `tool_catalog.is_concurrent_safe` so an MCP tool obeys the same serialization contract as a native `file_write`. MCP tools are **not** registered with `defer_loading` (that would re-engage the SDK's `search_tools` loader); they are DEFERRED in `tool_catalog` and load via `tool_view` like every other deferred tool. Syntactic tool-arg JSON repair and the `chat` model span live one layer further out in `SurrogateRecoveryModel` ([observability.md](observability.md)); usage recording happens at run-result boundaries ([agents.md](agents.md), [core-loop.md](core-loop.md)).
+The per-turn tool list is decided at the outer `FilteredToolset`, which applies `_tool_visibility_filter` (hide DEFERRED until revealed) — no other layer removes tools. The three concerns that must live at the dispatch boundary (span, cap, MCP-result spill) are hosted by `dispatch_tools` as straight-line ordered code over the filtered surface — there is no pydantic-ai graph or capability and no inter-component ordering invariant. `_SequentialMCPToolset` exists only because an MCP server reports no concurrency policy: it copies `sequential` from `tool_catalog.is_concurrent_safe` so an MCP tool obeys the same serialization contract as a native `file_write`. MCP tools are **not** registered with `defer_loading` (that would re-engage the SDK's `search_tools` loader); they are DEFERRED in `tool_catalog` and load via `tool_view` like every other deferred tool. Syntactic tool-arg JSON repair and the `chat` model span live in `model_turn` ([observability.md](observability.md)); usage recording happens at run-result boundaries ([agents.md](agents.md), [core-loop.md](core-loop.md)).
 
-**Task-agent variant.** `build_task_agent` ([agents.md](agents.md)) builds a far thinner stack — `_CallSeamToolset(FunctionToolset)` over a `tool_names` subset with `requires_approval=False`, no `CombinedToolset`, no filter, no MCP — so subagent calls still get the span, cap, and `co.tool.*` parity, but a task agent never prompts and never sees the MCP or deferred surfaces. `fork_deps` forwards `tool_catalog` (for approval and span-attribute lookup) and explicitly excludes `toolset`, so the orchestrator's combined routing surface never propagates to a task agent.
+**Task-agent variant.** A task agent ([agents.md](agents.md)) runs the same `dispatch_tools` seam over a `tool_names` subset with `requires_approval=False`, no `CombinedToolset`, no filter, no MCP — so subagent calls still get the span, cap, and `co.tool.*` parity, but a task agent never prompts and never sees the MCP or deferred surfaces. `fork_deps` forwards `tool_catalog` (for approval and span-attribute lookup) and explicitly excludes `toolset`, so the orchestrator's combined routing surface never propagates to a task agent.
 
 ### Google credential setup & tool visibility
 
@@ -200,77 +199,64 @@ Implementation: `co_cli/tools/shell_backend.py` (`run_command` pty branch), `co_
 
 ## 2. Core Logic
 
-### `_CallSeamToolset.call_tool` (the single per-call seam)
+### `dispatch_tools` (the single per-step dispatch seam)
 
-Tool-arg JSON repair runs one level out, on the model response in `SurrogateRecoveryModel` before pydantic validation (gated to the Ollama path); see [observability.md](observability.md). `call_tool` itself is a linear body with no dedup and no arg path-normalization — the agent loop tolerates duplicate calls, and `enforce_write_boundary` resolves relative→absolute for `file_write`/`file_patch`:
+Tool-arg JSON repair runs upstream, on the assembled model response in `model_turn` before pydantic validation (gated to the Ollama path); see [observability.md](observability.md). `dispatch_tools` itself is a linear body with no dedup and no arg path-normalization — the loop tolerates duplicate calls, and `enforce_write_boundary` resolves relative→absolute for `file_write`/`file_patch`. The cap is decided **once per step, before any fan-out** (`ToolCapState.shed_boundary`), so calls past the cap never execute:
 
 ```
-call_tool(name, args, ctx, tool)
+dispatch_tools(tool_calls, deps, cap_state, denials, approved_ids)
       │
       ▼
-cap accounting  [count only; per-request reset owned by the
-                 orchestrator at the model-request node boundary]
-  ┌──────────────────────────────────────────────────────┐
-  │  count += 1                                            │
-  │  count == cap+1 ? streak += 1  (immediate, once;      │
-  │    latch hard-stop at the threshold)                  │
-  └──────────────────────────────────────────────────────┘
+cap_state.note_calls(N)            # step boundary: extend/reset the over-cap streak,
+                                   #   latch hard_stop after TOOL_CAP_HARD_STOP_CONSECUTIVE
+boundary = cap_state.shed_boundary(N) = min(N, cap)
       │
-      ▼
-push span "tool {name}"  (co.tool.name, co.tool.args, co.tool.args_chars)
+      ├─ index ≥ boundary  ──► exceeded payload (tool does NOT execute)
+      ├─ index < boundary, id in denials  ──► denial ToolReturnPart
       │
-      ▼
-  count > cap ?
-    yes ──► result = exceeded payload (tool does NOT execute)
-    no  ──► result = await super().call_tool(...)
-              │
-              ▼
+      └─ rest execute (concurrent in parallel, sequential serialized):
+            push span "tool {name}"  (co.tool.name, co.tool.args, co.tool.args_chars)
+                  │
+                  ▼
+            run tool body  (id in approved_ids → tool_call_approved=True)
+                  │
+                  ▼
             MCP-source str over threshold? ──► spill_with_span(...)
+                  │
+                  ▼
+            span ← co.tool.result, co.tool.result_size
+            info in tool_catalog? ──► span ← co.tool.source, co.tool.requires_approval
+                  │
+                  ▼
+            pop span   (ERROR + re-raise if the tool raised)
+```
+
+The over-cap streak (`ToolCapState.consecutive_violations`) extends when a step issues more than `cap` calls and resets on a within-cap step; `hard_stop` latches once the streak reaches `TOOL_CAP_HARD_STOP_CONSECUTIVE` and is never un-latched within the turn. See [core-loop.md](core-loop.md) for the hard-stop consumer.
+
+### Inline Approval
+
+The owned loop has no suspend/resume. `collect_inline_approvals` (`co_cli/agent/approval.py`) runs once per step, **before** the tool fan-out, strictly sequentially over the step's calls (the frontend has a single prompt future, so the prompts must never be `asyncio.gather`-ed). It returns an `ApprovalResolution` — `denials` (denied call ids → `ToolReturnPart`) and `approved_ids` (run with `tool_call_approved=True`) — fed directly into `dispatch_tools`:
+
+```
+collect_inline_approvals(tool_calls, deps, frontend)
       │
-      ▼
-span ← co.tool.result, co.tool.result_size
-tool_name in tool_catalog? ──► span ← co.tool.source, co.tool.requires_approval
-      │
-      ▼
-pop span   (ERROR + re-raise if the tool raised)
+      └─ for each call (sequential, original order):
+           │
+           ├─ clarify? ──► prompt questions inline, stash answers, mark approved
+           │
+           ├─ catalog is_approval_required, OR shell_exec hits the dynamic
+           │  REQUIRE_APPROVAL gate?
+           │     no  ──► needs no approval (executes normally)
+           │     yes ──► resolve_approval_subject
+           │               ├─ auto_approved (session rule)? ──► approved_ids
+           │               └─ prompt user (frontend is None → "n", auto-deny)
+           │                     ├─ y / a ──► approved_ids  (a → remember rule)
+           │                     └─ n     ──► denials[id]
+           ▼
+      ApprovalResolution(denials, approved_ids) ──► dispatch_tools(...)
 ```
 
-The consecutive-over-cap streak (`consecutive_tool_cap_violations`) increments immediately at the `(cap+1)`-th call and resets on the next request when the prior one behaved; the orchestrator finalizes the last request's reset at the run boundary before the hard-stop check. See [core-loop.md](core-loop.md) for the hard-stop consumer.
-
-### Approval Loop
-
-```
-                          ┌─────────────────────────────┐
-                    ┌────►│  output = latest_result      │
-                    │     └──────────────┬──────────────┘
-                    │                    │
-                    │        DeferredToolRequests?
-                    │           │ no ──► turn complete
-                    │           │ yes
-                    │           ▼
-                    │     for each deferred call:
-                    │       │
-                    │       ├─ "questions" in meta?
-                    │       │     yes ──► prompt each question
-                    │       │             ToolApproved(user_answers=[...])
-                    │       │
-                    │       └─ no ──► resolve_approval_subject
-                    │                     │
-                    │                     ├─ auto_approved?
-                    │                     │     yes ──► True
-                    │                     │
-                    │                     └─ prompt user
-                    │                           ├─ approved ──► True
-                    │                           ├─ denied   ──► ToolDenied
-                    │                           └─ always   ──► session rule
-                    │           │
-                    │           ▼
-                    │     resume run(deferred_tool_results=approvals)
-                    │     [skips ModelRequestNode — no new model prompt]
-                    └─────────────────────────────────────────────────────
-```
-
-Resume runs skip `ModelRequestNode` — no new model prompt is sent just to execute approved tools.
+There is no deferred suspend/resume and no resume run: a denial becomes a `ToolReturnPart` the model reacts to next step, approved siblings still execute in the same fan-out, and a headless run (`frontend is None`) auto-denies standard approvals.
 
 ### Concurrency Safety
 
@@ -327,7 +313,7 @@ on shared mutation keys is a complementary guard — both layers apply.
 | `TOOL_REGISTRY` | `co_cli/tools/agent_tool.py` | Module-level list populated at import time; read by `build_native_toolset()` |
 | `build_native_toolset() -> tuple[AbstractToolset[CoDeps], dict[str, ToolInfo]]` | `co_cli/agent/core.py` | Pure registry walk. Returns the unfiltered native toolset and a fresh `tool_catalog` |
 | `build_mcp_entries(config, tool_catalog) -> list[MCPToolsetEntry]` | `co_cli/agent/core.py` | Builds MCP entries wrapped with sequential-flag propagation; not yet connected |
-| `assemble_routing_toolset(native, mcp_toolsets, name_blocklist=frozenset()) -> AbstractToolset[CoDeps]` | `co_cli/agent/core.py` | Combines native + connected MCP toolsets via `CombinedToolset(...).filtered(...)` (visibility filter + optional `name_blocklist`), wrapped in `_CallSeamToolset`. The delegated agent passes `{delegate}` |
+| `assemble_routing_toolset(native, mcp_toolsets, name_blocklist=frozenset()) -> AbstractToolset[CoDeps]` | `co_cli/agent/core.py` | Combines native + connected MCP toolsets via `CombinedToolset(...).filtered(...)` (visibility filter + optional `name_blocklist`); the owned `dispatch_tools` hosts the span/cap/spill seam over this surface. The delegated agent passes `{delegate}` |
 
 > Agent builders (`build_orchestrator`, `build_task_agent`) and spec records (`OrchestratorSpec`, `TaskAgentSpec`) are documented in [agents.md § 4](agents.md).
 
@@ -347,7 +333,8 @@ on shared mutation keys is a complementary guard — both layers apply.
 
 | Symbol | Source | Contract |
 |--------|--------|----------|
-| `_CallSeamToolset(WrapperToolset[CoDeps])` | `co_cli/agent/toolset.py` | Wraps the routing toolset; `call_tool` hosts the `tool` span + `co.tool.*`, the per-model-request cap, and MCP-result spill as linear ordered code |
+| `dispatch_tools(tool_calls, deps, *, cap_state, frontend=None, denials=None, approved_ids=None) -> list[ToolReturnPart \| RetryPromptPart]` | `co_cli/agent/dispatch.py` | Dispatches one step's calls; hosts the `tool` span + `co.tool.*`, the pre-fan-out cap (`ToolCapState`), and MCP-result spill as linear ordered code |
+| `collect_inline_approvals(tool_calls, deps, frontend, origin_label=None) -> ApprovalResolution` | `co_cli/agent/approval.py` | Pre-fan-out, sequential approval/clarify collection; returns `denials` + `approved_ids` for `dispatch_tools`; headless auto-deny |
 | `resolve_approval_subject(tool_name, args) -> ApprovalSubject` | `co_cli/tools/approvals.py` | Maps a tool call to its approval-subject kind (`shell`, `path`, `domain`, `tool`) |
 | `ApprovalSubject`, `SessionApprovalRule`, `ApprovalKindEnum` | `co_cli/deps.py` | Approval-subject record types and remembered-rule shape |
 | `build_deferred_tool_awareness_prompt(tool_catalog) -> str` | `co_cli/tools/deferred_prompt.py` | Per-turn system-prompt stub list (one `` - `name`: one-liner `` per DEFERRED tool) grouped by integration family under sub-headers (native primitives first with no sub-header, then e.g. `Google Workspace (load before use):`) telling the model to load a tool via `tool_view` (by exact name) first; emitted via `deferred_tool_awareness_prompt` in `co_cli/agent/_instructions.py` |
@@ -365,7 +352,9 @@ on shared mutation keys is a complementary guard — both layers apply.
 | File | Role |
 |------|------|
 | `co_cli/agent/core.py` | `build_native_toolset()`, `build_mcp_entries()`, `assemble_routing_toolset()` |
-| `co_cli/agent/toolset.py` | `_build_native_toolset()`, `_tool_visibility_filter()`, `_CallSeamToolset` (per-call span + cap + MCP spill) |
+| `co_cli/agent/toolset.py` | `_build_native_toolset()`, `_tool_visibility_filter()` |
+| `co_cli/agent/dispatch.py` | `dispatch_tools()` — the single per-step dispatch seam: `tool` span + `co.tool.*`, pre-fan-out cap, MCP-result spill |
+| `co_cli/agent/approval.py` | `collect_inline_approvals()`, `ApprovalResolution` — pre-fan-out inline approval/clarify collection |
 | `co_cli/agent/mcp.py` | `_build_mcp_toolsets()`, `discover_mcp_tools()` (synthesizes MCP `ToolInfo`), `_SequentialMCPToolset`, `_SanitizingMCPServer`, `MCPToolsetEntry` |
 | `co_cli/tools/approvals.py` | approval subject resolution and session-rule persistence |
 | `co_cli/tools/deferred_prompt.py` | per-tool awareness stub list for DEFERRED tools, grouped by integration family under sub-headers |

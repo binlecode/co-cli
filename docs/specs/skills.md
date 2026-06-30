@@ -43,7 +43,7 @@ Per-turn: `main.py` saves current env for keys in `skill_env`, calls `os.environ
 Skills are reached through three distinct paths:
 
 **Path 1 — User slash-command.**
-The user types `/skill-name [args]` in the REPL. `dispatch()` matches the name in `skill_catalog` and proceeds **only for a `user_invocable` skill** — a model-only skill (the default) falls through to "unknown command" and never mounts as a slash command. It then expands the body (argument substitution) and returns `DelegateToAgent`. The REPL then calls `run_turn()` with the expanded body as the user input — a full new agent turn. The skill body replaces the user's input for that turn; the model never sees the raw `/skill-name` string.
+The user types `/skill-name [args]` in the REPL. `dispatch()` matches the name in `skill_catalog` and proceeds **only for a `user_invocable` skill** — a model-only skill (the default) falls through to "unknown command" and never mounts as a slash command. It then expands the body (argument substitution) and returns `DelegateToAgent`. The REPL then calls `run_turn_owned()` with the expanded body as the user input — a full new agent turn. The skill body replaces the user's input for that turn; the model never sees the raw `/skill-name` string.
 
 **Path 2 — Model inline use.**
 The agent reads the `<available_skills>` manifest injected per-turn into the system prompt, identifies a matching skill, and calls `skill_view(name)` to load the full body. The body is returned as a tool result inside the current turn. The agent reads it and follows its phases as its procedure — no new turn, no dispatch, no REPL involvement. This is the primary path for agent-initiated skill use.
@@ -149,7 +149,7 @@ main.py — per-turn
   saved = {k: os.environ.get(k) for k in skill_env}
   os.environ.update(skill_env)
   try:
-    run_turn()
+    run_turn_owned()
   finally:
     restore saved values (delete keys not previously present)
     clear deps.runtime.active_skill_name

@@ -19,7 +19,7 @@ flowchart TD
     Q -.->|"done-callback drains one per turn boundary"| TASK
     TASK --> LOOP["_chat_loop / _handle_one_input"]
     LOOP -->|"starts with /"| DISP["dispatch(raw_input, ctx)"]
-    LOOP -->|plain text| TURN["_run_foreground_turn → run_turn()"]
+    LOOP -->|plain text| TURN["_run_foreground_turn → run_turn_owned()"]
     DISP --> OUT{"SlashOutcome"}
     OUT -->|LocalOnly| U
     OUT -->|ReplaceTranscript| U
@@ -57,7 +57,7 @@ coupling. This seam is a deliberate design invariant — defend it, do not redes
 (c) Agent loop          frontend-agnostic; reaches the user ONLY via Frontend
 ```
 
-- **One surface to the user.** The orchestrator (`co_cli/agent/orchestrate.py`) calls
+- **One surface to the user.** The orchestrator (`co_cli/agent/loop.py`) calls
   *exclusively* through its `Frontend` for everything user-facing — prompts (`prompt_question`,
   `prompt_approval`), tool lifecycle (`on_tool_start/complete`), status, final output, teardown.
   The two indirect paths are frontend-bound too: `deps.runtime.tool_progress_callback` and
@@ -217,7 +217,7 @@ counter advances on a wall-clock ticker (a thinking-scoped background task repai
 second) so it ticks even when the model emits reasoning in bursts or goes silent between deltas.
 The committed `Thought for Ns` is measured at thinking-end (wall-clock accurate, reasoning-only).
 
-Before the first stream byte arrives there is a distinct pre-response phase: `run_turn` calls
+Before the first stream byte arrives there is a distinct pre-response phase: `run_turn_owned` calls
 `frontend.begin_waiting()`, which shows a live `Waiting… Ns` indicator on its own wall-clock
 ticker. The first stream surface (reasoning, text, or tool) supersedes it. The two counters are
 independent — waiting time is never folded into thinking time, so the `Waiting… Ns` counter
@@ -230,8 +230,8 @@ Usage:
 - `/reasoning off|collapsed|full` — set directly
 
 The mode is stored on `deps.session.reasoning_display` (a `CoSessionState` field, default
-`"full"`). It is read by `_execute_run()` at stream start via
-`StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)`. Changes take
+`"full"`). It is read by the owned step loop (`run_turn_owned`, `co_cli/agent/loop.py`) at
+turn start via `StreamRenderer(frontend, reasoning_display=deps.session.reasoning_display)`. Changes take
 effect on the next turn; any in-flight stream uses the mode it started with. Delegation agent
 turns inherit the mode via `fork_deps()`, which copies `base.session.reasoning_display` into the
 delegated agent's `CoSessionState`.

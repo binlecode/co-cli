@@ -205,7 +205,7 @@ The canonical inventory. New evals append a row here AND a tenet citation in the
 | `evals/_fixtures/` | Pre-seeded knowledge `.md` + session `.jsonl` corpora |
 | `evals/_observability.py` | Per-run JSONL writer + case-result accumulator (`<stem>-run.jsonl` / `-case_<id>.jsonl`) under `evals/_outputs/` |
 | `evals/_drift.py` | Cross-run drift aggregator — reads `<scenario>-<ts>-run.jsonl` files, diffs verdict + judge-score across the last K runs |
-| `evals/_trace.py` | Trace ID generation + correlation across cases; `record_turn` drives `run_turn` and returns `TurnTrace.trace_ids` |
+| `evals/_trace.py` | Trace ID generation + correlation across cases; `record_turn` drives `run_turn_owned` and returns `TurnTrace.trace_ids` |
 | `evals/_perf.py` | `PerfRecord` + `collect_perf(trace_ids, …)` + `perf_verdict` — span-derived performance overlay (call p50/p95, calls-over-budget, peak-input-tokens, context-overflow, goal-fulfillment) |
 | `evals/_timeouts.py` | Per-case timeout constants (warm-model budgets only); `WARM_CALL_BUDGET_S` (provisional until T-8b calibration) |
 | `evals/_settings.py` | Centralized eval settings, incl. the eval-only Gemini judge (`EVAL_JUDGE_MODEL`, `make_eval_judge`/`apply_eval_judge`) that pins `deps.judge_model` distinct from the local agent |

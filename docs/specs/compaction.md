@@ -13,30 +13,27 @@ Covers how co-cli keeps context bounded under pressure. Prompt assembly and hist
 USER PROMPT
   │
   ▼
-run_turn() (orchestrate.py:run_turn)
+run_turn_owned() (loop.py:run_turn_owned)
   ├── reset_for_turn()                # clears: status_callback, compaction_applied_this_turn,
   │                                   #          current_request_tokens_estimate
-  └── while True:
-        await _execute_run(...)
+  └── while True:  (owned step loop — loop.py:_orchestrator_step_loop)
           │
-          ▼  pydantic-ai Agent.iter
-          │
-          ┌── ModelRequestNode (pre-flight) ──────────────────────────────────┐
-          │   history_processors run IN ORDER:                                │
+          ┌── per-step pre-flight ────────────────────────────────────────────┐
+          │   run_history_processors runs IN ORDER:                           │
           │     1. elide_old_multimodal_prompts (drop non-tail image pixels)  │
           │     2. dedup_tool_results          (collapse identical returns)   │
           │     3. evict_old_tool_results      (keep 5 most recent per tool)  │
           │     4. spill_largest_tool_results           (L2 force-spill cap)  │
           │     5. proactive_window_processor  (L3 LLM compaction)            │
-          │   model.request() → HTTP                                          │
+          │   model_turn() → direct.model_request_stream → HTTP               │
           └───────────────────────────────────────────────────────────────────┘
           │
-          ┌── CallToolsNode (post-response) ──────────────────────────────────┐
-          │   _CallSeamToolset.call_tool (per ToolCallPart):                  │
-          │     L0 cap (MAX_TOOL_CALLS_PER_MODEL_REQUEST=3) → reject excess   │
-          │     [tool runs]                                                   │
+          ┌── post-response (tool calls in the ModelResponse) ─────────────────┐
+          │   dispatch_tools (one model request's calls, pre-fan-out):        │
+          │     L0 cap (MAX_TOOL_CALLS_PER_MODEL_REQUEST=3) → shed excess     │
+          │     [within-cap tools run]                                        │
           │     MCP-only fallback spill (oversized string results)           │
-          │   (JSON repair lives in SurrogateRecoveryModel, pre-validation)  │
+          │   (JSON repair lives in model_turn, pre-validation)              │
           │   tool_output() inside native tools fires L1: spill_if_oversized  │
           └───────────────────────────────────────────────────────────────────┘
           │
@@ -60,16 +57,16 @@ _finalize_turn()  (main.py)
 
 | Layer | Where | Trigger | Effect | LLM? |
 |---|---|---|---|---|
-| **L0** | `_CallSeamToolset.call_tool` per `ToolCallPart` | `tool_calls_in_model_request > MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 3) | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
-| **L1** | `tool_output()` in native tools, `_CallSeamToolset.call_tool` for MCP | `len(content) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS = 4_000`) | Persist to `tool-results/<sha16>.txt`; replace content with `<persisted-output>` placeholder + preview | No |
+| **L0** | `dispatch_tools` per model request (step boundary, pre-fan-out) | a step issues more than `MAX_TOOL_CALLS_PER_MODEL_REQUEST` (= 3) calls; `ToolCapState.shed_boundary` sheds index `≥ cap` | Reject excess; structured `max_tool_calls_per_model_request_exceeded` payload returned as tool result | No |
+| **L1** | `tool_output()` in native tools, `dispatch_tools` for MCP | `len(content) > spill_threshold_chars` (per-tool, default `SPILL_THRESHOLD_CHARS = 4_000`) | Persist to `tool-results/<sha16>.txt`; replace content with `<persisted-output>` placeholder + preview | No |
 | **L2** | `spill_largest_tool_results` history processor | `static_floor_tokens + estimate_message_tokens > deps.spill_threshold_tokens` (realtime-local, no provider-reported floor) | Force-spill largest unspilled string `ToolReturnPart`s **outside the protected tail** (index `< tail_start`, the same boundary as L3), largest-first, until aggregate ≤ threshold | No |
 | **L3** | `proactive_window_processor` history processor | `token_count > compaction_ratio × budget` AND `plan_compaction_boundaries` returns non-`None` | LLM summary + assembly: `head | marker | [todo_snapshot] | tail`. When the anti-thrash gate is tripped, the same assembly runs with `summarize=False` (static marker, no LLM) — the gate demotes the pass, it never skips it. No-progress guard: an applied pass that fails to shrink (`tokens_after ≥ token_count`) escalates once to `recover_overflow_history` rather than returning a no-op that would re-fire next request | Yes (static marker fallback when anti-thrash-tripped or breaker-open) |
-| **Recovery** | `run_turn` overflow branch | `is_context_overflow(e)` AND `overflow_recovery_attempted == False` | `strip_all_tool_returns`; if still over budget, planner + `compact_messages` + `commit_compaction` on stripped history | Yes (static marker fallback) |
+| **Recovery** | owned loop overflow branch (`run_turn_owned`) | `is_context_overflow(e)` AND `overflow_recovery_attempted == False` | `strip_all_tool_returns`; if still over budget, planner + `compact_messages` + `commit_compaction` on stripped history | Yes (static marker fallback) |
 | **Manual** | `/compact [focus]` slash command | User-invoked | `compact_messages` with full-history bounds `(0, n, n)` + `commit_compaction`; same degradation policy as L3 | Yes (static marker fallback) |
 
 L1 / L2 / L3 fast-path when below their threshold. The validator at `config/compaction.py:_validate_shape` enforces `tail_fraction < compaction_ratio` and `spill_ratio ≤ compaction_ratio` so L2 spill (cheap) precedes L3 LLM summarization, and post-compact state always leaves headroom before the trigger re-fires.
 
-All three LLM-capable paths share one primitive — `compact_messages(ctx, messages, bounds, focus, summarize=True)` — which slices, runs the gated summarizer (unless `summarize=False` forces the static path with no LLM call), and assembles `head | marker | [todo_snapshot] | tail`. Each path then calls `commit_compaction` (the single writer of the three "applied" runtime fields). Proactive layers its own savings / status-callback / OTEL / thrash policy on top inside `proactive_window_processor`, and passes `summarize=False` when its anti-thrash gate is tripped; Recovery and Manual handle their own status messaging upstream. Static vs. summary markers differ only in whether a non-empty summary string is available.
+All three LLM-capable paths share one primitive — `compact_messages(deps, messages, bounds, focus, summarize=True)` — which slices, runs the gated summarizer (unless `summarize=False` forces the static path with no LLM call), and assembles `head | marker | [todo_snapshot] | tail`. Each path then calls `commit_compaction` (the single writer of the three "applied" runtime fields). Proactive layers its own savings / status-callback / OTEL / thrash policy on top inside `proactive_window_processor`, and passes `summarize=False` when its anti-thrash gate is tripped; Recovery and Manual handle their own status messaging upstream. Static vs. summary markers differ only in whether a non-empty summary string is available.
 
 **Why per-request cadence.** Context pressure rises mid-turn — a single tool round can append a 50K-char shell output plus several `file_read` results, pushing the next request over budget before the user speaks again. Per-turn cadence would catch overflow only reactively via HTTP 400/413.
 
@@ -199,15 +196,16 @@ Compaction state lives on `CoRuntimeState` (`co_cli/deps.py`). Per-turn fields a
 |---|---|---|---|
 | `compaction_applied_this_turn` | `commit_compaction` (sole writer; called by `proactive_window_processor`, `recover_overflow_history` both paths, `/compact`) | `main.py` (session-branching via `TurnResult.history_compacted`); `proactive_window_processor` (OTEL span attr only) | `reset_for_turn` |
 | `current_request_tokens_estimate` | `spill_largest_tool_results` (always — even fast paths); `commit_compaction` (every commit path — proactive, both recovery paths, `/compact` — writes the post-compaction size) | `proactive_window_processor` (OTEL only, no logic branch); `main.py` `_build_status_snapshot` (status-line context %) | `reset_for_turn`; `/new`, `/clear` |
-| `tool_calls_in_model_request` | `_CallSeamToolset.call_tool` (increment per call); orchestrator (zero at the model-request node boundary) | L0 cap check + consecutive-violation streak | orchestrator `_execute_run` on entering each model-request node |
 | `compaction_skip_count` | `_summarization_gate_open` (block path), `_gated_summarize_or_none` (failure paths) | `_summarization_gate_open` (probe cadence) | `_gated_summarize_or_none` (success → 0) |
 | `consecutive_low_yield_proactive_compactions` | `proactive_window_processor` (++ on low yield) | proactive gate; anti-thrash static-marker demotion (`summarize=False`) | proactive on good savings; `_reset_thrash_state` from `recover_overflow_history`; `/compact` |
 
-**Sole callback into the frontend.** `runtime.status_callback` is set by `run_turn` to `frontend.on_status` and is the only frontend hook the processor chain sees — used by `_gated_summarize_or_none` to print "Compacting conversation…" (opening, gate-open paths only) and by `proactive_window_processor` to emit the closing status ("Compacted." / "Compacted (static marker)." for a *deliberate* degrade — the anti-thrash skip or the pre-flight input-too-large fit-guard bail / "LLM compaction unavailable — used static marker." / "Summarizer failed — used static marker." for a genuine summarizer failure or a tripped breaker) via the `_record_proactive_outcome` helper. Recovery and `/compact` emit their own status messaging upstream (via `frontend.on_status` in `orchestrate.py` and `console.print` in the slash command, respectively). Tool progress goes through the separate `tool_progress_callback`.
+The L0 tool-call cap is **not** a `CoRuntimeState` field: it lives in `TurnState.cap_state` (a `ToolCapState`, `co_cli/agent/turn_state.py`), reconstructed per turn. `dispatch_tools` records each step's issued-call count via `cap_state.note_calls(N)` at the step boundary (pre-fan-out), and `shed_boundary` decides the L0 shed; see §2.1.
+
+**Sole callback into the frontend.** `runtime.status_callback` is set by `run_turn_owned` to `frontend.on_status` and is the only frontend hook the processor chain sees — used by `_gated_summarize_or_none` to print "Compacting conversation…" (opening, gate-open paths only) and by `proactive_window_processor` to emit the closing status ("Compacted." / "Compacted (static marker)." for a *deliberate* degrade — the anti-thrash skip or the pre-flight input-too-large fit-guard bail / "LLM compaction unavailable — used static marker." / "Summarizer failed — used static marker." for a genuine summarizer failure or a tripped breaker) via the `_record_proactive_outcome` helper. Recovery and `/compact` emit their own status messaging upstream (via `frontend.on_status` in the owned loop's overflow branch, `co_cli/agent/loop.py`, and `console.print` in the slash command, respectively). Tool progress goes through the separate `tool_progress_callback`.
 
 **Realtime-local trigger, no provider-reported floor.** Both compaction triggers (L2 spill, L3 summarize) key off a single realtime-local count, `effective_request_tokens(deps, messages) = static_floor_tokens + estimate_message_tokens(messages)` (see §2.5) — there is no provider-reported floor. This matches the two chain-shaped peers (hermes-agent, openclaw), which drive the identical spill→summarize ladder off a realtime recount with no provider-usage dependency. A successful L2 spill deterministically lowers this same value, so L3 re-reads the lowered payload and fast-paths when the spill already fit — the spill-first / summarize-fallback ordering is structural, not band-tuned.
 
-`estimate_message_tokens` counts **only the message list** — it omits the static prefill floor. `effective_request_tokens` adds `deps.static_floor_tokens` (the bootstrap-measured floor: the full delivered instruction floor — base instructions + toolset guidance + personality critique — plus ALWAYS-visibility tool schemas, immutable after bootstrap like `spill_threshold_tokens`) so the trigger cannot undercount live size by one floor (~12K tokens). The sanctioned remedy for any residual `chars/4` undercount is improving the estimator (e.g. openclaw-style CJK/JSON adjustment), never reintroducing a provider-usage floor. The provider's real input count is still used — but only for the post-turn overflow telemetry (see core-loop.md), re-sourced on demand from the turn's `AgentRunResult`, not carried as a runtime status var.
+`estimate_message_tokens` counts **only the message list** — it omits the static prefill floor. `effective_request_tokens` adds `deps.static_floor_tokens` (the bootstrap-measured floor: the full delivered instruction floor — base instructions + toolset guidance + personality critique — plus ALWAYS-visibility tool schemas, immutable after bootstrap like `spill_threshold_tokens`) so the trigger cannot undercount live size by one floor (~12K tokens). The sanctioned remedy for any residual `chars/4` undercount is improving the estimator (e.g. openclaw-style CJK/JSON adjustment), never reintroducing a provider-usage floor. The provider's real input count is still used — but only for the post-turn overflow telemetry (see core-loop.md), re-sourced on demand from the turn's accumulated `RunUsage` (`TurnResult.usage`), not carried as a runtime status var.
 
 ## 2. Core Logic
 
@@ -217,9 +215,9 @@ L0 caps how many tool calls a single `ModelResponse` can issue (the first row of
 
 **Constant.** `MAX_TOOL_CALLS_PER_MODEL_REQUEST = 3` in `co_cli/config/tuning.py`; non-configurable. Sized for small-ollama-model coherence (small models lose plan coherence past ~3 parallel calls per response); 3 non-spilling (≤ 4K char) tool returns aggregate well inside the per-request spill threshold.
 
-**Trigger surface.** `_CallSeamToolset.call_tool` (`co_cli/agent/toolset.py`) — the routing toolset's per-call wrapper, invoked once per `ToolCallPart` as the agent loop dispatches it.
+**Trigger surface.** `dispatch_tools` (`co_cli/agent/dispatch.py`) — the owned loop's per-step dispatch seam, invoked once per model request with that request's full list of tool calls.
 
-**Counter mechanics.** The orchestrator zeros `runtime.tool_calls_in_model_request` on entering each model-request node (`_execute_run` — the real per-request boundary) and finalizes the prior request's consecutive-violation streak there; `_CallSeamToolset.call_tool` then increments the counter before the cap check. The first 3 calls execute normally; calls 4+ are **rejected without running** — the rejection payload is returned as the tool's "result," appended to message history as a `ToolReturnPart`, and seen by the model on the next turn:
+**Counter mechanics.** The cap is decided **once per step, before any fan-out**: `dispatch_tools` calls `cap_state.note_calls(N)` (which extends/resets the consecutive-violation streak and latches `hard_stop` after `TOOL_CAP_HARD_STOP_CONSECUTIVE` over-cap steps) then `cap_state.shed_boundary(N) = min(N, cap)`. The cap state is the per-turn `TurnState.cap_state` (`ToolCapState`), reconstructed each turn — no per-request runtime counter to zero. Calls at index `< cap` execute normally; calls at index `≥ cap` are **shed without running** — the rejection payload is returned as the shed call's "result," appended to message history as a `ToolReturnPart`, and seen by the model on the next turn:
 
 ```json
 {
@@ -230,7 +228,7 @@ L0 caps how many tool calls a single `ModelResponse` can issue (the first row of
 }
 ```
 
-**Observability.** Each call is wrapped in a `tool {name}` span by `_CallSeamToolset.call_tool`; a rejected (over-cap) call still emits its span, carrying the rejection payload as `co.tool.result` (see `docs/specs/observability.md`).
+**Observability.** Each within-cap call is wrapped in a `tool {name}` span by `dispatch_tools`; a shed (over-cap) call is built as an exceeded-payload `ToolReturnPart` before fan-out and does **not** emit a per-call span (see `docs/specs/observability.md`).
 
 **Relationship to L1-L3.** L0 is preventive; L1-L3 are reactive. Even with L0 in place:
 - A malformed tool returning a 1MB blob still needs L1 (`spill_if_oversized`) to size-cap.
@@ -453,7 +451,7 @@ proactive_window_processor — full path
         if G3 alone = 10K > 6.5K, len=1 ≥ min=1 → keep anyway
 
   ─ STEP 4: assembly (compact_messages — see §2.6) ───────────────
-    focus   = _resolve_proactive_focus(ctx, messages)
+    focus   = _resolve_proactive_focus(deps, messages)
                 ↑ in-progress todo, else the latest real user message. Skips
                   UserPromptParts that are compaction markers (summary/static) or
                   the todo snapshot, so focus never anchors on inserted boilerplate
@@ -478,7 +476,7 @@ proactive_window_processor — full path
                   status-line write-back itself happens in STEP 6 (commit_compaction)
 
   ─ STEP 6: commit (last step before return) ─────────────────────
-    commit_compaction(ctx, result)           ← sole writer of BOTH:
+    commit_compaction(deps, result)          ← sole writer of BOTH:
       runtime.current_request_tokens_estimate = effective_request_tokens(result)
       runtime.compaction_applied_this_turn    = True
                 ↑ centralized so every commit path — proactive, both recovery
@@ -488,7 +486,7 @@ proactive_window_processor — full path
   ─ STEP 7: no-progress guard (convergence) ──────────────────────
     if tokens_after ≥ token_count            (the applied pass did not shrink)
         log.error(...) ; span "compaction.no_progress_escalation" = True
-        recovered = await recover_overflow_history(ctx, messages)
+        recovered = await recover_overflow_history(deps, messages)
         return recovered if recovered is not None else messages   (FAIL-OPEN)
     ↑ Prevents a static-marker-per-request treadmill: an applied pass that holds or
       grows tokens escalates ONCE to strip-then-summarize recovery instead of
@@ -521,7 +519,7 @@ Edge cases: returns `None` when `len(groups) < 2` or when the backward walk prod
 | Overflow recovery PATH 2 (§2.7) | `compact_messages` (called from `recover_overflow_history`) |
 | `/compact` | `compact_messages` (called from the slash command) |
 
-All three callers use the same primitive `compact_messages(ctx, messages, bounds, focus)` and follow it with `commit_compaction(ctx, result)` to write the three runtime "applied" fields atomically. Proactive layers additional policy on top (savings, closing status callback, OTEL execution attributes, thrash counter) via the private helper `_record_proactive_outcome`.
+All three callers use the same primitive `compact_messages(deps, messages, bounds, focus)` and follow it with `commit_compaction(deps, result)` to write the three runtime "applied" fields atomically. Proactive layers additional policy on top (savings, closing status callback, OTEL execution attributes, thrash counter) via the private helper `_record_proactive_outcome`.
 
 The pipeline has three stages: assemble (`compact_messages`) → gate (`_summarization_gate_open` + circuit breaker) → summarize (`summarize_messages`). Static-marker fallback short-circuits the LLM call but reuses the same assembly.
 
@@ -529,7 +527,7 @@ The pipeline has three stages: assemble (`compact_messages`) → gate (`_summari
 proactive_window_processor          recover_overflow_history          /compact slash command
   (L3 proactive)                      (overflow PATH 2)                 (manual)
         └──────────────────────────────────┬──────────────────────────────────┘
-               compact_messages(ctx, messages, bounds, focus, summarize=True)
+               compact_messages(deps, messages, bounds, focus, summarize=True)
                │  slices messages by bounds, partitions the dropped middle into a
                │  marker-free body + the latest prior-summary recap, runs the gated
                │  summarizer over the body (skipped → static marker when summarize=False)
@@ -558,18 +556,18 @@ Deferred-tool reveals are **not** carried in the compacted history: a loaded too
 name lives in `runtime.revealed_tools` (set by `tool_view`), which compaction never
 touches — so reveals survive compaction for free, with no discovery-preservation step.
 
-**Runtime commit — `commit_compaction(ctx, result)`.** `compact_messages` returns without touching `runtime.*`. Every caller — including recovery PATH 1 (strip-only-fits, no LLM, no marker) — invokes `commit_compaction` as the last step before returning. `commit_compaction` is the **sole writer** of `compaction_applied_this_turn` and, across every commit path, of the post-compaction `current_request_tokens_estimate` (the floor-inclusive `effective_request_tokens(result)`); it has no other side effects.
+**Runtime commit — `commit_compaction(deps, result)`.** `compact_messages` returns without touching `runtime.*`. Every caller — including recovery PATH 1 (strip-only-fits, no LLM, no marker) — invokes `commit_compaction` as the last step before returning. `commit_compaction` is the **sole writer** of `compaction_applied_this_turn` and, across every commit path, of the post-compaction `current_request_tokens_estimate` (the floor-inclusive `effective_request_tokens(result)`); it has no other side effects.
 
 | Caller | Calls | Extra side effects (all proactive-only) |
 |---|---|---|
 | `proactive_window_processor` | `compact_messages` (with `summarize=False` when the anti-thrash gate is tripped) → `_record_proactive_outcome` (which calls `commit_compaction`) | savings calc, closing status callback ("Compacted." / "Compacted (static marker)." / "LLM compaction unavailable…" / "Summarizer failed…"), OTEL execution attributes, thrash counter update |
-| `recover_overflow_history` PATH 1 | `commit_compaction(ctx, stripped)` directly | no LLM call, no marker; resets thrash via `_reset_thrash_state` |
+| `recover_overflow_history` PATH 1 | `commit_compaction(deps, stripped)` directly | no LLM call, no marker; resets thrash via `_reset_thrash_state` |
 | `recover_overflow_history` PATH 2 | `compact_messages` → `commit_compaction` | resets thrash via `_reset_thrash_state` |
 | `/compact` slash command | `compact_messages` → `commit_compaction` | console-print status messaging upstream; resets thrash unconditionally |
 
 After the turn, `_finalize_turn()` reads `compaction_applied_this_turn` and passes `history_compacted=True` to `persist_session_history()`, which rewrites the transcript in place instead of appending.
 
-**Pre-compaction review snapshot (Defect-B).** Because the in-place rewrite is lossy, `compact_messages` first calls `_snapshot_and_kick_review(ctx, messages)` at the top — before slicing — so the dream reviewer can extract durable knowledge from the dropped span at full fidelity *before* it is gone. `compact_messages` is the single chokepoint where whole messages are dropped, so this one call covers all three callers (proactive PATH 2, overflow PATH 2, `/compact`). The helper is best-effort (wrapped in try/except, never aborts compaction) and does **not** write runtime — it writes the full pre-drop `messages` to an immutable `snapshots/<id>-<ts>-<uuid>.jsonl` file and fires a single **memory** review KICK carrying `transcript_override=<snapshot path>` (see [dream.md](dream.md) §1.3). It self-guards on the one-shot `runtime.skip_compaction_snapshot` flag, which `proactive_window_processor` sets only around its no-progress escalation call into `recover_overflow_history` (a try/finally bounds it). That escalation re-enters `compact_messages` for the *same* logical compaction the proactive pass already snapshotted, so it is suppressed — while a genuinely *separate* later-in-turn compaction (a fresh proactive pass) still snapshots. This is deliberately **not** keyed on `compaction_applied_this_turn`: that flag stays set for the whole turn and would wrongly suppress every compaction after the first. Recovery PATH 1 (strip-only-fits) never calls `compact_messages` and drops no message, so it produces no snapshot — correct, since the reviewer excludes tool returns (`include_tool_results=False`) and PATH 1 only collapses tool-return bodies.
+**Pre-compaction review snapshot (Defect-B).** Because the in-place rewrite is lossy, `compact_messages` first calls `_snapshot_and_kick_review(deps, messages)` at the top — before slicing — so the dream reviewer can extract durable knowledge from the dropped span at full fidelity *before* it is gone. `compact_messages` is the single chokepoint where whole messages are dropped, so this one call covers all three callers (proactive PATH 2, overflow PATH 2, `/compact`). The helper is best-effort (wrapped in try/except, never aborts compaction) and does **not** write runtime — it writes the full pre-drop `messages` to an immutable `snapshots/<id>-<ts>-<uuid>.jsonl` file and fires a single **memory** review KICK carrying `transcript_override=<snapshot path>` (see [dream.md](dream.md) §1.3). It self-guards on the one-shot `runtime.skip_compaction_snapshot` flag, which `proactive_window_processor` sets only around its no-progress escalation call into `recover_overflow_history` (a try/finally bounds it). That escalation re-enters `compact_messages` for the *same* logical compaction the proactive pass already snapshotted, so it is suppressed — while a genuinely *separate* later-in-turn compaction (a fresh proactive pass) still snapshots. This is deliberately **not** keyed on `compaction_applied_this_turn`: that flag stays set for the whole turn and would wrongly suppress every compaction after the first. Recovery PATH 1 (strip-only-fits) never calls `compact_messages` and drops no message, so it produces no snapshot — correct, since the reviewer excludes tool returns (`include_tool_results=False`) and PATH 1 only collapses tool-return bodies.
 
 **`summarize_messages` output structure** (`_SUMMARIZE_PROMPT`; keep-every-section — every section
 is always emitted, with `(none)` as the body when empty):
@@ -637,11 +635,11 @@ budget = clamp(SUMMARY_BUDGET_RATIO × estimate_message_tokens(body), FLOOR, CEI
 | `0–2` (healthy) | Attempt summarizer. Valid summary → reset to 0. Failure or empty → static marker, increment. |
 | `≥ 3` (tripped) | Skip summarizer; static marker; increment. Probe once every `BREAKER_PROBE_EVERY` (10) skips — success resets to 0. |
 
-`ctx.deps.model is None` is also a bypass — static marker without LLM attempt, no counter change. A pre-flight `SummarizerInputTooLargeError` (assembled prompt exceeds the window, §2.9) is likewise counter-neutral: it degrades to a static marker without incrementing `compaction_skip_count`, since an oversized region is orthogonal to the flaky-model failures the breaker protects against.
+`deps.model is None` is also a bypass — static marker without LLM attempt, no counter change. A pre-flight `SummarizerInputTooLargeError` (assembled prompt exceeds the window, §2.9) is likewise counter-neutral: it degrades to a static marker without incrementing `compaction_skip_count`, since an oversized region is orthogonal to the flaky-model failures the breaker protects against.
 
 ### 2.7 Overflow recovery
 
-Single-tier strip-then-summarize. Inlined in `run_turn`'s overflow branch (no separate orchestrator helper).
+Single-tier strip-then-summarize. Inlined in the owned loop's overflow branch (`run_turn_owned` → `_orchestrator_step_loop`, `co_cli/agent/loop.py`; HTTP 400/413 classification in `co_cli/agent/recovery.py`), no separate orchestrator helper.
 
 1. **Trigger:** `ModelHTTPError` classified by `_http_error_classifier.is_context_overflow`: HTTP 413 unconditionally; HTTP 400 with explicit overflow evidence in `error.message`, `error.code`, or `error.metadata.raw`. Overflow phrases recognized from OpenAI, Ollama, Gemini, vLLM, AWS Bedrock.
 2. **Rate limit:** gated by `turn_state.overflow_recovery_attempted` — one-shot per turn.
@@ -649,9 +647,9 @@ Single-tier strip-then-summarize. Inlined in `run_turn`'s overflow branch (no se
 **Algorithm** (`recover_overflow_history`, cascade flow shown in Diagram 1's `OVF` subgraph):
 
 1. **Strip** every `ToolReturnPart` to a per-tool semantic marker via `strip_all_tool_returns`. No recency cap, no boundary protection — every tool return, including writes / approvals / memory ops, collapses to a one-line stub. Pairing is preserved (only `.content` is rewritten; `tool_name` and `tool_call_id` survive). Idempotent: returns whose content is already a marker (`is_cleared_marker(content)` true) pass through unchanged so re-running over an EVICT-stripped history does not degrade the size signal. Differs from `evict_old_tool_results` only in scope (universal vs. recency-protected), not in tool selectivity — both share the same content-shape eligibility.
-2. **PATH 1 — Budget gate.** If `estimate_message_tokens(stripped) <= budget`, call `commit_compaction(ctx, stripped)` and return the stripped history. No LLM call, no marker.
-3. **PATH 2 — Summarize.** Else run the floor-aware `plan_compaction_boundaries(stripped, budget, tail_fraction, static_floor_tokens=deps.static_floor_tokens, compaction_ratio=cfg.compaction_ratio)`; if the planner returns `None` (`len(groups) < 2`, or `tail_start <= head_end`), terminal error. Otherwise call `compact_messages(ctx, stripped, bounds, focus=None)` to compose the marker and assemble the result, then `commit_compaction(ctx, result)` to write runtime atomically.
-4. **Reset thrash.** Both return paths call `_reset_thrash_state(ctx)` — recovery proves the system needed to compact, so the next proactive run is unblocked. The shared primitive `compact_messages` does NOT touch thrash state (it's policy-free); proactive callers manage their own thrash gate via `_record_proactive_outcome`.
+2. **PATH 1 — Budget gate.** If `estimate_message_tokens(stripped) <= budget`, call `commit_compaction(deps, stripped)` and return the stripped history. No LLM call, no marker.
+3. **PATH 2 — Summarize.** Else run the floor-aware `plan_compaction_boundaries(stripped, budget, tail_fraction, static_floor_tokens=deps.static_floor_tokens, compaction_ratio=cfg.compaction_ratio)`; if the planner returns `None` (`len(groups) < 2`, or `tail_start <= head_end`), terminal error. Otherwise call `compact_messages(deps, stripped, bounds, focus=None)` to compose the marker and assemble the result, then `commit_compaction(deps, result)` to write runtime atomically.
+4. **Reset thrash.** Both return paths call `_reset_thrash_state(deps)` — recovery proves the system needed to compact, so the next proactive run is unblocked. The shared primitive `compact_messages` does NOT touch thrash state (it's policy-free); proactive callers manage their own thrash gate via `_record_proactive_outcome`.
 
 **Message-list shape at each path:**
 
@@ -682,7 +680,7 @@ PATH 2 — strip + summarize (budget still exceeded after strip)
       ▼  user turn continues
 ```
 
-On a non-`None` result, `run_turn` sets `current_history = compacted`, clears pending input, emits `"Context overflow — compacting and retrying..."`, and retries. Terminal error (`"Context overflow — unrecoverable."`) on `None` or on a second overflow in the same turn.
+On a non-`None` result, the owned loop sets `state.history = compacted`, emits `"Context overflow — compacting and retrying..."`, and retries. Terminal error (`"Context overflow — unrecoverable."`) on `None` or on a second overflow in the same turn.
 
 ### 2.8 Recovery signal at the marker
 
@@ -697,7 +695,7 @@ Peer parity: hermes embeds an inline `Use file tools to read the full file.` in 
 | Summarizer raises OR returns empty/whitespace | Static marker; warning logged; `compaction_skip_count += 1` |
 | Assembled summarizer prompt exceeds the window (pre-flight estimate) | `summarize_messages` raises `SummarizerInputTooLargeError` **before** the provider call; static marker; `compaction_skip_count` **unchanged** (not a model failure — retrying the same region won't help, so it must not erode the breaker budget). Local char/token estimate of `instructions + user_message + cap` against `model_max_context_tokens − SUMMARY_FIT_SAFETY_MARGIN`; no provider round-trip. |
 | `compaction_skip_count >= 3` | Circuit breaker tripped — static markers used; LLM probed once every 10 skips |
-| `ctx.deps.model is None` (sub-agent context) | Static marker without LLM attempt |
+| `deps.model is None` (sub-agent context) | Static marker without LLM attempt |
 | `plan_compaction_boundaries` returns `None` (proactive) | Return messages unchanged; provider may then reject → overflow path |
 | Applied proactive pass makes no progress (`tokens_after ≥ token_count`) | Escalate once to `recover_overflow_history` (re-commits + resets thrash); fail-open to the original `messages` if recovery returns `None` |
 | `plan_compaction_boundaries` returns `None` (overflow, after strip) | `recover_overflow_history` returns `None`; caller emits `"Context overflow — unrecoverable."` |
@@ -756,15 +754,15 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `compact_messages(ctx, messages, bounds, focus, summarize=True) -> tuple[list[ModelMessage], str \| None]` | `co_cli/context/compaction.py` | Async — slices messages by `(head_end, tail_start, dropped_count)`, runs the gated summarizer (skipped when `summarize=False` → static marker, no LLM), assembles `head \| marker \| [todo_snapshot] \| tail`; does NOT write runtime |
-| `commit_compaction(ctx, result) -> None` | `co_cli/context/compaction.py` | Sole writer of `compaction_applied_this_turn` and the post-compaction `current_request_tokens_estimate` (`effective_request_tokens(result)`); no other side effects |
+| `compact_messages(deps, messages, bounds, focus, summarize=True) -> tuple[list[ModelMessage], str \| None]` | `co_cli/context/compaction.py` | Async — slices messages by `(head_end, tail_start, dropped_count)`, runs the gated summarizer (skipped when `summarize=False` → static marker, no LLM), assembles `head \| marker \| [todo_snapshot] \| tail`; does NOT write runtime |
+| `commit_compaction(deps, result) -> None` | `co_cli/context/compaction.py` | Sole writer of `compaction_applied_this_turn` and the post-compaction `current_request_tokens_estimate` (`effective_request_tokens(result)`); no other side effects |
 
 ### Compaction entry points
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `proactive_window_processor(ctx, messages) -> list[ModelMessage]` | `co_cli/context/compaction.py` | History processor — L3 LLM compaction at compaction_ratio with anti-thrash + circuit-breaker policy |
-| `recover_overflow_history(ctx, messages) -> list[ModelMessage] \| None` | `co_cli/context/compaction.py` | Async — HTTP 400/413 strip-then-summarize recovery; returns `None` if planner cannot find bounds |
+| `proactive_window_processor(deps, messages) -> list[ModelMessage]` | `co_cli/context/compaction.py` | History processor — L3 LLM compaction at compaction_ratio with anti-thrash + circuit-breaker policy |
+| `recover_overflow_history(deps, messages) -> list[ModelMessage] \| None` | `co_cli/context/compaction.py` | Async — HTTP 400/413 strip-then-summarize recovery; returns `None` if planner cannot find bounds |
 | `summarize_messages(deps, messages, focus=None, prior_summary=None) -> str` | `co_cli/context/summarization.py` | Async — LLM summarizer (no tools); structured `_SUMMARIZE_PROMPT` template |
 | `resolve_compaction_budget(deps) -> int` | `co_cli/context/summarization.py` | Returns `deps.model_max_context_tokens` (Ollama-probe-capped at bootstrap) |
 | `estimate_message_tokens(messages) -> int` | `co_cli/context/summarization.py` | `total_chars // ESTIMATE_CHARS_PER_TOKEN` over text parts and JSON-serialized `ToolCallPart.args` (message list only) |
@@ -775,9 +773,9 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 
 | Symbol | Source | Contract |
 |---|---|---|
-| `dedup_tool_results(ctx, messages)` | `co_cli/context/history_processors.py` | Collapses identical `(tool_name, content-hash)` returns in pre-tail to back-references |
-| `evict_old_tool_results(ctx, messages)` | `co_cli/context/history_processors.py` | Clears tool returns older than `EVICT_KEEP_RECENT` per tool name |
-| `spill_largest_tool_results(ctx, messages)` | `co_cli/context/history_processors.py` | Force-spills largest unspilled `ToolReturnPart`s when total tokens exceed `deps.spill_threshold_tokens` |
+| `dedup_tool_results(deps, messages)` | `co_cli/context/history_processors.py` | Collapses identical `(tool_name, content-hash)` returns in pre-tail to back-references |
+| `evict_old_tool_results(deps, messages)` | `co_cli/context/history_processors.py` | Clears tool returns older than `EVICT_KEEP_RECENT` per tool name |
+| `spill_largest_tool_results(deps, messages)` | `co_cli/context/history_processors.py` | Force-spills largest unspilled `ToolReturnPart`s when total tokens exceed `deps.spill_threshold_tokens` |
 | `strip_all_tool_returns(messages) -> list[ModelMessage]` | `co_cli/context/history_processors.py` | Recovery helper: replaces every `ToolReturnPart` content with a per-tool marker; idempotent |
 
 ### Spill emission
@@ -805,13 +803,15 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `co_cli/context/_compaction_markers.py` | Marker builders, `build_todo_snapshot` active-todo carry, `SUMMARY_MARKER_PREFIX`. |
 | `co_cli/context/_dedup_tool_results.py` | `dedup_tool_results` helpers: content hash, eligibility predicate (`is_dedup_candidate`), back-reference builder (`build_dedup_part`). |
 | `co_cli/context/history_processors.py` | Pure history processors (registered): `dedup_tool_results`, `evict_old_tool_results`, `spill_largest_tool_results`. Recovery helper (unregistered): `strip_all_tool_returns`. |
-| `co_cli/agent/toolset.py` | `_CallSeamToolset.call_tool`: L0 per-call cap brake + consecutive-violation streak, MCP-only fallback spill, and `co.tool.*` span enrichment. |
+| `co_cli/agent/dispatch.py` | `dispatch_tools`: L0 pre-fan-out cap shed + consecutive-violation streak (via `ToolCapState`), MCP-only fallback spill, and `co.tool.*` span enrichment. |
+| `co_cli/agent/turn_state.py` | `ToolCapState` (L0 step-boundary cap + hard-stop latch), `TurnState`, `TurnExit`, `TurnResult`. |
 | `co_cli/context/_tool_result_markers.py` | `semantic_marker` per-tool format and `is_cleared_marker` predicate. |
 | `co_cli/context/summarization.py` | `summarize_messages`, token estimator, budget resolver, and prompt templates. |
 | `co_cli/context/tokens.py` | `estimate_text_tokens` (raw-string token estimate, used for the instruction half of the floor — base instructions, toolset guidance, and critique); imports `ESTIMATE_CHARS_PER_TOKEN` from `config/tuning.py`. |
 | `co_cli/bootstrap/schema_budget.py` | `measure_always_schema_budget` + `AlwaysSchemaBudget` — measures ALWAYS-visibility tool-schema size; feeds `deps.static_floor_tokens` at bootstrap and backs the schema-budget regression guard. |
 | `co_cli/context/_http_error_classifier.py` | `is_context_overflow` — provider overflow detection for 400/413. |
-| `co_cli/agent/orchestrate.py` | `run_turn` overflow dispatch and anti-thrash gate reset. |
+| `co_cli/agent/loop.py` | `run_turn_owned` / `_orchestrator_step_loop` — the owned turn loop; hosts the history-processor pre-flight, overflow dispatch, and anti-thrash gate reset. |
+| `co_cli/agent/recovery.py` | HTTP 400/413 classification (`is_context_overflow`) at the owned loop's single recovery seam. |
 | `co_cli/main.py` | `_finalize_turn()` — session persistence bridge; reads `compaction_applied_this_turn` and calls `persist_session_history(history_compacted=True)` to rewrite the transcript. |
 | `co_cli/tools/categories.py` | `FILE_TOOLS`. |
 | `co_cli/fileio/spill.py` | Foundational spill primitive: `spill_if_oversized`, `spill_with_span`; imports `SPILL_THRESHOLD_CHARS`, `SPILL_PREVIEW_CHARS`, `PERSISTED_OUTPUT_TAG` from `config/tuning.py`. Consumed by both `tools/tool_io.py` and `context/history_processors.py`. |
@@ -832,7 +832,7 @@ Per-tool `spill_threshold_chars` overrides are set via `@agent_tool(spill_thresh
 | `spill_if_oversized` constant values pinned: `SPILL_THRESHOLD_CHARS`, `SPILL_PREVIEW_CHARS` | `tests/test_flow_spill.py` |
 | `spill_if_oversized` threshold boundary: below 4000 passes through unchanged; above 4000 spills | `tests/test_flow_spill.py` |
 | `spill_if_oversized` `force=True`: force-spills even below threshold when above preview size | `tests/test_flow_spill.py` |
-| `_CallSeamToolset.call_tool`: MCP results above threshold spilled to disk; below-threshold pass through; native results not coerced (their tools call the helper themselves) | `tests/test_flow_spill.py` |
+| `dispatch_tools`: MCP results above threshold spilled to disk; below-threshold pass through; native results not coerced (their tools call the helper themselves) | `tests/test_flow_spill.py` |
 | `spill_largest_tool_results`: below-threshold fast path; largest-first spill across full message list; cross-batch accumulation (multiple `ModelRequest`s); already-spilled exclusion; tail protection (fresh read in last turn group survives while an aged read spills; protected tail alone over threshold defers without stubbing; single turn group → no protection); OTEL span `tool_budget.spill_largest_tool_results` | `tests/test_flow_compaction_spill_largest_tool_results.py` |
 | `spill_largest_tool_results` cached threshold: `spill_threshold_tokens` from `CoDeps` used without recompute | `tests/test_flow_compaction_spill_largest_tool_results.py` |
 | `spill_largest_tool_results` accumulator: ≥3 spills landing under threshold classified `below_threshold` (single floor-division, no per-item drift) | `tests/test_flow_compaction_spill_largest_tool_results.py` |
