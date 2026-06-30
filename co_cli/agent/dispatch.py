@@ -92,8 +92,8 @@ async def get_visible_tools(
 ) -> dict[str, ToolsetTool[CoDeps]]:
     """Return the per-turn visible tools (native + MCP, DEFERRED/Google/resume filtered).
 
-    Reads through the same filtered routing toolset the graph uses, so the owned loop's
-    tool set is identical to the graph's for the same ``deps`` state.
+    Reads through the filtered routing toolset, so the owned loop's visible tool set is
+    fully determined by the current ``deps`` state.
     """
     return await _routing_toolset(deps).get_tools(ctx)
 

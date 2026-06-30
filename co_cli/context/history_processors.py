@@ -286,10 +286,9 @@ def evict_old_tool_results(
 
     Registered after ``dedup_tool_results`` so the kept window has already
     been collapsed for identical repeats before recency-based clearing
-    runs. Cheap in-memory work, no LLM call. Takes ``deps`` directly (the owned
-    loop calls it as ``proc(deps, msgs)``); the graph path adapts it to
-    pydantic-ai's ``(ctx, msgs)`` history-processor signature via a shim in
-    ``build.py``. No config fields are accessed.
+    runs. Cheap in-memory work, no LLM call. Takes ``deps`` directly — the owned
+    loop calls it as ``proc(deps, msgs)`` via ``run_history_processors``. No config
+    fields are accessed.
     """
     boundary = _find_last_turn_start(messages)
     if not boundary:

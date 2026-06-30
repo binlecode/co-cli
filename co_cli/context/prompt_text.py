@@ -92,7 +92,7 @@ def safety_prompt_text(deps: CoDeps, messages: list[ModelMessage]) -> str:
     """Per-turn dynamic instruction: doom loop and shell reflection warnings. Empty string when no condition is active.
 
     Takes ``deps`` + ``messages`` explicitly: the owned loop sources ``messages`` from the
-    turn history, the graph path from ``ctx.messages`` (via the ``safety_prompt`` shim).
+    turn history and passes them in when assembling per-step instructions.
     """
     doom_threshold = deps.config.doom_loop_threshold
     max_refl = deps.config.max_reflections

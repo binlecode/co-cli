@@ -206,7 +206,7 @@ def assemble_instructions(
     """Build the instruction parts for one step: static prefix + per-turn dynamic parts.
 
     The static prefix (``dynamic=False``) carries the cached system prompt; the five
-    dynamic parts (``dynamic=True``) are evaluated every step in the graph's registration
+    dynamic parts (``dynamic=True``) are evaluated every step in registration
     order (safety → wrap-up → current-time → deferred → skill manifest). Empty dynamic
     outputs are dropped (the model joins the rest with double newlines, static-first).
     ``messages`` feeds the safety warnings; ``request_count`` (completed requests so far)
@@ -230,7 +230,7 @@ async def build_tool_defs(deps: CoDeps) -> list[ToolDefinition]:
     """Source the per-turn ``function_tools`` defs for the model request.
 
     Reads the visibility-filtered routing toolset (native + MCP, DEFERRED hidden until
-    revealed, Google self-gated, resume-narrowed) — the exact set the graph sends — and
+    revealed, Google self-gated, resume-narrowed) — and
     returns each tool's ``ToolDefinition``. The owned loop uses the toolset only as a
     schema source; dispatch is co's own ``dispatch_tools``.
     """

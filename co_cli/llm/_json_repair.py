@@ -6,8 +6,8 @@ Two layers, used by the owned-loop ``model_turn`` client:
   each string ``ToolCallPart.args`` on a ``ModelResponse`` BEFORE pydantic
   validation. Idempotent on valid JSON, so gating is cleanliness, not correctness.
 - ``RepairingStreamedResponse`` — a thin proxy that repairs the assembled
-  ``StreamedResponse.get()`` (the surface the graph and the owned loop both
-  validate from).
+  ``StreamedResponse.get()`` (the surface the owned loop's ``model_turn``
+  assembles and validates from).
 
 Domain-homed boundary code, not a util module: ``co_cli/llm/`` already hosts
 ``_message_sanitize.py`` as a package-private model-boundary primitive.
@@ -132,15 +132,15 @@ def repair_response(response: ModelResponse) -> ModelResponse:
 class RepairingStreamedResponse:
     """StreamedResponse proxy that repairs tool-call args on the assembled ``get()``.
 
-    Explicit read-surface contract — what the agent graph actually touches:
-    - ``get()`` — the graph validates and dispatches tools from the assembled
-      ``StreamedResponse.get()`` (``_agent_graph.py`` ``_streaming_handler``, :637),
-      so repairing here lands the fix before pydantic validation.
+    Explicit read-surface contract — what the owned loop's ``model_turn`` touches:
+    - ``get()`` — ``model_turn`` calls ``.get()`` to assemble the streamed
+      response (``model_turn.py:56``); repairing here lands the fix on each
+      ``ToolCallPart.args`` before pydantic validation.
     - ``__aiter__`` / ``usage()`` — delegate to the wrapped stream verbatim.
 
-    ``__getattr__`` stays as the catch-all for every other member the graph or
+    ``__getattr__`` stays as the catch-all for every other member the owned loop or
     instrumentation reads (``model_name``, ``timestamp``, ``provider_*``,
-    ``close_stream``, and the stream passed to ``_build_agent_stream``). It is
+    ``close_stream``). It is
     deliberately NOT replaced by an enumerated member list — the SDK reads the
     streamed response beyond the hot members above, so enumerate-and-drop would
     ``AttributeError`` on any unlisted access. Subclassing ``StreamedResponse`` is
