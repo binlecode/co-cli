@@ -18,7 +18,7 @@ from tests._settings import TEST_LLM
 from tests._timeouts import LLM_TOOL_CONTEXT_TIMEOUT_SECS
 
 from co_cli.agent.core import assemble_routing_toolset, build_native_toolset
-from co_cli.agent.loop import _is_reasoning_overflow, run_turn_owned
+from co_cli.agent.loop import is_reasoning_overflow, run_turn_owned
 from co_cli.deps import CoDeps, CoSessionState
 from co_cli.display.headless import HeadlessFrontend
 from co_cli.llm.factory import build_model
@@ -45,16 +45,16 @@ def _make_deps() -> CoDeps:
 
 
 def test_reasoning_overflow_when_length_and_no_answer_content() -> None:
-    assert _is_reasoning_overflow(ModelResponse(parts=[], finish_reason="length")) is True
+    assert is_reasoning_overflow(ModelResponse(parts=[], finish_reason="length")) is True
     thinking_only = ModelResponse(parts=[ThinkingPart(content="...")], finish_reason="length")
-    assert _is_reasoning_overflow(thinking_only) is True
+    assert is_reasoning_overflow(thinking_only) is True
 
 
 def test_not_reasoning_overflow_when_text_present_or_not_length() -> None:
     text_len = ModelResponse(parts=[TextPart(content="hi")], finish_reason="length")
-    assert _is_reasoning_overflow(text_len) is False
+    assert is_reasoning_overflow(text_len) is False
     text_stop = ModelResponse(parts=[TextPart(content="hi")], finish_reason="stop")
-    assert _is_reasoning_overflow(text_stop) is False
+    assert is_reasoning_overflow(text_stop) is False
 
 
 # ---------------------------------------------------------------------------

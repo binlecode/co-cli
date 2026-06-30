@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.510]
+
+Loop-decoupling Phase 5.6 — **design-aware hardening of the milestone surface** (the delta `/audit-conformance` structurally cannot produce). A no-behavior-change structural pass: a `file:line`+rule-cited Findings Ledger swept dims A (scaffolding-tenet / cutover graph-holes), B (eval/test conformance), and C (cross-boundary underscore visibility), then fixed every confirmed-blocking finding at source. Full real-LLM suite green (887 passed).
+
+- **Dead tool-cap blackboard removed (`co_cli/deps.py`)** — the three write-only `CoRuntimeState` fields `tool_calls_in_model_request`, `consecutive_tool_cap_violations`, `tool_cap_hard_stop` (plus their `reset_for_turn` lines and stale comments that falsely claimed graph-path readers) are deleted. They were cutover residue: the live cap moved to `turn_state.py:ToolCapState`, and these fields had zero readers anywhere in `co_cli/`.
+- **Owned-loop primitives made public (`co_cli/agent/loop.py`, `co_cli/agent/delegation.py`)** — four `_private` symbols reached cross-boundary from `tests/`/`evals/` had their underscore dropped per the visibility contract: `_drive_model_request`→`drive_model_request` (the shared per-step driver baseline), `_build_subagent_toolset`→`build_subagent_toolset` (the documented mirror of the public `build_native_toolset`), `_is_reasoning_overflow`→`is_reasoning_overflow` (a pure classifier), `_delegate_agent_instructions`→`delegate_agent_instructions`. All callers in `co_cli/`/`tests/`/`evals/` updated.
+- **Audit confirmed the surface clean** — the scaffolding tenet is honored (no unintended orchestrator-vs-subagent driver divergence, no dead branches, no threaded-but-unused params), and the milestone's new eval (`eval_delegate_persona_mode.py`) is `testing.md`-conformant (centralized settings, no eval-driven API, real data). The two residual pydantic-ai SDK reaches (`preflight.py` `_output.OutputToolset`, `dispatch.py` `make_run_context`) are routed to a refreshed `sdk-coupling-cleanup` plan, not fixed here.
+
 ## [0.8.508]
 
 Loop-decoupling Phase 5.5 — **named persona-mode selector for `delegate`** (`subagent_type`), eval-gated against the R1-prose baseline. The orchestrator can optionally pick a small, closed, co-native mode (`synthesis` / `critique`) whose tuned brief is injected into the delegated agent's instructions; the tool surface is unchanged by mode (persona-only, the Phase 3.6 principle), and omitting it reproduces today's anonymous generalist byte-for-byte. TASK-1 (real-Ollama A/B) returned GO before any production code; full suite green (887 passed).

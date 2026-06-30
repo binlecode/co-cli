@@ -23,7 +23,7 @@ workspace — Helios context + the prior sqlite decision):
   Arm B (treatment): the same user ask stated plainly (mode stripped), driven
     through an EVAL-LOCAL ``TaskAgentSpec`` (``dataclasses.replace`` of the
     production spec — never a mutation of ``DELEGATE_AGENT_SPEC`` /
-    ``_delegate_agent_instructions``, per CD-m-5 / ``feedback_no_eval_test_driven_api``)
+    ``delegate_agent_instructions``, per CD-m-5 / ``feedback_no_eval_test_driven_api``)
     whose ``instructions`` inject the scenario-correct mode's tuned brief. Headline
     isolates *brief quality given a correct pick*.
 
@@ -93,7 +93,7 @@ from evals._timeouts import CALL_TIMEOUT_S
 from pydantic_ai.messages import ModelRequest, ToolCallPart, UserPromptPart
 
 from co_cli.agent.delegation import DELEGATE_AGENT_SPEC
-from co_cli.agent.loop import InstructionPart, _drive_model_request, run_standalone_owned
+from co_cli.agent.loop import InstructionPart, drive_model_request, run_standalone_owned
 from co_cli.agent.preflight import build_request_params, build_tool_defs
 from co_cli.context.tokens import estimate_text_tokens
 from co_cli.deps import fork_deps
@@ -305,7 +305,7 @@ def _arm_b_spec(mode: _PersonaMode) -> Any:
     """An EVAL-LOCAL spec: the production delegate spec with the mode brief injected.
 
     ``dataclasses.replace`` returns a NEW frozen ``TaskAgentSpec`` — it never mutates
-    ``DELEGATE_AGENT_SPEC`` nor touches ``_delegate_agent_instructions`` (CD-m-5). The
+    ``DELEGATE_AGENT_SPEC`` nor touches ``delegate_agent_instructions`` (CD-m-5). The
     eval-local ``instructions`` builder reproduces the production base brief verbatim
     (an eval fixture mirroring ``delegation.py`` — kept frozen here so the A/B does not
     drift if the production briefs change) and composes the mode brief BEFORE the live
@@ -588,7 +588,7 @@ async def _one_decision(
     """Drive ONE real model request (orchestrator instruction + a delegation-worthy ask)
     with a single function tool; return (delegated?, picked-mode, output_tokens, latency_s).
 
-    Faithful live decision: real model, real `_drive_model_request`, the production tool
+    Faithful live decision: real model, real `drive_model_request`, the production tool
     def (or its menu-stripped control) as the only function tool, text output allowed (the
     model may decline to delegate). This is the with/without comparison the dedicated
     classification call (`_author_and_pick`) could not provide."""
@@ -602,7 +602,7 @@ async def _one_decision(
     stall = deps.config.llm.run_stall_timeout_secs
     t0 = time.monotonic()
     async with asyncio.timeout(CALL_TIMEOUT_S):
-        response, usage = await _drive_model_request(
+        response, usage = await drive_model_request(
             deps, history, params, deps.model.settings, None, stall
         )
     latency = time.monotonic() - t0

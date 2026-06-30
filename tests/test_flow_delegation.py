@@ -41,11 +41,11 @@ from co_cli.agent.delegation import (
     DELEGATE_DEPTH_CAP,
     PERSONA_MODES,
     DelegationResult,
-    _delegate_agent_instructions,
+    delegate_agent_instructions,
     delegate_to_agent,
 )
 from co_cli.agent.dispatch import get_visible_tools, make_run_context
-from co_cli.agent.loop import _build_subagent_toolset, run_standalone_owned, run_turn_owned
+from co_cli.agent.loop import build_subagent_toolset, run_standalone_owned, run_turn_owned
 from co_cli.agent.spec import SurfaceModeEnum, TaskAgentSpec
 from co_cli.deps import (
     CoDeps,
@@ -164,10 +164,10 @@ async def _resolved_tools(deps: CoDeps) -> dict:
 
 def _agent_visibility_deps() -> CoDeps:
     """Fork delegated-agent deps and wire the DELEGATE_AGENT_SPEC visibility surface, as
-    run_standalone_owned does (deps.toolset = _build_subagent_toolset(spec, deps))."""
+    run_standalone_owned does (deps.toolset = build_subagent_toolset(spec, deps))."""
     parent = _make_parent_deps()
     agent_deps = fork_deps(parent, share_dispatch_sem=False)
-    agent_deps.toolset = _build_subagent_toolset(DELEGATE_AGENT_SPEC, agent_deps)
+    agent_deps.toolset = build_subagent_toolset(DELEGATE_AGENT_SPEC, agent_deps)
     return agent_deps
 
 
@@ -226,7 +226,7 @@ async def test_delegate_agent_visibility_surface_includes_mcp() -> None:
     }
 
     agent_deps = fork_deps(parent, share_dispatch_sem=False)
-    agent_deps.toolset = _build_subagent_toolset(DELEGATE_AGENT_SPEC, agent_deps)
+    agent_deps.toolset = build_subagent_toolset(DELEGATE_AGENT_SPEC, agent_deps)
 
     assert "mcp_stub_tool" not in await _visible_names(agent_deps), "MCP DEFERRED tool hidden"
     agent_deps.runtime.revealed_tools.add("mcp_stub_tool")
@@ -247,7 +247,7 @@ async def test_daemon_flat_exact_surface_unchanged() -> None:
     assert spec.surface_mode is SurfaceModeEnum.FLAT_EXACT
 
     deps = fork_deps(_make_parent_deps(), share_dispatch_sem=False)
-    deps.toolset = _build_subagent_toolset(spec, deps)
+    deps.toolset = build_subagent_toolset(spec, deps)
 
     visible = await _visible_names(deps)
     assert visible == {"file_read", "memory_search"}, "flat-exact resolves exactly tool_names"
@@ -262,13 +262,13 @@ def test_delegate_agent_instructions_advertise_deferred_stubs() -> None:
     the instructions are recomputed per step (CD-M-1).
     """
     deps = _make_parent_deps()
-    instructions = _delegate_agent_instructions(deps)
+    instructions = delegate_agent_instructions(deps)
 
     assert "tool_view" in instructions, "the agent is told how to load deferred tools"
     assert "session_view" in instructions, "a DEFERRED tool is advertised as a loadable stub"
 
     deps.runtime.revealed_tools.add("session_view")
-    after_reveal = _delegate_agent_instructions(deps)
+    after_reveal = delegate_agent_instructions(deps)
     assert "session_view" not in after_reveal, "a revealed tool stops being advertised"
 
 
@@ -281,7 +281,7 @@ def test_persona_mode_brief_reaches_instructions_without_displacing_stubs() -> N
     deps = _make_parent_deps()
     brief = PERSONA_MODES["critique"]
 
-    with_mode = _delegate_agent_instructions(deps, brief)
+    with_mode = delegate_agent_instructions(deps, brief)
     assert "adversarial reviewer" in with_mode, "the picked mode's brief reaches the agent"
     assert "tool_view" in with_mode, "the deferred-load instruction survives the mode brief"
     assert "session_view" in with_mode, "a deferred-tool stub is not displaced by the mode brief"
@@ -289,7 +289,7 @@ def test_persona_mode_brief_reaches_instructions_without_displacing_stubs() -> N
     stub_pos = with_mode.index("session_view")
     assert brief_pos < stub_pos, "the brief sits before the stub block, so the stubs stay last"
 
-    base = _delegate_agent_instructions(deps)
+    base = delegate_agent_instructions(deps)
     assert "adversarial reviewer" not in base, "no mode => no persona text (default unchanged)"
 
 
@@ -302,14 +302,14 @@ async def test_persona_mode_leaves_tool_surface_unchanged() -> None:
     """
     mode_spec = dataclasses.replace(
         DELEGATE_AGENT_SPEC,
-        instructions=lambda deps: _delegate_agent_instructions(deps, PERSONA_MODES["synthesis"]),
+        instructions=lambda deps: delegate_agent_instructions(deps, PERSONA_MODES["synthesis"]),
     )
     assert mode_spec.surface_mode is SurfaceModeEnum.VISIBILITY_MODEL, "surface mode unchanged"
 
     base_deps = fork_deps(_make_parent_deps(), share_dispatch_sem=False)
-    base_deps.toolset = _build_subagent_toolset(DELEGATE_AGENT_SPEC, base_deps)
+    base_deps.toolset = build_subagent_toolset(DELEGATE_AGENT_SPEC, base_deps)
     mode_deps = fork_deps(_make_parent_deps(), share_dispatch_sem=False)
-    mode_deps.toolset = _build_subagent_toolset(mode_spec, mode_deps)
+    mode_deps.toolset = build_subagent_toolset(mode_spec, mode_deps)
 
     assert await _visible_names(mode_deps) == await _visible_names(base_deps), (
         "the persona-mode surface equals the anonymous-default surface"

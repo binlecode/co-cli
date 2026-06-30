@@ -8,10 +8,10 @@ assembled response, dispatch tool calls through co's owned ``dispatch_tools``, a
 until the model emits no tool call (final text) — or a typed terminal condition fires
 (tool-cap hard stop, request cap, reasoning overflow, provider error, interrupt).
 
-**Scaffolding tenet (the canonical baseline).** ``_drive_model_request`` is the shared
+**Scaffolding tenet (the canonical baseline).** ``drive_model_request`` is the shared
 per-step model-request primitive, used by both this orchestrator loop and the owned subagent
 driver ``run_standalone_owned``. The two drivers share the construction scaffolding
-(``_build_subagent_toolset`` mirrors the orchestrator toolset), every preflight builder
+(``build_subagent_toolset`` mirrors the orchestrator toolset), every preflight builder
 (history processors, ``assemble_instructions``, ``build_tool_defs``, ``build_request_params``,
 ``clean_message_history``), ``dispatch_tools``, ``collect_inline_approvals``, ``ToolCapState``,
 and this request primitive. They differ ONLY by workflow: instruction assembly, request params
@@ -114,7 +114,7 @@ def _last_assistant_text(messages: list[ModelMessage]) -> str:
     return ""
 
 
-def _is_reasoning_overflow(response: ModelResponse) -> bool:
+def is_reasoning_overflow(response: ModelResponse) -> bool:
     """True when reasoning consumed the whole output budget before any answer token.
 
     The typed replacement for the graph's string-matched ``_REASONING_OVERFLOW_SIGNATURE``:
@@ -132,7 +132,7 @@ def _final_text(response: ModelResponse) -> str:
     return "".join(p.content for p in response.parts if isinstance(p, TextPart)).strip()
 
 
-async def _drive_model_request(
+async def drive_model_request(
     deps: CoDeps,
     request_messages: list[ModelMessage],
     params: ModelRequestParameters,
@@ -293,7 +293,7 @@ async def _orchestrator_step_loop(
 
     ``settings`` is a mutable loop-local: the length-continuation retry boosts it in place so
     the larger token budget persists across the re-run steps. The provider-error catch around
-    ``_drive_model_request`` is the single classification site (CD-M-2) — it both recovers
+    ``drive_model_request`` is the single classification site (CD-M-2) — it both recovers
     (overflow / 400) and surfaces terminal errors with their graph-parity messages.
     """
     span = current_span()
@@ -318,7 +318,7 @@ async def _orchestrator_step_loop(
         request_messages = clean_message_history(processed)
 
         try:
-            response, step_usage = await _drive_model_request(
+            response, step_usage = await drive_model_request(
                 deps, request_messages, params, settings, renderer, stall_window
             )
         except (
@@ -342,7 +342,7 @@ async def _orchestrator_step_loop(
         calls = _tool_calls(response)
         if not calls:
             renderer.finish()
-            if _is_reasoning_overflow(response):
+            if is_reasoning_overflow(response):
                 state.history = [*state.history, response]
                 frontend.on_status(_REASONING_OVERFLOW_MESSAGE)
                 state.exit_reason = TurnExit.REASONING_OVERFLOW
@@ -565,7 +565,7 @@ def _interrupted_result(state: TurnState, turn_usage: RunUsage) -> TurnResult:
 # ---------------------------------------------------------------------------
 
 
-def _build_subagent_toolset(spec: Any, deps: CoDeps) -> Any:
+def build_subagent_toolset(spec: Any, deps: CoDeps) -> Any:
     """Build the subagent's tool surface (forked-deps task agent) and route dispatch to it.
 
     Two modes (``spec.surface_mode``) — the one intended construction divergence; the owned
@@ -650,7 +650,7 @@ async def run_standalone_owned(
     if deps.model is None:
         raise ValueError(f"{spec.name}: run_standalone_owned requires deps.model to be set.")
 
-    deps.toolset = _build_subagent_toolset(spec, deps)
+    deps.toolset = build_subagent_toolset(spec, deps)
     output_defs, processor = build_output_toolset(spec.output_type)
     output_name = output_defs[0].name
 
@@ -687,7 +687,7 @@ async def run_standalone_owned(
                 allow_text_output=False,
             )
             request_messages = clean_message_history(history)
-            response, step_usage = await _drive_model_request(
+            response, step_usage = await drive_model_request(
                 deps, request_messages, params, settings, None, stall_window
             )
             requests += 1

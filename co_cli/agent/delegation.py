@@ -86,7 +86,7 @@ work personas, not a coding-shop menu. Keep the docstring menu's mode names in s
 these keys."""
 
 
-def _delegate_agent_instructions(deps: CoDeps, mode_brief: str | None = None) -> str:
+def delegate_agent_instructions(deps: CoDeps, mode_brief: str | None = None) -> str:
     """Per-step delegated-agent instructions: base brief + optional persona-mode brief + stubs.
 
     Recomputed each step by the owned loop (CD-M-1), so once the delegated agent loads a
@@ -123,7 +123,7 @@ def _delegate_agent_instructions(deps: CoDeps, mode_brief: str | None = None) ->
 
 DELEGATE_AGENT_SPEC = TaskAgentSpec(
     name="delegate_agent",
-    instructions=_delegate_agent_instructions,
+    instructions=delegate_agent_instructions,
     tool_names=(),
     output_type=DelegationResult,
     default_budget=DELEGATE_AGENT_BUDGET,
@@ -176,7 +176,7 @@ async def delegate_to_agent(
             )
         spec = dataclasses.replace(
             DELEGATE_AGENT_SPEC,
-            instructions=lambda deps: _delegate_agent_instructions(deps, mode_brief),
+            instructions=lambda deps: delegate_agent_instructions(deps, mode_brief),
         )
 
     agent_deps = fork_deps(parent_deps, share_dispatch_sem=False)

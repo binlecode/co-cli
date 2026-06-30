@@ -183,17 +183,6 @@ class CoRuntimeState:
       consecutive_low_yield_proactive_compactions, persisted_message_count
     """
 
-    # Tool calls counted in the current model request; zeroed by the owned loop at
-    # each model-request boundary (agent/loop.py).
-    tool_calls_in_model_request: int = 0
-    # Consecutive model requests where tool_calls_in_model_request exceeded the cap.
-    # Reset to 0 per turn by reset_for_turn(); also reset to 0 when a non-violating
-    # CallToolsNode fires (so only unbroken consecutive violations trigger the hard-stop).
-    consecutive_tool_cap_violations: int = 0
-    # Latched True the moment the streak first reaches TOOL_CAP_HARD_STOP_CONSECUTIVE.
-    # Never cleared within a turn, so a later within-cap request (which resets the
-    # streak counter above) cannot un-earn the hard-stop. Read by the orchestrator.
-    tool_cap_hard_stop: bool = False
     # Written by spill_largest_tool_results (all exit paths); read by proactive_window_processor
     # for OTEL diagnostics only (no logic branches on it).
     current_request_tokens_estimate: int | None = None
@@ -262,9 +251,6 @@ class CoRuntimeState:
         self.compaction_applied_this_turn = False
         self.skip_compaction_snapshot = False
         self.current_request_tokens_estimate = None
-        self.consecutive_tool_cap_violations = 0
-        self.tool_cap_hard_stop = False
-        self.tool_calls_in_model_request = 0
         self.pending_interrupt_result = None
 
 
@@ -442,7 +428,7 @@ def fork_deps(base: CoDeps, *, share_dispatch_sem: bool = True) -> CoDeps:
     held slot. A daemon fork (top-level, no parent slot held) keeps the default shared sem.
 
     toolset is intentionally excluded — task agents wire their own minimal
-    tool surface via TaskAgentSpec.tool_names resolved by _build_subagent_toolset.
+    tool surface via TaskAgentSpec.tool_names resolved by build_subagent_toolset.
     """
     inherited_session = CoSessionState(
         google=GoogleSessionState(
