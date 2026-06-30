@@ -59,16 +59,15 @@ def _build_tool_surface_lines(deps: CoDeps) -> list[str]:
     ]
 
 
-def _build_command_surface_lines() -> list[str]:
-    from co_cli.commands.registry import BUILTIN_COMMANDS
-
+def _build_command_surface_lines(deps: CoDeps) -> list[str]:
+    command_catalog = deps.command_catalog
     lines = [
         "",
         "Slash commands (the user types these in the REPL; you can explain or "
         "suggest them, but cannot invoke them yourself):",
     ]
-    for name in sorted(BUILTIN_COMMANDS):
-        lines.append(f"  /{name} — {BUILTIN_COMMANDS[name].description}")
+    for name in sorted(command_catalog):
+        lines.append(f"  /{name} — {command_catalog[name]}")
     return lines
 
 
@@ -173,7 +172,7 @@ async def capabilities_check(ctx: RunContext[CoDeps]) -> ToolReturn:
 
     lines: list[str] = []
     lines.extend(_build_tool_surface_lines(ctx.deps))
-    lines.extend(_build_command_surface_lines())
+    lines.extend(_build_command_surface_lines(ctx.deps))
     lines.extend(_build_component_lines(result))
     lines.extend(_build_runtime_lines(ctx.deps, result, reranker))
     lines.extend(_build_mcp_lines(ctx.deps, result, mcp_tool_count))

@@ -4,13 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "co-cli"
-version = "0.8.510"
+version = "0.8.512"
 description = "Co — your trusted local personal intelligence company"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "google-api-python-client>=2.189.0",
-    "google-auth-httplib2>=0.3.0",
     "google-auth-oauthlib>=1.2.4",
     "google-genai>=1.61.0",
     "prompt-toolkit>=3.0.52",
@@ -22,7 +21,6 @@ dependencies = [
     "trafilatura>=2.0.0",
     "pysqlite3>=0.6.0",
     "sqlite-vec>=0.1.6",
-    "ollama>=0.6.1",
     "python-dotenv>=1.2.1",
     "pymupdf4llm==1.27.2.3",
     "pymupdf",

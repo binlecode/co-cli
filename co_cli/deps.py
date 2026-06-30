@@ -329,6 +329,11 @@ class CoDeps:
     # session-open MCP toolsets into its visibility surface rather than reconnecting.
     mcp_toolsets: list[AbstractToolset[CoDeps]] = field(default_factory=list, repr=False)
     skill_catalog: dict[str, SkillInfo] = field(default_factory=dict)
+    # Slash-command catalog (name -> description), populated at bootstrap from
+    # BUILTIN_COMMANDS. Lets capabilities_check enumerate the command surface
+    # downward off deps rather than importing the CLI registry upward. Stores a
+    # plain dict[str, str], not SlashCommand, so deps never imports a commands type.
+    command_catalog: dict[str, str] = field(default_factory=dict)
     # Grouped mutable state
     session: CoSessionState = field(default_factory=CoSessionState)
     runtime: CoRuntimeState = field(default_factory=CoRuntimeState)
@@ -458,6 +463,7 @@ def fork_deps(base: CoDeps, *, share_dispatch_sem: bool = True) -> CoDeps:
         tool_catalog=base.tool_catalog,
         mcp_toolsets=base.mcp_toolsets,
         skill_catalog=base.skill_catalog,
+        command_catalog=base.command_catalog,
         session=inherited_session,
         runtime=CoRuntimeState(agent_depth=base.runtime.agent_depth + 1),
         workspace_dir=base.workspace_dir,

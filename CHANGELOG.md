@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.512]
+
+Rules-conformance cleanup — the mechanical R1–R12 remainder pass after the loop-decoupling milestone (5.6 → `/audit-conformance` → this). The whole-tree audit found the high-churn loop surface conformant; only three findings survived, none in the loop region. A no-behavior-change pass: full real-LLM suite green (794 passed).
+
+- **`tools→commands` package inversion removed (`co_cli/deps.py`, `co_cli/bootstrap/core.py`, `co_cli/tools/system/capabilities.py`)** — `capabilities_check` no longer imports `BUILTIN_COMMANDS` upward from the CLI registry. A new flat `CoDeps.command_catalog: dict[str, str]` (name→description, mirroring `tool_catalog`/`skill_catalog`) is populated at bootstrap from `BUILTIN_COMMANDS` and read downward; `_build_command_surface_lines` takes `deps`. Stores `dict[str, str]`, not `SlashCommand`, so `deps` never imports a `commands` type. Propagated through `fork_deps` like the other catalogs.
+- **Two unused direct dependencies dropped (`pyproject.toml`, `uv.lock`)** — `ollama` (co reaches Ollama via `pydantic_ai.providers.ollama.OllamaProvider`, an OpenAI-compatible client) and `google-auth-httplib2` (a transitive of `google-api-python-client`) are removed from `[project.dependencies]`; `uv lock` re-resolved (`ollama` gone from the lock, `google-auth-httplib2` retained transitively).
+- **Deferred:** the cosmetic R9 `tei_rerank_batch_size` unit-suffix drift stays in the plan's backlog for a later naming-only pass.
+
 ## [0.8.510]
 
 Loop-decoupling Phase 5.6 — **design-aware hardening of the milestone surface** (the delta `/audit-conformance` structurally cannot produce). A no-behavior-change structural pass: a `file:line`+rule-cited Findings Ledger swept dims A (scaffolding-tenet / cutover graph-holes), B (eval/test conformance), and C (cross-boundary underscore visibility), then fixed every confirmed-blocking finding at source. Full real-LLM suite green (887 passed).

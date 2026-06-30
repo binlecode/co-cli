@@ -16,12 +16,16 @@ from co_cli.tools.system.capabilities import capabilities_check
 
 
 def _make_deps(**settings_overrides) -> CoDeps:
+    import co_cli.commands.core  # noqa: F401 — populates BUILTIN_COMMANDS as bootstrap does
+    from co_cli.commands.registry import BUILTIN_COMMANDS
+
     config = make_settings(**settings_overrides) if settings_overrides else SETTINGS
     _, tool_catalog = build_native_toolset()
     return CoDeps(
         shell=ShellBackend(),
         config=config,
         tool_catalog=tool_catalog,
+        command_catalog={name: cmd.description for name, cmd in BUILTIN_COMMANDS.items()},
         session=CoSessionState(),
     )
 
@@ -47,8 +51,6 @@ async def test_capabilities_surfaces_deps_degradations() -> None:
 async def test_capabilities_surfaces_slash_commands() -> None:
     """The user-typed slash-command surface must appear in the display so the
     model can answer command questions instead of confabulating."""
-    import co_cli.commands.core  # noqa: F401 — populates BUILTIN_COMMANDS as bootstrap does
-
     deps = _make_deps()
     ctx = _make_ctx(deps)
     async with asyncio.timeout(HTTP_HEALTH_TIMEOUT_SECS):

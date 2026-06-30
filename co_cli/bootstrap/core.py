@@ -461,6 +461,7 @@ async def create_deps(
         toolset=toolset,
         mcp_toolsets=mcp_toolsets,
         skill_catalog=skill_catalog,
+        command_catalog={name: cmd.description for name, cmd in BUILTIN_COMMANDS.items()},
         runtime=runtime,
         model_max_context_tokens=model_max_context_tokens,
         spill_threshold_tokens=spill_threshold_tokens,
