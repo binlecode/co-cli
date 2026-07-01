@@ -78,6 +78,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 import time
@@ -92,10 +93,18 @@ from evals._ollama import ensure_ollama_warm
 from evals._settings import apply_eval_window
 from evals._timeouts import MULTI_TURN_COMPACT_BUDGET_S
 from evals._trace import record_turn
-from pydantic_ai.messages import ModelResponse, TextPart
+from pydantic_ai.messages import (
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
 
 from co_cli.config.tuning import SPILL_THRESHOLD_CHARS, SUMMARY_BUDGET_FLOOR
 from co_cli.context.compaction import extract_summary_body, summary_marker
+from co_cli.context.summarization import summarize_messages
 from co_cli.memory.frontmatter import render_frontmatter
 from co_cli.memory.item import MemoryKindEnum
 from co_cli.observability import tracing
@@ -783,6 +792,423 @@ async def case_cs_b_summary_output_bounded(run: Any, spans_log: Path) -> CaseRes
 
 
 # ---------------------------------------------------------------------------
+# CS.D — summarizer schema-granularity measurement (measurement-only, no gate)
+# ---------------------------------------------------------------------------
+# Plan: docs/exec-plans/active/2026-06-24-222105-summarizer-overdesign-trim.md
+# Records, on the configured model, whether co's 14-section summarizer schema
+# (summarization.py _SUMMARIZE_PROMPT :173-225) exhibits four hypothesized failure
+# modes — H1 (Active Task / Next Step quote duplication), H2 (per-section (none)
+# spam), H3 (load-bearing baseline any trim must not regress), H4 (invented tool
+# names in ## Completed Actions). NEUTRAL: confirm OR refute. Emits numbers only;
+# never gates (a measurement rig must not become a gate on a silent prompt). An
+# un-exercised hypothesis is logged "not exercised (inconclusive)," never "weak."
+
+# The current schema's section headers, in emit order. This is the measurement
+# instrument's parser input — it reads the CURRENT 14-section schema's output; it
+# is NOT a structural assertion that the prompt contains them (functional-only).
+_SUMMARY_SCHEMA_SECTIONS = (
+    "## Active Task",
+    "## Next Step",
+    "## Goal",
+    "## Constraints & Preferences",
+    "## Key Decisions",
+    "## User Corrections",
+    "## Errors & Fixes",
+    "## Completed Actions",
+    "## In Progress",
+    "## Remaining Work",
+    "## Working Set",
+    "## Pending User Asks",
+    "## Resolved Questions",
+    "## Critical Context",
+)
+
+# H1 fixture — a just-completed-task turn (bcrypt→Argon2 correction). CS.A's
+# pressure loop is ack-only (no completed-task turn), so H1 is structurally
+# inconclusive there; this exercises it with a single real summarizer call. Scenario
+# mirrors tests/test_flow_compaction_summarization.py
+# ::test_summarize_preserves_anchors_when_task_completed_with_correction (:363) —
+# inlined (evals do not import test privates) with the origin cited.
+_H1_COMPLETED_TASK_MESSAGES: list[Any] = [
+    ModelRequest(
+        parts=[
+            UserPromptPart(content="Add password hashing to signup in app/auth.py. Use bcrypt.")
+        ]
+    ),
+    ModelResponse(parts=[TextPart(content="Adding bcrypt hashing to the signup handler.")]),
+    ModelRequest(
+        parts=[UserPromptPart(content="No, use Argon2 not bcrypt — bcrypt truncates at 72 bytes.")]
+    ),
+    ModelResponse(
+        parts=[
+            ToolCallPart(tool_name="file_edit", args={"path": "app/auth.py"}, tool_call_id="e1")
+        ]
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="file_edit",
+                content="Edited app/auth.py — added Argon2id hashing.",
+                tool_call_id="e1",
+            )
+        ]
+    ),
+    ModelResponse(
+        parts=[TextPart(content="Done — app/auth.py now uses Argon2id for signup hashing.")]
+    ),
+]
+
+# H4 fixture — a tool-bearing transcript with a KNOWN tool set, so invented tool
+# names in ## Completed Actions can be diffed against ground truth. CS.A's loop
+# issues no tool calls (Completed Actions is (none) there), so H4 needs this.
+# Scenario mirrors the auth-fix _SAMPLE_MESSAGES in the same test module — inlined,
+# origin cited.
+_H4_ACTUAL_TOOLS = frozenset({"file_read", "file_edit", "shell_exec"})
+_H4_TOOL_TRANSCRIPT: list[Any] = [
+    ModelRequest(
+        parts=[
+            UserPromptPart(
+                content="Read co_cli/auth.py and tell me if the token validation looks correct."
+            )
+        ]
+    ),
+    ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name="file_read", args={"path": "co_cli/auth.py"}, tool_call_id="tc1"
+            )
+        ]
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="file_read",
+                content=(
+                    'SECRET_KEY = "hardcoded-secret-do-not-use"\n\n'
+                    "def validate_token(token: str) -> bool:\n"
+                    '    payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])\n'
+                    "    return True\n"
+                ),
+                tool_call_id="tc1",
+            )
+        ]
+    ),
+    ModelResponse(
+        parts=[
+            TextPart(
+                content=(
+                    "Found a critical issue: SECRET_KEY is hardcoded on line 4 — it must load "
+                    "from an environment variable."
+                )
+            )
+        ]
+    ),
+    ModelRequest(
+        parts=[
+            UserPromptPart(
+                content="Fix the hardcoded SECRET_KEY — load it from CO_AUTH_SECRET, raise ValueError if not set."
+            )
+        ]
+    ),
+    ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name="file_edit",
+                args={
+                    "path": "co_cli/auth.py",
+                    "old_string": 'SECRET_KEY = "hardcoded-secret-do-not-use"',
+                    "new_string": 'SECRET_KEY = os.environ.get("CO_AUTH_SECRET")',
+                },
+                tool_call_id="tc2",
+            )
+        ]
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="file_edit",
+                content="Edit applied. 1 change in co_cli/auth.py.",
+                tool_call_id="tc2",
+            )
+        ]
+    ),
+    ModelResponse(
+        parts=[
+            TextPart(
+                content="Fixed. SECRET_KEY now loads from CO_AUTH_SECRET and raises on absence."
+            )
+        ]
+    ),
+    ModelRequest(parts=[UserPromptPart(content="Run the auth tests.")]),
+    ModelResponse(
+        parts=[
+            ToolCallPart(
+                tool_name="shell_exec",
+                args={"command": "pytest tests/test_auth.py -v"},
+                tool_call_id="tc3",
+            )
+        ]
+    ),
+    ModelRequest(
+        parts=[
+            ToolReturnPart(
+                tool_name="shell_exec",
+                content="collected 4 items\n\n2 failed, 2 passed in 0.43s\n",
+                tool_call_id="tc3",
+            )
+        ]
+    ),
+    ModelResponse(
+        parts=[
+            TextPart(
+                content=(
+                    "Two failures: test_invalid_signature — jwt raises instead of returning False; "
+                    "test_missing_env_var — the ValueError fires at import time."
+                )
+            )
+        ]
+    ),
+    ModelRequest(
+        parts=[
+            UserPromptPart(
+                content="Fix test_missing_env_var — defer the env var check so the test can set CO_AUTH_SECRET after import."
+            )
+        ]
+    ),
+]
+
+_TOOL_ANNOTATION_RE = re.compile(r"\[tool:\s*([^\]]+)\]")
+
+
+def _section_body(summary: str, header: str) -> str | None:
+    """The body text of ``header`` in ``summary`` (header stripped), or None if the
+    section is absent entirely.
+
+    Slices from just after the header to the next ``\\n## `` section boundary. An
+    absent section (None) is distinct from a present-but-``(none)`` one — the schema
+    mandates every section be emitted, so absence is a different signal from ``(none)``.
+    """
+    idx = summary.find(header)
+    if idx == -1:
+        return None
+    rest = summary[idx + len(header) :]
+    next_idx = rest.find("\n## ")
+    body = rest[:next_idx] if next_idx != -1 else rest
+    return body.strip()
+
+
+def _body_is_none(body: str | None) -> bool:
+    """True when a section body renders the ``(none)`` sentinel (case-insensitive,
+    tolerant of surrounding punctuation/whitespace). An absent section (None) is NOT
+    ``(none)`` — it is counted separately."""
+    if body is None:
+        return False
+    return body.strip().lower().strip(".") == "(none)"
+
+
+def _word_tokens(text: str) -> list[str]:
+    """Lowercased alphanumeric word tokens — the unit for H1 overlap measures."""
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _word_jaccard(a: str, b: str) -> float:
+    """Jaccard overlap of the two bodies' word sets (0.0 to 1.0)."""
+    set_a, set_b = set(_word_tokens(a)), set(_word_tokens(b))
+    if not set_a or not set_b:
+        return 0.0
+    return len(set_a & set_b) / len(set_a | set_b)
+
+
+def _longest_common_word_run(a: str, b: str) -> int:
+    """Length (in words) of the longest contiguous run of words common to both
+    bodies — a long shared run is the fingerprint of the SAME verbatim quote
+    appearing in both sections (H1's duplication claim)."""
+    wa, wb = _word_tokens(a), _word_tokens(b)
+    if not wa or not wb:
+        return 0
+    best = 0
+    prev = [0] * (len(wb) + 1)
+    for i in range(1, len(wa) + 1):
+        cur = [0] * (len(wb) + 1)
+        for j in range(1, len(wb) + 1):
+            if wa[i - 1] == wb[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                best = max(best, cur[j])
+        prev = cur
+    return best
+
+
+def _tool_annotations(completed_actions_body: str) -> list[str]:
+    """The tool names inside ``[tool: name]`` annotations in the Completed Actions
+    body, in order. Ground truth for H4's invented-vs-actual diff."""
+    return [name.strip() for name in _TOOL_ANNOTATION_RE.findall(completed_actions_body)]
+
+
+async def case_measure_schema_granularity(deps: Any, spans_log: Path) -> CaseResult:
+    """Measure the current 14-section schema's behavior on the configured model.
+
+    Measurement-only — records numbers, never gates (Verdict.PASS whenever the
+    measurement completed; Verdict.FAIL only if the measurement infrastructure itself
+    broke, e.g. a summarizer call raised). NEUTRAL: every hypothesis is confirm-OR-
+    refute, and an un-exercised one is logged "not exercised (inconclusive)."
+
+    H2/H3 re-read the summarizer passes CS.A already produced (zero extra LLM cost,
+    the CS.B precedent). H1 and H4 each need a transcript CS.A's ack-only text loop
+    cannot produce, so each fires ONE direct ``summarize_messages`` call on an inlined
+    realistic fixture.
+    """
+    case_id = "CS.D"
+    t0 = time.monotonic()
+    log = logging.getLogger(__name__)
+    lines: list[str] = []
+
+    passes = _read_summarizer_passes(spans_log)
+
+    # ---- H2 — per-section (none) rate across the 14 sections -----------------
+    if not passes:
+        lines.append(
+            "H2 (none-rate): not exercised (inconclusive) — CS.A fired 0 real summarizer passes"
+        )
+    else:
+        none_counts = {section: 0 for section in _SUMMARY_SCHEMA_SECTIONS}
+        absent_counts = {section: 0 for section in _SUMMARY_SCHEMA_SECTIONS}
+        per_pass_none_rate: list[float] = []
+        for p in passes:
+            summary = p["summary"]
+            none_here = 0
+            for section in _SUMMARY_SCHEMA_SECTIONS:
+                body = _section_body(summary, section)
+                if body is None:
+                    absent_counts[section] += 1
+                elif _body_is_none(body):
+                    none_counts[section] += 1
+                    none_here += 1
+            per_pass_none_rate.append(none_here / len(_SUMMARY_SCHEMA_SECTIONS))
+        avg_none_rate = sum(per_pass_none_rate) / len(per_pass_none_rate)
+        always_none = [s for s, c in none_counts.items() if c == len(passes)]
+        lines.append(
+            f"H2 (none-rate): {len(passes)} pass(es); avg (none) sections/pass = "
+            f"{avg_none_rate * len(_SUMMARY_SCHEMA_SECTIONS):.1f}/{len(_SUMMARY_SCHEMA_SECTIONS)} "
+            f"(rate {avg_none_rate:.2f}); always-(none) across every pass: "
+            f"{[s.removeprefix('## ') for s in always_none] or 'none'}"
+        )
+        for section in _SUMMARY_SCHEMA_SECTIONS:
+            log.info(
+                "[H2] %-28s (none) in %d/%d passes, absent in %d/%d",
+                section,
+                none_counts[section],
+                len(passes),
+                absent_counts[section],
+                len(passes),
+            )
+
+    # ---- H3 — load-bearing baseline any future trim must not regress ---------
+    if not passes:
+        lines.append("H3 (baseline): not exercised (inconclusive) — 0 summarizer passes")
+    else:
+        anchor_present = sum(
+            1
+            for p in passes
+            if _section_body(p["summary"], "## Active Task") not in (None, "")
+            and not _body_is_none(_section_body(p["summary"], "## Active Task"))
+            and _section_body(p["summary"], "## Next Step") not in (None, "")
+            and not _body_is_none(_section_body(p["summary"], "## Next Step"))
+        )
+        # Planted-fact survival into the summary text — the schema-attributable
+        # recall signal (CS.A's coherence probe measures the end-to-end agent recall
+        # superset; this isolates whether the SUMMARY carried the needle).
+        needle_passes = sum(1 for p in passes if _COHERENCE_NEEDLE in p["summary"])
+        carried = _carried_prior_summary_slot(passes)
+        if len(passes) < 2:
+            carry_note = "carry not exercised (inconclusive) — <2 passes, no prior summary carried"
+        else:
+            carry_note = (
+                f"prior-summary carried across passes: {carried is not None} "
+                f"({len(carried) if carried else 0} chars)"
+            )
+        lines.append(
+            f"H3 (baseline): drift-anchors (Active Task + Next Step both present, non-(none)) "
+            f"in {anchor_present}/{len(passes)} passes; planted fact '{_COHERENCE_NEEDLE}' "
+            f"survived into summary text in {needle_passes}/{len(passes)} passes; {carry_note}"
+        )
+
+    # ---- H1 — Active Task / Next Step quote duplication ----------------------
+    # Needs a just-completed-task turn (CS.A's ack loop has none) → one summarizer call.
+    try:
+        async with asyncio.timeout(MULTI_TURN_COMPACT_BUDGET_S):
+            h1_summary = await summarize_messages(deps, _H1_COMPLETED_TASK_MESSAGES)
+    except Exception as exc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"H1 summarizer call failed — measurement infra broke: {type(exc).__name__}: {exc}",
+        )
+    h1_active = _section_body(h1_summary, "## Active Task")
+    h1_next = _section_body(h1_summary, "## Next Step")
+    if not h1_active or not h1_next or _body_is_none(h1_active) or _body_is_none(h1_next):
+        lines.append(
+            "H1 (quote duplication): not exercised (inconclusive) — one of Active Task / "
+            f"Next Step was absent or (none) (active={h1_active!r:.60} next={h1_next!r:.60})"
+        )
+    else:
+        jaccard = _word_jaccard(h1_active, h1_next)
+        common_run = _longest_common_word_run(h1_active, h1_next)
+        lines.append(
+            f"H1 (quote duplication): Active Task ↔ Next Step word-Jaccard={jaccard:.2f}, "
+            f"longest shared contiguous word-run={common_run} words "
+            f"(high Jaccard + long run = same verbatim quote in both = duplication)"
+        )
+        log.info("[H1] Active Task body: %r", h1_active)
+        log.info("[H1] Next Step body: %r", h1_next)
+
+    # ---- H4 — invented-vs-actual [tool: name] in ## Completed Actions --------
+    try:
+        async with asyncio.timeout(MULTI_TURN_COMPACT_BUDGET_S):
+            h4_summary = await summarize_messages(deps, _H4_TOOL_TRANSCRIPT)
+    except Exception as exc:
+        return CaseResult(
+            name=case_id,
+            verdict=Verdict.FAIL,
+            duration_s=time.monotonic() - t0,
+            reason=f"H4 summarizer call failed — measurement infra broke: {type(exc).__name__}: {exc}",
+        )
+    h4_actions = _section_body(h4_summary, "## Completed Actions")
+    if not h4_actions or _body_is_none(h4_actions):
+        lines.append(
+            "H4 (tool hallucination): not exercised (inconclusive) — ## Completed Actions "
+            "was absent or (none) on a tool-bearing transcript"
+        )
+    else:
+        annotations = _tool_annotations(h4_actions)
+        invented = [t for t in annotations if t not in _H4_ACTUAL_TOOLS]
+        actual = [t for t in annotations if t in _H4_ACTUAL_TOOLS]
+        if not annotations:
+            lines.append(
+                "H4 (tool hallucination): not exercised (inconclusive) — no [tool: name] "
+                "annotations emitted despite the mandate (a separate finding: mandate not followed)"
+            )
+        else:
+            lines.append(
+                f"H4 (tool hallucination): {len(annotations)} [tool:] annotations — "
+                f"{len(actual)} actual, {len(invented)} invented "
+                f"(ground truth {sorted(_H4_ACTUAL_TOOLS)}); invented names: {invented or 'none'}"
+            )
+        log.info("[H4] Completed Actions body: %r", h4_actions)
+
+    report = " || ".join(lines)
+    for line in lines:
+        log.info("[CS.D] %s", line)
+
+    return CaseResult(
+        name=case_id,
+        verdict=Verdict.PASS,
+        duration_s=time.monotonic() - t0,
+        reason=report,
+    )
+
+
+# ---------------------------------------------------------------------------
 # CS.C — tool_spill_precedes_summarize (DISABLED — eval-scaffold sizing limit)
 # ---------------------------------------------------------------------------
 
@@ -1077,6 +1503,15 @@ async def main() -> int:
             cases.append(case_b)
             print(
                 f"[context-stability] {case_b.name}: {case_b.verdict.value.upper()} — {case_b.reason}"
+            )
+
+            # CS.D — summarizer schema-granularity measurement (measurement-only, no
+            # gate). H2/H3 re-read CS.A's passes for free; H1/H4 each fire one direct
+            # summarizer call on an inlined fixture CS.A's ack loop cannot produce.
+            case_d = await case_measure_schema_granularity(deps, spans_log)
+            cases.append(case_d)
+            print(
+                f"[context-stability] {case_d.name}: {case_d.verdict.value.upper()} — {case_d.reason}"
             )
 
             # CS.C — tool-output spill. Disabled (eval-scaffold sizing limit, see

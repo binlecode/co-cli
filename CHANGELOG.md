@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.8]
+
+**Summarizer schema-granularity measurement (CS.D).** Measurement-only: adds a new context-stability eval case that quantifies whether co's 14-section summarizer schema helps or hurts the configured local model, on the four hypothesized failure modes the peer survey raised. No production code changed; ships no prompt trim — the trim stays a pre-registered, evidence-gated follow-up. Closes the `summarizer-overdesign-trim` plan (measure-before-trimming).
+
+- **`case_measure_schema_granularity` in `evals/eval_context_stability.py`** — records H1 (Active Task ↔ Next Step verbatim-quote duplication), H2 (per-section `(none)` rate), H3 (load-bearing baseline: drift-anchors + planted-fact survival + prior-summary carry), H4 (invented-vs-actual `[tool: name]` in Completed Actions). Neutral: every hypothesis is confirm-OR-refute, and an un-exercised one is logged "not exercised (inconclusive)."
+- **Zero-extra-cost where possible** — H2/H3 re-read the summarizer passes CS.A already produced (the CS.B precedent); H1 and H4 each fire one direct `summarize_messages` call on an inlined realistic fixture CS.A's ack-only loop cannot produce.
+- **Measured result (three runs, qwen3.6:35b-a3b-agentic)** — H1 refuted (word-Jaccard ~0.19, no duplicated quote), H4 refuted (0 invented tool names), H3 baseline healthy (anchors + needle + carry intact), H2 `(none)` rate 0.29–0.43 (expected `(none)`-discipline per the plan's H2 guard, not dead surface). Per the pre-registered decision gate, the evidence does not warrant a trim.
+
 ## [0.9.6]
 
 **Loop terminal-answer guarantee (D2).** Closes the one deferred gap from the loop-decoupling milestone: the owned orchestrator loop's two ceiling exits (tool-call flood hard-stop, model-request cap) no longer end a turn with an unusable answer. Both now make one preflighted, tools-off model call asking for a written summary of the work so far, stream it, and return it — strictly a floor-raise (same worst case, better common case). Peer-converged (opencode + hermes both do a toolless summary call on a ceiling exit). Full real-LLM suite green (890 passed).
