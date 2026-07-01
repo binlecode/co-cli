@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.4]
+
+**Summarizer language preservation.** The conversation-compaction summarizer now instructs the model to write the summary body in the conversation's primary language instead of defaulting to English — closing the `summarizer-language-preservation` plan. Peer-converged content change (3/4 surveyed systems ship this); co is local-first and needs it more, not less. Full real-LLM suite green (790 passed).
+
+- **One clause added to `_SUMMARIZE_PROMPT` (`co_cli/context/summarization.py`)** — inserted after the VERBATIM-preservation block: write the summary body in the conversation's language, no translate/switch-to-English, with code, file paths, identifiers, error strings, line numbers, URLs, and the mandated `## Active Task` / `## Next Step` verbatim quotes exempt (reproduced character-for-character). Language is read from the inline turns the summarizer already has — never from a profile.
+- **No conflict with the existing VERBATIM / quote mandates** — verified across 3 real Japanese-conversation summarizer passes: carve-out identifiers (`co_cli/auth.py`, `validate_token`) survived verbatim in every run.
+- **Behavioral validation was a one-time UAT spot-check, not a permanent gated eval** — LLM output language is non-deterministic (observed CJK-fraction 9.4% / 42.1% / 9.6% across runs), so a gated assertion would be flaky and violate functional-tests-only. The clause is an additive Pareto improvement with a known weak-model reliability ceiling; raising the hit-rate is a separate tuning follow-up.
+
 ## [0.9.2]
 
 **SDK-coupling cleanup — own the `final_result` output tool (R-A).** Behavior-preserving refactor closing the refreshed `sdk-coupling-cleanup` plan. Full real-LLM suite green (887 passed).
