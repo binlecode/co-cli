@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.6]
+
+**Loop terminal-answer guarantee (D2).** Closes the one deferred gap from the loop-decoupling milestone: the owned orchestrator loop's two ceiling exits (tool-call flood hard-stop, model-request cap) no longer end a turn with an unusable answer. Both now make one preflighted, tools-off model call asking for a written summary of the work so far, stream it, and return it — strictly a floor-raise (same worst case, better common case). Peer-converged (opencode + hermes both do a toolless summary call on a ceiling exit). Full real-LLM suite green (890 passed).
+
+- **`_forced_summary_turn` on the owned loop (`co_cli/agent/loop.py`)** — appends a "no more tools — summarize what you found and what's unfinished" user turn (`_SUMMARY_PROMPT`), runs the same per-step preflight (`fill_unanswered_tool_calls` + `clean_message_history`), then makes one request with `function_tools=[]` (empty tool set = the tool-strip → `output_mode="text"`, so the model can only answer in prose). Wired into both ceiling exits inside `_orchestrator_step_loop`.
+- **Request cap flips from error to answer** — a `max_model_requests_per_turn` exit now returns `outcome="continue"` with the synthesized summary (was `outcome="error"`, `output=None`). Because `main.py` prints the error banner only for `outcome=="error"`, a request-cap turn now shows the summary and no error banner. Intended.
+- **Strictly a floor-raise** — on any provider error or stall (`TimeoutError`) inside the forced call it falls back to today's salvage (last assistant text, else the canned `TOOL_CAP_NO_ANSWER_TEXT`). `CancelledError` is deliberately not caught, so a user Esc during the summary call still propagates to the interrupt handler. The double-emit guard keys on the summary call's own streamed text, not the turn-latched `renderer.streamed_text`.
+- **Scope** — orchestrator loop only; the subagent driver (`run_standalone_owned`) returns a structured `final_result` model and is untouched. Deterministic `FunctionModel` coverage in `tests/test_flow_model_request_cap.py` (no real-LLM eval — forcing a ceiling would require a reverse-engineered synthetic task, which eval policy forbids).
+
 ## [0.9.4]
 
 **Summarizer language preservation.** The conversation-compaction summarizer now instructs the model to write the summary body in the conversation's primary language instead of defaulting to English — closing the `summarizer-language-preservation` plan. Peer-converged content change (3/4 surveyed systems ship this); co is local-first and needs it more, not less. Full real-LLM suite green (790 passed).

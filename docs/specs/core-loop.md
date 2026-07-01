@@ -13,12 +13,12 @@ This doc describes one complete foreground turn, from prompt input to post-turn 
 
 | Layer | Bound | Mechanism |
 | --- | --- | --- |
-| step → tool calls | `MAX_TOOL_CALLS_PER_MODEL_REQUEST` (3) tool calls executed per step (calls past the cap are shed with an exceeded payload); `TOOL_CAP_HARD_STOP_CONSECUTIVE` (3) consecutive over-cap steps end the turn, surfacing the model's last answer if one exists (`outcome="continue"`, with a cap-stop status), else a generic salvage message | `ToolCapState.note_calls` counts a step's issued calls **before fan-out** and latches `hard_stop` once the consecutive-over-cap streak reaches the threshold; `dispatch_tools` (`co_cli/agent/dispatch.py:234`) computes the shed boundary and `_orchestrator_step_loop` (`co_cli/agent/loop.py:383`) reads `cap_state.hard_stop` after dispatch |
-| turn → steps | `max_model_requests_per_turn` (40; `0` disables) caps total model requests **across the whole turn**, checked **before every step** | `run_turn_owned` resolves the limit via `resolve_request_limit` (`co_cli/config/llm.py:268`) and `_orchestrator_step_loop` checks `requests_completed >= request_limit` at the top of each step — the request that *would* exceed the cap is never sent. Exceeding it returns a terminal `TurnResult` with `exit_reason=TurnExit.REQUEST_CAP` (`loop.py:302`) |
+| step → tool calls | `MAX_TOOL_CALLS_PER_MODEL_REQUEST` (3) tool calls executed per step (calls past the cap are shed with an exceeded payload); `TOOL_CAP_HARD_STOP_CONSECUTIVE` (3) consecutive over-cap steps end the turn with a **forced tools-off summary call** (`outcome="continue"`, with a cap-stop status), falling back to the model's last answer / a generic message only if that call fails | `ToolCapState.note_calls` counts a step's issued calls **before fan-out** and latches `hard_stop` once the consecutive-over-cap streak reaches the threshold; `dispatch_tools` (`co_cli/agent/dispatch.py:234`) computes the shed boundary and `_orchestrator_step_loop` (`co_cli/agent/loop.py`) reads `cap_state.hard_stop` after dispatch, then runs `_forced_summary_turn` |
+| turn → steps | `max_model_requests_per_turn` (40; `0` disables) caps total model requests **across the whole turn**, checked **before every step** | `run_turn_owned` resolves the limit via `resolve_request_limit` (`co_cli/config/llm.py:268`) and `_orchestrator_step_loop` checks `requests_completed >= request_limit` at the top of each step — the request that *would* exceed the cap is never sent. On reaching it the loop makes one **forced tools-off summary call** and returns `outcome="continue"` (still `exit_reason=TurnExit.REQUEST_CAP`, `loop.py`), not a terminal error |
 
 There is no separate run-level ceiling — the turn has only two levels. Enforcement of the step cap is **before-step** (the request that *would* exceed the cap is blocked), not boundary-inclusive — a turn that legitimately runs exactly `max_model_requests_per_turn` steps and stops on the last one completes successfully; only a turn that would continue past the cap is interrupted.
 
-**Graceful wrap-up before the cumulative cap.** Because the step that *would* exceed the cap is blocked before its request is sent (no chance to answer), the `wrap_up_prompt` dynamic instruction (`co_cli/agent/_instructions.py:53`) softens the landing: `assemble_instructions` passes it the count of completed requests, and on the one step where `request_count == limit - 1` (the last step the loop will still run) it returns the `WRAP_UP_TEXT` instruction telling the model to produce its final answer now and call no more tools. If the model complies, the turn completes normally on that step (no tool calls → `FINAL_TEXT`) and the cap never fires — a turn that would have aborted to `error` returns `outcome="continue"` with an answer. The nudge fires at most once (the next step's `request_count` no longer equals `limit - 1`). As a dynamic instruction it lands in the request's `instruction_parts`, never as a `UserPromptPart`, and is recomputed fresh each step rather than stored to history, so it is never replayed to the next turn. When `max_model_requests_per_turn = 0` the cap is disabled (`resolve_request_limit → None`) and no nudge is injected.
+**Graceful wrap-up before the cumulative cap.** Because the step that *would* exceed the cap is blocked before its request is sent (no chance to answer), the `wrap_up_prompt` dynamic instruction (`co_cli/agent/_instructions.py:53`) softens the landing: `assemble_instructions` passes it the count of completed requests, and on the one step where `request_count == limit - 1` (the last step the loop will still run) it returns the `WRAP_UP_TEXT` instruction telling the model to produce its final answer now and call no more tools. If the model complies, the turn completes normally on that step (no tool calls → `FINAL_TEXT`) and the cap never fires. The nudge is the *first* graceful net: if the model ignores it and the cap does fire, the forced tools-off summary call (§2.6) is the second net — either way the turn returns `outcome="continue"` with a written answer rather than a bare error. The nudge fires at most once (the next step's `request_count` no longer equals `limit - 1`). As a dynamic instruction it lands in the request's `instruction_parts`, never as a `UserPromptPart`, and is recomputed fresh each step rather than stored to history, so it is never replayed to the next turn. When `max_model_requests_per_turn = 0` the cap is disabled (`resolve_request_limit → None`) and no nudge is injected.
 
 **Why the turn cap is 40 — circuit breaker, not work limit.** `max_model_requests_per_turn` is the guard against an in-cap doom-loop: a model that re-issues 1–3 tool calls per step indefinitely never trips the consecutive-over-cap hard-stop (the streak resets on any ≤3-call step), so the per-turn step count is the only ceiling that stops it. The value is sized between two opposing bounds. Floor: observed legitimate usage maxes at ~7 model requests per single pass, but a recon-heavy multi-gate turn (many approval prompts, the occasional length-continuation retry) can realistically stack to ~20–25 — the cap must clear that to never bite real work. Ceiling: the prior value of 90 let such a loop burn ~90 multi-second local-model requests (minutes of a wedged-looking session) before firing. 40 sits ≈5–6× over typical real usage with >2× margin over the multi-step worst case, yet ~2.5× tighter than 90. It is deliberately set *above* peer single-loop caps (e.g. opencode's 25) because co's turns can span more cumulative steps than a single activity loop, so 25 would risk false trips. Within the defensible 35–40 band the high end is chosen: a too-low cap falsely kills legitimate user work (user-visible, erodes trust), whereas a too-high cap only lets a doom-loop run a handful of extra cheap requests (invisible) — an asymmetry that favors headroom.
 
@@ -74,7 +74,7 @@ flowchart TD
     H --> I["run_turn_owned(): deps.runtime.reset_for_turn(); frontend.begin_waiting(); materialize user prompt into history; init TurnState + ToolCapState; start co.turn span"]
     I --> J["_orchestrator_step_loop()"]
     J --> K{"step cap reached?"}
-    K -->|yes| R["return TurnResult(outcome='error', exit=REQUEST_CAP)"]
+    K -->|yes| Rc["forced tools-off summary; TurnResult(continue, REQUEST_CAP)"]
     K -->|no| L["preflight (processors → instructions → tool defs) → drive_model_request"]
 
     L -->|response| M{"tool calls?"}
@@ -82,7 +82,7 @@ flowchart TD
     M -->|tool calls| O["collect_inline_approvals → dispatch_tools (≤3 parallel)"]
     O --> P{"cap hard-stop latched?"}
     P -->|no| J
-    P -->|yes| Q["salvage last assistant text; TurnResult(continue, TOOL_CAP)"]
+    P -->|yes| Q["forced tools-off summary (salvage on failure); TurnResult(continue, TOOL_CAP)"]
 
     L -->|context overflow| S["recover_overflow_history once; retry, else terminal"]
     S --> J
@@ -95,6 +95,7 @@ flowchart TD
 
     N --> T["cleanup_skill_run_state() in finally"]
     Q --> T
+    Rc --> T
     R --> T
     Si --> T
     T --> U["_finalize_turn(): append transcript tail or branch child transcript after compaction; optional error banner"]
@@ -185,7 +186,7 @@ Cross-cutting turn state lives on `deps.runtime` instead (`co_cli/deps.py`), zer
 
 `_orchestrator_step_loop()` (`co_cli/agent/loop.py:280`) runs the per-step loop. Each step, in order:
 
-1. **request-cap check** — if `requests_completed >= request_limit`, return a terminal `TurnResult` with `exit_reason=REQUEST_CAP` (the request that would exceed the cap is never sent).
+1. **request-cap check** — if `requests_completed >= request_limit`, run the forced tools-off summary (§2.6) and return `outcome="continue"` with `exit_reason=REQUEST_CAP` (the request that would exceed the cap is never sent; the summary call reuses the gathered context to synthesize a written answer).
 2. **preflight** — `run_history_processors(history, deps)` (the five processors, §2.5), then `fill_unanswered_tool_calls` (the every-step stub net), `assemble_instructions` (static prefix + five dynamic parts), and `build_tool_defs` (the visibility-filtered tool schema). The processed history is persisted back to `TurnState.history`; `clean_message_history` produces a throwaway request copy that is **not** persisted.
 3. **model request** — `drive_model_request(...)` drives one streamed request through `model_turn` (§2.6), rendering deltas and returning the assembled, JSON-repaired `ModelResponse` plus a `RunUsage`.
 4. **classify** — the response's `ToolCallPart`s decide the branch: no tool calls → final-text path; tool calls → dispatch path.
@@ -194,7 +195,7 @@ The model request is wrapped in `asyncio.timeout(llm.run_stall_timeout_secs)` us
 
 **Final-text branch** (no tool calls): `renderer.finish()` flushes the buffers; if the response is a reasoning overflow (`is_reasoning_overflow`, §2.6) the turn ends terminal with `REASONING_OVERFLOW`; if a length-continuation retry applies (`length_retry_settings`, §2.6) the truncated partial is discarded and the step loop re-runs with a boosted token budget; otherwise the response is appended to history, the final text is emitted via `on_final_output` when nothing was streamed, output-limit diagnostics run, and the turn returns `outcome="continue"` with `FINAL_TEXT`.
 
-**Tool-dispatch branch**: the response is appended to history, `collect_inline_approvals` (§2.4) resolves the step's approval decisions, `dispatch_tools` runs the calls (parallel ≤ cap, with the cap counted first), the tool-return parts are appended as one `ModelRequest`, and `cap_state.hard_stop` is checked. On a latched hard-stop the turn ends `outcome="continue"` with `TOOL_CAP`, salvaging the last assistant text (or a generic message when none exists).
+**Tool-dispatch branch**: the response is appended to history, `collect_inline_approvals` (§2.4) resolves the step's approval decisions, `dispatch_tools` runs the calls (parallel ≤ cap, with the cap counted first), the tool-return parts are appended as one `ModelRequest`, and `cap_state.hard_stop` is checked. On a latched hard-stop the turn runs the forced tools-off summary (§2.6) and ends `outcome="continue"` with `TOOL_CAP`, falling back to the last assistant text (or a generic message when none exists) only if the summary call fails.
 
 Reasoning display is purely a frontend concern:
 
@@ -309,11 +310,12 @@ Error matrix:
 | `TimeoutError` (stall-window guard) | `TERMINAL` | no retry; timeout status; `transient_error` span event; terminal `TIMEOUT`. |
 | `UnexpectedModelBehavior` | `TERMINAL` | no retry; malformed-output status; `malformed_output` span event; terminal `PROVIDER_ERROR`. |
 
-Two terminal conditions are decided in the step loop itself rather than the error catch:
+Three conditions are decided in the step loop itself rather than the error catch. The two **ceiling** exits (request cap, tool-call hard-stop) both end `outcome="continue"` with a written answer via the forced tools-off summary; only reasoning overflow is terminal.
 
-- **request cap reached** (see §1): a cap-reached status, terminal `REQUEST_CAP` — the step that would exceed the cap is never sent, so there is no answer to surface. Reaching this is the case where the model *ignored* the wrap-up nudge (§1); had it answered on the last allowed step, the turn would have completed via the final-text path.
-- **tool-call hard-stop** (`cap_state.hard_stop` latched; see §1): **not an error** — the dispatch already ran, so the turn ends `outcome="continue"` with `TOOL_CAP`, salvaging the last assistant text (`_last_assistant_text`) when one exists, else a generic `TOOL_CAP_NO_ANSWER_TEXT` message.
-- **reasoning overflow** (`is_reasoning_overflow`, `loop.py:117` — `finish_reason == 'length'` with no answer content): terminal `REASONING_OVERFLOW` with the actionable "simplify / raise max_tokens" status. The text-present + `length` case is instead the length-continuation retry (`length_retry_settings`, `recovery.py:162`), which re-runs the step with a doubled `max_tokens` (capped at 16384).
+- **request cap reached** (see §1): a cap-reached status, then `_forced_summary_turn` runs and the turn returns `outcome="continue"` with `REQUEST_CAP`. Reaching this is the case where the model *ignored* the wrap-up nudge (§1); had it answered on the last allowed step, the turn would have completed via the final-text path. Because the outcome is no longer `"error"`, the request-cap exit shows the synthesized summary and no error banner (`main.py` prints the banner only for `outcome=="error"`).
+- **tool-call hard-stop** (`cap_state.hard_stop` latched; see §1): **not an error** — the dispatch already ran, so the turn runs `_forced_summary_turn` and ends `outcome="continue"` with `TOOL_CAP`.
+- **forced tools-off summary** (`_forced_summary_turn`, both ceiling exits): appends a "no more tools — summarize what you found and what's unfinished" user turn (`_SUMMARY_PROMPT`), runs the same preflight every step runs (`fill_unanswered_tool_calls` + `clean_message_history`), then makes **one** model request with `function_tools=[]` (empty tool set = the tool-strip → `output_mode="text"`, so the model can only answer in prose). Strictly a floor-raise: on any provider error or stall (`TimeoutError`) inside the call it falls back to the old salvage — the last assistant text (`_last_assistant_text`) when one exists, else the generic `TOOL_CAP_NO_ANSWER_TEXT`. `CancelledError` is deliberately not caught, so a user Esc during the summary call propagates to the interrupt handler. The double-emit guard keys on the summary call's *own* streamed text (not the turn-latched `renderer.streamed_text`).
+- **reasoning overflow** (`is_reasoning_overflow`, `loop.py` — `finish_reason == 'length'` with no answer content): terminal `REASONING_OVERFLOW` with the actionable "simplify / raise max_tokens" status. The text-present + `length` case is instead the length-continuation retry (`length_retry_settings`, `recovery.py:162`), which re-runs the step with a doubled `max_tokens` (capped at 16384).
 
 Output-limit diagnostics (`_emit_output_limit_diagnostics`, `loop.py:462`) run only on the successful final-text step, sourced off the final `ModelResponse` directly:
 

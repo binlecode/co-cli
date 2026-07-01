@@ -5,8 +5,10 @@ it drives the per-turn control flow as straight-line code: materialize the user
 prompt, then per step run the history processors, assemble instructions, build the request
 params from the tool-def schema source, drive ``model_turn`` (rendering deltas), classify the
 assembled response, dispatch tool calls through co's owned ``dispatch_tools``, and repeat
-until the model emits no tool call (final text) — or a typed terminal condition fires
-(tool-cap hard stop, request cap, reasoning overflow, provider error, interrupt).
+until the model emits no tool call (final text) — or a ceiling/terminal condition fires. The
+two ceiling exits (tool-cap hard stop, request cap) run one forced tools-off summary call
+(``_forced_summary_turn``) and end ``outcome="continue"`` with a written answer; the genuine
+terminals (reasoning overflow, provider error, interrupt) end the turn without one.
 
 **Scaffolding tenet (the canonical baseline).** ``drive_model_request`` is the shared
 per-step model-request primitive, used by both this orchestrator loop and the owned subagent
@@ -96,6 +98,12 @@ _REASONING_OVERFLOW_MESSAGE = (
 TOOL_CAP_NO_ANSWER_TEXT = (
     "Stopped after hitting the tool-call cap before producing an answer. "
     "The work so far is in history — re-ask or narrow the request."
+)
+
+_SUMMARY_PROMPT = (
+    "You've reached this turn's step limit. Do not call any more tools. "
+    "Give a final response summarizing what you found and did so far, and "
+    "clearly state anything left unfinished."
 )
 
 
@@ -277,6 +285,73 @@ async def run_turn_owned(
         deps.runtime.frontend = None
 
 
+async def _forced_summary_turn(
+    *,
+    state: TurnState,
+    deps: CoDeps,
+    frontend: Frontend,
+    settings: ModelSettings | None,
+    static_instructions: str,
+    renderer: StreamRenderer,
+    stall_window: float,
+    turn_usage: RunUsage,
+    requests_completed: int,
+) -> str:
+    """Make one preflighted, toolless model call for a written summary of the work so far.
+
+    Called from both ceiling exits (flood hard-stop, request cap) — exactly when a small model
+    has been thrashing and the user is most owed a synthesized "here's what I found / where I got
+    stuck". Empty ``function_tools`` IS the tool-strip (``build_request_params`` default →
+    ``output_mode="text"``), so the model can only answer in prose, not fire another tool call.
+
+    **Strictly a floor-raise.** The forced call is attempted; on any provider error or stall
+    (``TimeoutError``) the turn falls back to today's salvage (``_last_assistant_text`` or the
+    canned message), so the worst case is unchanged. ``CancelledError`` is deliberately NOT in
+    the except tuple: a user Esc during the forced call must propagate to ``run_turn_owned``'s
+    handler so the interrupt result is stashed.
+
+    **Preflight-first.** ``fill_unanswered_tool_calls`` + ``clean_message_history`` run before the
+    call — the same net every step runs (loop.py:311,318). Defensive here (a shed flood step is
+    already answered with an exceeded payload, dispatch.py:262-267, so no orphan reaches this
+    point), but kept for consistency and idempotence.
+
+    **Double-emit guard (CD-M-2).** ``renderer.streamed_text`` latches for the whole turn, so it
+    can't tell whether *this* call streamed. The forced call's own text presence
+    (``_final_text``) is the discriminator: non-empty ⇒ it streamed and ``renderer.finish()``
+    committed it ⇒ do not also ``on_final_output``; empty ⇒ emit the salvage once.
+    """
+    state.history = [
+        *state.history,
+        ModelRequest(parts=[UserPromptPart(content=_SUMMARY_PROMPT)]),
+    ]
+    processed = fill_unanswered_tool_calls(await run_history_processors(state.history, deps))
+    state.history = processed
+    instr = _instruction_parts_for_step(deps, static_instructions, processed, requests_completed)
+    params = build_request_params(instruction_parts=instr, function_tools=[])
+    forced_text = ""
+    try:
+        response, step_usage = await drive_model_request(
+            deps, clean_message_history(processed), params, settings, renderer, stall_window
+        )
+        turn_usage.incr(step_usage)
+        state.model_requests += 1
+        state.history = [*state.history, response]
+        forced_text = _final_text(response)
+    except (
+        ModelHTTPError,
+        ModelAPIError,
+        httpx.ReadError,
+        TimeoutError,
+        UnexpectedModelBehavior,
+    ):
+        forced_text = ""
+    renderer.finish()
+    answer = forced_text or _last_assistant_text(state.history) or TOOL_CAP_NO_ANSWER_TEXT
+    if not forced_text:
+        frontend.on_final_output(answer)
+    return answer
+
+
 async def _orchestrator_step_loop(
     *,
     deps: CoDeps,
@@ -303,9 +378,19 @@ async def _orchestrator_step_loop(
             frontend.on_status(
                 f"Model-request cap reached ({request_limit} LLM calls) — stopping."
             )
-            return _terminal_result(
-                state, turn_usage, outcome="error", exit_reason=TurnExit.REQUEST_CAP
+            text = await _forced_summary_turn(
+                state=state,
+                deps=deps,
+                frontend=frontend,
+                settings=settings,
+                static_instructions=static_instructions,
+                renderer=renderer,
+                stall_window=stall_window,
+                turn_usage=turn_usage,
+                requests_completed=requests_completed,
             )
+            state.exit_reason = TurnExit.REQUEST_CAP
+            return _continue_result(state, turn_usage, text)
 
         processed = await run_history_processors(state.history, deps)
         processed = fill_unanswered_tool_calls(processed)
@@ -385,11 +470,19 @@ async def _orchestrator_step_loop(
                 f"Tool-call cap exceeded {TOOL_CAP_HARD_STOP_CONSECUTIVE} consecutive"
                 " model requests — stopping."
             )
-            salvaged = _last_assistant_text(state.history) or TOOL_CAP_NO_ANSWER_TEXT
-            if not renderer.streamed_text:
-                frontend.on_final_output(salvaged)
+            text = await _forced_summary_turn(
+                state=state,
+                deps=deps,
+                frontend=frontend,
+                settings=settings,
+                static_instructions=static_instructions,
+                renderer=renderer,
+                stall_window=stall_window,
+                turn_usage=turn_usage,
+                requests_completed=requests_completed,
+            )
             state.exit_reason = TurnExit.TOOL_CAP
-            return _continue_result(state, turn_usage, salvaged)
+            return _continue_result(state, turn_usage, text)
 
 
 async def _recover_provider_error(

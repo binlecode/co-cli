@@ -18,7 +18,14 @@ from pathlib import Path
 
 import pytest
 from pydantic_ai import RunContext
-from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
+from pydantic_ai.exceptions import ModelHTTPError
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    ToolCallPart,
+    UserPromptPart,
+)
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 from tests._settings import SETTINGS_NO_MCP
@@ -40,6 +47,12 @@ from co_cli.llm.factory import LlmModel
 from co_cli.tools.shell_backend import ShellBackend
 
 _OVER = MAX_TOOL_CALLS_PER_MODEL_REQUEST + 1
+
+# The forced-summary step is detected by the stripped tool surface: the owned loop's ceiling
+# exits call the model once with ``function_tools=[]`` (build_request_params default → text
+# output). A FunctionModel harness reads ``not info.function_tools`` to yield prose instead of
+# another tool call — the deterministic stand-in for a real model honoring "no more tools".
+_FORCED_SUMMARY = "Here is what I found and did so far. Left unfinished: the rest of the task."
 
 
 # ---------------------------------------------------------------------------
@@ -133,31 +146,36 @@ async def _run(deps: CoDeps, frontend: HeadlessFrontend, user_input: str = "go")
 
 
 def _within_cap_runaway_model() -> FunctionModel:
-    """Issues one noop call on every step, never stops on its own."""
+    """Issues one noop call on every tool step; yields a written summary once tools are stripped."""
 
     async def stream_fn(
         messages: list[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str | DeltaToolCalls]:
+        if not info.function_tools:
+            yield _FORCED_SUMMARY
+            return
         yield {0: DeltaToolCall(name="noop", json_args='{"x":0}', tool_call_id="c")}
 
     return FunctionModel(stream_function=stream_fn)
 
 
 @pytest.mark.asyncio
-async def test_model_request_cap_stops_runaway_loop() -> None:
-    """A ≤cap-per-step loop that never terminates is stopped by the model-request cap.
+async def test_model_request_cap_returns_forced_summary() -> None:
+    """A never-terminating ≤cap-per-step loop hits the model-request cap → forced summary.
 
-    With max_model_requests_per_turn=3, the loop completes 3 requests and the 4th is
-    blocked before it is sent (the turn errors, reporting exactly the cap count).
+    With max_model_requests_per_turn=3 the loop completes 3 requests; the cap then fires and
+    the owned loop makes one extra toolless call for a written summary (model_requests==4).
+    The turn is no longer an error — it returns the synthesized summary as its output.
     """
     deps = _make_deps(_within_cap_runaway_model(), max_model_requests=3)
     frontend = HeadlessFrontend(approval_response="y")
 
     turn = await _run(deps, frontend)
 
-    assert turn.outcome == "error", f"expected cap error; got {turn.outcome!r}"
+    assert turn.outcome == "continue", f"expected forced-summary close; got {turn.outcome!r}"
+    assert turn.output == _FORCED_SUMMARY, turn.output
     assert any("Model-request cap" in s for s in frontend.statuses), frontend.statuses
-    assert turn.model_requests == 3, turn.model_requests
+    assert turn.model_requests == 4, turn.model_requests
 
 
 # ---------------------------------------------------------------------------
@@ -165,18 +183,25 @@ async def test_model_request_cap_stops_runaway_loop() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _hard_stop_then_text_model() -> FunctionModel:
-    """Streams over-cap noop bursts until the hard stop latches, with text on step 1.
+def _hard_stop_then_summary_model(*, forced_raises: bool = False) -> FunctionModel:
+    """Streams over-cap noop bursts (text on step 1) until the hard stop latches.
 
-    Step 1 emits visible text then an over-cap burst; steps 2+ emit over-cap bursts.
-    After TOOL_CAP_HARD_STOP_CONSECUTIVE consecutive over-cap steps the owned loop
-    latches the hard stop and surfaces the salvaged text.
+    Step 1 emits visible text then an over-cap burst; steps 2+ emit over-cap bursts. After
+    TOOL_CAP_HARD_STOP_CONSECUTIVE consecutive over-cap steps the owned loop latches the hard
+    stop and makes the toolless forced-summary call. On that call this harness yields a written
+    summary — or, when ``forced_raises``, raises a provider error to exercise the salvage
+    fallback (which recovers the step-1 visible text).
     """
     state = {"n": 0}
 
     async def stream_fn(
         messages: list[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str | DeltaToolCalls]:
+        if not info.function_tools:
+            if forced_raises:
+                raise ModelHTTPError(status_code=500, model_name="test", body="boom")
+            yield _FORCED_SUMMARY
+            return
         state["n"] += 1
         if state["n"] == 1:
             yield "partial progress"
@@ -191,26 +216,52 @@ def _hard_stop_then_text_model() -> FunctionModel:
 
 
 @pytest.mark.asyncio
-async def test_tool_cap_hard_stop_surfaces_salvaged_text() -> None:
-    """Consecutive over-cap steps trip the hard stop; the salvaged assistant text surfaces."""
-    deps = _make_deps(_hard_stop_then_text_model(), max_model_requests=90)
+async def test_tool_cap_hard_stop_returns_forced_summary() -> None:
+    """Consecutive over-cap steps trip the hard stop → the toolless forced summary is returned."""
+    deps = _make_deps(_hard_stop_then_summary_model(), max_model_requests=90)
     frontend = HeadlessFrontend(approval_response="y")
 
     turn = await _run(deps, frontend)
 
     assert turn.outcome == "continue", f"expected graceful close; got {turn.outcome!r}"
-    assert turn.output == "partial progress"
+    assert turn.output == _FORCED_SUMMARY, turn.output
     assert any("Tool-call cap exceeded" in s for s in frontend.statuses), frontend.statuses
 
 
-def _hard_stop_no_text_model() -> FunctionModel:
-    """Streams over-cap noop bursts on every step with no visible text anywhere."""
+@pytest.mark.asyncio
+async def test_forced_summary_failure_falls_back_to_visible_text() -> None:
+    """If the forced-summary call itself errors, the turn salvages the last visible text.
+
+    Strictly a floor-raise: a provider error inside the forced call is caught (never
+    propagates) and the turn returns the step-1 assistant text via ``_continue_result``.
+    """
+    deps = _make_deps(_hard_stop_then_summary_model(forced_raises=True), max_model_requests=90)
+    frontend = HeadlessFrontend(approval_response="y")
+
+    turn = await _run(deps, frontend)
+
+    assert turn.outcome == "continue", f"expected salvage close; got {turn.outcome!r}"
+    assert turn.output == "partial progress", turn.output
+
+
+def _hard_stop_no_text_model(*, forced_raises: bool = False) -> FunctionModel:
+    """Streams over-cap noop bursts on every tool step with no visible text anywhere.
+
+    On the toolless forced-summary call it yields a written summary — or, when
+    ``forced_raises``, raises a provider error so the turn falls back to the canned message
+    (no prior visible text to salvage).
+    """
 
     state = {"n": 0}
 
     async def stream_fn(
         messages: list[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str | DeltaToolCalls]:
+        if not info.function_tools:
+            if forced_raises:
+                raise ModelHTTPError(status_code=500, model_name="test", body="boom")
+            yield _FORCED_SUMMARY
+            return
         state["n"] += 1
         for i in range(_OVER):
             yield {
@@ -223,16 +274,54 @@ def _hard_stop_no_text_model() -> FunctionModel:
 
 
 @pytest.mark.asyncio
-async def test_tool_cap_hard_stop_without_text_returns_canned_message() -> None:
-    """A hard stop with no visible text returns the canned message — never error/None."""
+async def test_tool_cap_hard_stop_no_text_returns_forced_summary() -> None:
+    """A hard stop with no prior visible text still returns the toolless forced summary."""
     deps = _make_deps(_hard_stop_no_text_model(), max_model_requests=90)
     frontend = HeadlessFrontend(approval_response="y")
 
     turn = await _run(deps, frontend)
 
     assert turn.outcome == "continue", f"expected graceful close; got {turn.outcome!r}"
-    assert turn.output == TOOL_CAP_NO_ANSWER_TEXT
+    assert turn.output == _FORCED_SUMMARY, turn.output
     assert any("Tool-call cap exceeded" in s for s in frontend.statuses), frontend.statuses
+
+
+@pytest.mark.asyncio
+async def test_forced_summary_failure_no_prior_text_returns_canned_message() -> None:
+    """Forced-summary error with no prior visible text → the canned message (never error/None)."""
+    deps = _make_deps(_hard_stop_no_text_model(forced_raises=True), max_model_requests=90)
+    frontend = HeadlessFrontend(approval_response="y")
+
+    turn = await _run(deps, frontend)
+
+    assert turn.outcome == "continue", f"expected canned close; got {turn.outcome!r}"
+    assert turn.output == TOOL_CAP_NO_ANSWER_TEXT, turn.output
+    assert any("Tool-call cap exceeded" in s for s in frontend.statuses), frontend.statuses
+
+
+@pytest.mark.asyncio
+async def test_ceiling_with_orphaned_tool_call_returns_clean_summary() -> None:
+    """A turn whose seeded history carries an orphaned tool-call id still summarizes cleanly.
+
+    The forced-summary call runs the same preflight every step runs
+    (``fill_unanswered_tool_calls`` + ``clean_message_history``), so an unpaired tool-call id
+    in the prior history never reaches the model as an orphan. Observable outcome: the turn
+    reaches its ceiling and returns non-empty output without erroring on the unpaired id.
+    """
+    seeded: list[ModelMessage] = [
+        ModelResponse(
+            parts=[ToolCallPart(tool_name="noop", args='{"x":0}', tool_call_id="orphan")]
+        )
+    ]
+    deps = _make_deps(_within_cap_runaway_model(), max_model_requests=3)
+    frontend = HeadlessFrontend(approval_response="y")
+
+    turn = await run_turn_owned(
+        user_input="go", deps=deps, message_history=seeded, frontend=frontend
+    )
+
+    assert turn.outcome == "continue", f"expected forced-summary close; got {turn.outcome!r}"
+    assert turn.output == _FORCED_SUMMARY, turn.output
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +343,9 @@ def _wrap_up_model(*, honor_nudge: bool, saw_nudge: list[bool]) -> FunctionModel
     async def stream_fn(
         messages: list[ModelMessage], info: AgentInfo
     ) -> AsyncIterator[str | DeltaToolCalls]:
+        if not info.function_tools:
+            yield _FORCED_SUMMARY
+            return
         state["n"] += 1
         seen = info.instructions is not None and WRAP_UP_TEXT in info.instructions
         saw_nudge.append(seen)
@@ -345,8 +437,12 @@ async def test_wrap_up_nudge_suppressed_when_cap_disabled() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wrap_up_nudge_ignored_never_persists_as_part() -> None:
-    """If the model ignores the nudge and hits the cap, the nudge never persists as a part."""
+async def test_wrap_up_nudge_ignored_hits_cap_then_forced_summary() -> None:
+    """If the model ignores the nudge and hits the cap, the turn returns the forced summary.
+
+    The nudge still must never persist as a part in the turn history — on the (now non-error)
+    forced-summary path just as before.
+    """
     saw_nudge: list[bool] = []
     deps = _make_deps(_wrap_up_model(honor_nudge=False, saw_nudge=saw_nudge), max_model_requests=3)
     frontend = HeadlessFrontend(approval_response="y")
@@ -354,7 +450,8 @@ async def test_wrap_up_nudge_ignored_never_persists_as_part() -> None:
     turn = await _run(deps, frontend, user_input="ignore the nudge")
 
     assert any(saw_nudge), f"wrap-up nudge never reached the model; saw_nudge={saw_nudge}"
-    assert turn.outcome == "error", f"expected cap error; got {turn.outcome!r}"
+    assert turn.outcome == "continue", f"expected forced-summary close; got {turn.outcome!r}"
+    assert turn.output == _FORCED_SUMMARY, turn.output
     assert not _messages_carry_wrap_up_part(turn.messages), (
-        "wrap-up nudge must never appear as a UserPromptPart, even on the error path"
+        "wrap-up nudge must never appear as a UserPromptPart, even on the forced-summary path"
     )

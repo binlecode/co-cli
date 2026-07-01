@@ -155,7 +155,8 @@ A `UnicodeEncodeError` raised *before* the stream opens (lone surrogates in the 
 ```
 _orchestrator_step_loop(deps, state, …):
     while True:
-        if requests_completed >= request_limit: return REQUEST_CAP   # turn-cumulative cap
+        if requests_completed >= request_limit:                      # turn-cumulative cap
+            return continue(_forced_summary_turn(…), REQUEST_CAP)     # toolless summary, not error
         processed = run_history_processors(state.history, deps)        # preflight
         processed = fill_unanswered_tool_calls(processed)
         instr     = assemble_instructions(deps, static, processed, requests_completed)
@@ -169,10 +170,11 @@ _orchestrator_step_loop(deps, state, …):
         resolution = collect_inline_approvals(calls, deps, frontend)   # §2.7
         parts = dispatch_tools(calls, deps, cap_state, …)              # §2.3
         state.history += [response, ModelRequest(parts)]
-        if cap_state.hard_stop: return TOOL_CAP
+        if cap_state.hard_stop:
+            return continue(_forced_summary_turn(…), TOOL_CAP)       # toolless summary, salvage on fail
 ```
 
-Done-ness is the local predicate `not tool_calls(response)`. The turn-cumulative model-request cap is `request_limit = resolve_request_limit(deps.config.llm)` (`max_model_requests_per_turn`, default 40; `0` → `None` = unbounded) — co's own circuit breaker, checked at the top of each step (see [core-loop.md](core-loop.md) §1), not delegated to an SDK `UsageLimits`. `drive_model_request` (`agent/loop.py:135`) drives one `model_turn`, re-arming an `asyncio.timeout` stall window on every streamed event, and returns the assembled (repaired, when Ollama) `ModelResponse` plus this step's `RunUsage`. Provider errors are classified at the single in-loop catch (`classify_provider_error`, `agent/recovery.py`) and recovered inline: overflow strip-then-summarizes, an HTTP 400 reflects to the model within a budget, length-truncated answers continue with a boosted token budget.
+Done-ness is the local predicate `not tool_calls(response)`. The turn-cumulative model-request cap is `request_limit = resolve_request_limit(deps.config.llm)` (`max_model_requests_per_turn`, default 40; `0` → `None` = unbounded) — co's own circuit breaker, checked at the top of each step (see [core-loop.md](core-loop.md) §1), not delegated to an SDK `UsageLimits`. Both ceiling exits (request cap, tool-call hard-stop) run `_forced_summary_turn` — one preflighted toolless model request (`function_tools=[]`) for a written summary of the work so far — and return `outcome="continue"`, falling back to the old salvage text only if that call fails (see [core-loop.md](core-loop.md) §2.6). `drive_model_request` (`agent/loop.py:135`) drives one `model_turn`, re-arming an `asyncio.timeout` stall window on every streamed event, and returns the assembled (repaired, when Ollama) `ModelResponse` plus this step's `RunUsage`. Provider errors are classified at the single in-loop catch (`classify_provider_error`, `agent/recovery.py`) and recovered inline: overflow strip-then-summarizes, an HTTP 400 reflects to the model within a budget, length-truncated answers continue with a boosted token budget.
 
 Preflight (`agent/preflight.py`) reproduces, as straight-line code, the request-assembly the graph did per `ModelRequestNode`: `run_history_processors` (five processors in canonical order), `assemble_instructions` (static system prompt + per-turn dynamic `InstructionPart`s), `build_tool_defs` (visibility-filtered `ToolDefinition`s from the routing toolset's `get_tools`), `build_request_params` (assembles `ModelRequestParameters`), and `clean_message_history` (a verbatim port of the graph's removed private `_clean_message_history`, applied only to the throwaway request copy, never persisted).
 
@@ -212,7 +214,7 @@ The breadth here (~22 part types) is intrinsic to **client-side compaction**, no
 
 ### 2.13 Final-request wrap-up nudge — `agent/_instructions.py`
 
-A dynamic instruction builder (`wrap_up_prompt`, called by `assemble_instructions` per step) that softens the cumulative model-request cap (§2.5, [core-loop.md](core-loop.md) §1). Because the loop aborts the turn the moment the completed-request count reaches the limit — no chance for the model to answer — `wrap_up_prompt` emits a one-shot instruction on the last allowed step instead:
+A dynamic instruction builder (`wrap_up_prompt`, called by `assemble_instructions` per step) that softens the cumulative model-request cap (§2.5, [core-loop.md](core-loop.md) §1). Because the loop stops sending new requests the moment the completed-request count reaches the limit — the model gets no further normal step to answer in — `wrap_up_prompt` emits a one-shot instruction on the last allowed step instead. It is the *first* graceful net (a normal final-text answer with full context still available); the forced tools-off summary run at the cap (§2.5) is the second net if the model ignores the nudge:
 
 ```
 wrap_up_prompt(deps, *, request_count):

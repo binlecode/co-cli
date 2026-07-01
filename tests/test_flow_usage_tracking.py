@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 from pydantic_ai import RunContext
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -146,11 +147,32 @@ async def test_multi_step_turn_records_final_usage_once(tmp_path: Path) -> None:
     assert deps.usage_accumulator.output_tokens == turn.usage.output_tokens
 
 
+def _tool_then_provider_error_model() -> FunctionModel:
+    """Issues one tool-call step (accumulating usage), then raises a terminal provider error.
+
+    A non-400, non-overflow ``ModelHTTPError`` classifies as ``TERMINAL`` (recovery.py), so the
+    turn ends ``outcome="error"`` — a genuine error-outcome exit, unlike the ceiling exits which
+    now synthesize a forced summary and return ``outcome="continue"``.
+    """
+    state = {"n": 0}
+
+    async def stream_fn(
+        messages: list[ModelMessage], info: AgentInfo
+    ) -> AsyncIterator[str | DeltaToolCalls]:
+        state["n"] += 1
+        if state["n"] == 1:
+            yield {0: DeltaToolCall(name="noop", json_args="{}", tool_call_id="c1")}
+            return
+        raise ModelHTTPError(status_code=500, model_name="test", body="boom")
+
+    return FunctionModel(stream_function=stream_fn)
+
+
 @pytest.mark.asyncio
 async def test_error_outcome_turn_still_records_usage(tmp_path: Path) -> None:
-    """A cap-stopped (error-outcome) turn still records its usage — the record sits in
-    the finally block that catches every return path, not the happy path only."""
-    deps = _owned_deps(tmp_path, _tool_then_text_model(tool_calls=5), max_model_requests=2)
+    """An error-outcome turn (terminal provider error) still records its usage — the record
+    sits in the finally block that catches every return path, not the happy path only."""
+    deps = _owned_deps(tmp_path, _tool_then_provider_error_model())
 
     turn = await run_turn_owned(
         user_input="ping",
