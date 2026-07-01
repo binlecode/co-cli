@@ -3,7 +3,7 @@
 **Status:** research / design-driver. Not linked from specs. Permanent reference.
 **Date:** 2026-06-27.
 **Scope:** how five peers expose *delegation* to the model — the delegate tool's **surface** (is it a tool at all?), its **API contract schema**, its **description text**, and where the **when/why-to-delegate prompting** lives (base prompt vs tool description). Drives co's post-Phase-3.6 delegation refactoring + enhancement.
-**Companion:** `RESEARCH-loop-decoupling-peer-survey.md` (§"Subagent engagement") established *agent-as-tool* convergence and the four sub-axes (surface, approval, depth, return). This doc goes one level closer on the **interface and prompt** specifically.
+**Companion:** `RESEARCH-agentic-loop-peer-survey.md` (§"Subagent engagement") established *agent-as-tool* convergence and the four sub-axes (surface, approval, depth, return). This doc goes one level closer on the **interface and prompt** specifically.
 **Method:** code-first, file:line citations from the local peer clones in `~/workspace_genai/` (`hermes-agent`, `codex`, `openclaw`, `opencode`, `fork-claude-code`). Verbatim where wording matters.
 
 ---
@@ -156,7 +156,7 @@ Field names differ; *roles* converge. Full per-peer matrix — each cell is the 
 - Free-form `task` core param (§3, the universal). ✓
 - Description covers D1–D4 + D8 (§2). ✓
 - When/why guidance in the base-prompt floor, tool-presence-gated (§4). ✓
-- Context isolation, summary-only return, approval propagation, hard depth cap — established in `RESEARCH-loop-decoupling-peer-survey.md`. ✓
+- Context isolation, summary-only return, approval propagation, hard depth cap — established in `RESEARCH-agentic-loop-peer-survey.md`. ✓
 
 **Gaps (drive the refactor):**
 
