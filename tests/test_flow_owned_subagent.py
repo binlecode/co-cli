@@ -2,9 +2,9 @@
 
 The load-bearing Phase-2 subagent gate: this real-Ollama test runs one spec through the
 owned ``run_standalone_owned`` and asserts it produces a valid ``spec.output_type``
-instance — AND that the ``final_result`` tool def the model sees comes from the SDK's
-output-tool generator (same name + JSON schema), since output-type validity alone can't
-prove the tuned contract is preserved (G1-1).
+instance — AND that the co-owned ``final_result`` tool def the model sees preserves the
+tuned contract (``final_result`` name + title-stripped JSON schema), since output-type
+validity alone can't prove it (G1-1).
 """
 
 from __future__ import annotations
@@ -61,15 +61,25 @@ def _make_deps() -> CoDeps:
 _PROMPT = "The fact: the Eiffel Tower is in Paris. Summarize it in one sentence."
 
 
-def test_owned_subagent_final_result_def_matches_sdk_generator() -> None:
-    """The owned subagent's final_result def comes from the SDK's output-tool generator
-    (same name + schema the graph uses) — not a bespoke def that could silently diverge."""
-    defs, _processor = build_output_toolset(_ReviewNote)
+def test_owned_subagent_final_result_tool_is_the_tuned_contract() -> None:
+    """co owns the final_result output tool the subagent model sees: it is named
+    'final_result', its schema strips per-property titles (the contract the dream-reviewer
+    model was tuned on), and its validator turns a final_result call's args — dict or
+    fenced JSON string — into the output_type instance."""
+    defs, validator = build_output_toolset(_ReviewNote)
     assert len(defs) == 1
-    assert defs[0].name == "final_result"
-    # Schema carries the output_type's field — the tuned contract the model sees.
-    schema = defs[0].parameters_json_schema
-    assert "summary" in schema.get("properties", {})
+    tool = defs[0]
+    assert tool.name == "final_result"
+    assert tool.kind == "output"
+    props = tool.parameters_json_schema["properties"]
+    assert "summary" in props
+    # tuned contract: per-property titles are stripped (what the tuned model expects).
+    assert all("title" not in prop for prop in props.values())
+    # the validator round-trips a final_result call's args into the output_type instance,
+    # both as a dict and as a markdown-fenced JSON string.
+    assert validator.validate({"summary": "in paris"}) == _ReviewNote(summary="in paris")
+    fenced = '```json\n{"summary": "in paris"}\n```'
+    assert validator.validate(fenced) == _ReviewNote(summary="in paris")
 
 
 @pytest.mark.skipif(

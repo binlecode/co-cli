@@ -26,9 +26,12 @@ from __future__ import annotations
 
 import inspect
 import logging
+import re
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from pydantic import TypeAdapter
+from pydantic.json_schema import GenerateJsonSchema
 from pydantic_ai.messages import (
     InstructionPart,
     ModelMessage,
@@ -39,6 +42,7 @@ from pydantic_ai.messages import (
     ToolReturnPart,
 )
 from pydantic_ai.models import ModelRequestParameters
+from pydantic_ai.tools import ToolDefinition
 
 from co_cli.agent._instructions import (
     current_time_prompt,
@@ -50,7 +54,6 @@ from co_cli.agent._instructions import (
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
-    from pydantic_ai.tools import ToolDefinition
 
     from co_cli.deps import CoDeps
 
@@ -241,31 +244,74 @@ async def build_tool_defs(deps: CoDeps) -> list[ToolDefinition]:
     return [tool.tool_def for tool in tools.values()]
 
 
-def build_output_toolset(output_type: type[BaseModel]) -> tuple[list[ToolDefinition], Any]:
-    """Build the subagent's ``final_result`` output-tool defs + validation processor (OQ-4 b).
+OUTPUT_TOOL_NAME = "final_result"
+OUTPUT_TOOL_DESCRIPTION = "The final response which ends this conversation"
+_MARKDOWN_FENCE = re.compile(r"```(?:\w+)?\n(\{.*?\})\s*(?:\n?```|\Z)", re.DOTALL)
 
-    Returns ``(output_tool_defs, processor)``: the ``ToolDefinition`` list for
-    ``ModelRequestParameters.output_tools`` and the ``ObjectOutputProcessor`` whose
-    ``.validate(args)`` turns a ``final_result`` call's args into the ``output_type`` instance.
 
-    Uses ``pydantic_ai._output.OutputToolset.build`` — co's **single, documented** reach into
-    a pydantic-ai private module (it is not re-exported). It emits the exact ``final_result``
-    tool name + ``ObjectOutputProcessor`` JSON schema the dream-reviewer model was tuned to,
-    and **is** the graph subagent path, so Phase 2 (the parity-proving phase) must not swap in
-    a bespoke def. Flagged here and logged as a known v2 break point / Phase-5 cleanup item
-    (replace with a hand-built public ``ToolDefinition``, verified equivalent at the cutover).
+class _ToolJsonSchemaGenerator(GenerateJsonSchema):
+    """Pydantic schema generator that drops the largely-useless per-property titles.
+
+    Reproduces the single override pydantic-ai applies for output-tool schemas so co
+    owns ``final_result`` schema generation through pydantic's documented
+    ``GenerateJsonSchema`` extension point, with no reach into the private
+    ``pydantic_ai._output`` module.
     """
-    from pydantic_ai._output import OutputToolset
 
-    logger.info(
-        "owned subagent: final_result via pydantic_ai._output.OutputToolset "
-        "(documented private reach; Phase-5 cleanup)"
+    def _named_required_fields_schema(self, named_required_fields: Any) -> Any:
+        schema = super()._named_required_fields_schema(named_required_fields)
+        for prop in schema.get("properties", {}).values():
+            prop.pop("title", None)
+        return schema
+
+
+class _OutputToolValidator:
+    """Turns a ``final_result`` tool call's args into the ``output_type`` instance.
+
+    Owns the model-output validation path: dict args validate directly; string args
+    have any surrounding markdown code fence stripped (some models wrap the JSON in a
+    ```json fence) before JSON validation. Raises ``pydantic.ValidationError`` on
+    mismatch, which the owned loop catches to re-prompt.
+    """
+
+    def __init__(self, output_type: type[BaseModel]) -> None:
+        self._output_type = output_type
+
+    def validate(self, data: str | dict[str, Any] | None) -> BaseModel:
+        if isinstance(data, str):
+            if not data.startswith("{"):
+                match = _MARKDOWN_FENCE.search(data)
+                data = match.group(1) if match else data
+            return self._output_type.model_validate_json(data or "{}")
+        return self._output_type.model_validate(data or {})
+
+
+def build_output_toolset(
+    output_type: type[BaseModel],
+) -> tuple[list[ToolDefinition], _OutputToolValidator]:
+    """Build the subagent's ``final_result`` output-tool def + validator (OQ-4 b).
+
+    Returns ``(output_tool_defs, validator)``: the ``ToolDefinition`` list for
+    ``ModelRequestParameters.output_tools`` and a validator whose ``.validate(args)``
+    turns a ``final_result`` call's args into the ``output_type`` instance.
+
+    co owns this: the ``final_result`` name + description + JSON schema (per-property
+    titles stripped via ``_ToolJsonSchemaGenerator``) reproduce what the dream-reviewer
+    model was tuned to, generated through public pydantic rather than a reach into the
+    private ``pydantic_ai._output`` module.
+
+    The model's docstring becomes the tool description (lifted out of the schema, as
+    pydantic-ai does); models without a docstring fall back to the default.
+    """
+    schema = TypeAdapter(output_type).json_schema(schema_generator=_ToolJsonSchemaGenerator)
+    description = schema.pop("description", None) or OUTPUT_TOOL_DESCRIPTION
+    tool_def = ToolDefinition(
+        name=OUTPUT_TOOL_NAME,
+        description=description,
+        parameters_json_schema=schema,
+        kind="output",
     )
-    toolset = OutputToolset.build([output_type])
-    if toolset is None:
-        raise ValueError("build_output_toolset: no output tool built for output_type")
-    processor = next(iter(toolset.processors.values()))
-    return list(toolset._tool_defs), processor
+    return [tool_def], _OutputToolValidator(output_type)
 
 
 def build_request_params(

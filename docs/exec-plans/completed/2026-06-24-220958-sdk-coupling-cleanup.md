@@ -92,3 +92,10 @@ This refresh (2026-06-30) supersedes the pre-cutover C1 approval. The original S
 | Retire old TASK-2 (S6) | landed | `compact_messages` etc. now take `deps: CoDeps` (`co_cli/context/compaction.py:321`); both synthetic fabrications gone. | Removed from scope; recorded in the obsolete-census table. |
 | R-A (`OutputToolset`) | actionable → TASK-A | Private-module reach co can now own post-cutover; the function docstring itself flags it as a v2 break / cleanup item; parity-constrained but eliminable. | New TASK-A (this plan's own future cycle). |
 | R-B (`make_run_context`) | forced → no-action | The SDK toolset call API requires a `RunContext`; consolidated to one owned constructor + one documented `# type: ignore`, mirrored by the equally-forced bootstrap twin. | Recorded forced-no-action; out of scope. |
+
+## Delivery — plan complete (2026-06-30, `0.9.2`)
+
+- ✓ **TASK-A (R-A)** — `build_output_toolset` (`co_cli/agent/preflight.py`) no longer imports from `pydantic_ai._output`. It now generates the `final_result` tool through **public pydantic**: `_ToolJsonSchemaGenerator(GenerateJsonSchema)` reproduces pydantic-ai's one schema override (strip per-property titles), the model docstring is lifted into the tool description (default fallback otherwise), and `_OutputToolValidator` owns the dict / JSON-string / markdown-fenced validation path. **Byte-parity verified** against the prior `OutputToolset` output for the real `SessionReviewOutput` (the only subagent `output_type`) plus a nested/optional edge model — schema, name, kind, description, and validation all identical. The dream-reviewer's tuned contract is preserved with no reach into the private module.
+- **R-B (`make_run_context`)** — forced-no-action, unchanged (recorded above).
+- **Tests:** `tests/test_flow_owned_subagent.py` reframed to lock the co-owned contract (title-stripping + validator round-trip); the real-LLM subagent run produces valid `final_result` output on the co-generated schema. Full suite green (887 passed).
+- The private-reach elimination removes the corresponding hard break from the pydantic-ai v2 migration's surface.

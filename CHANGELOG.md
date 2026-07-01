@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.2]
+
+**SDK-coupling cleanup — own the `final_result` output tool (R-A).** Behavior-preserving refactor closing the refreshed `sdk-coupling-cleanup` plan. Full real-LLM suite green (887 passed).
+
+- **Dropped the last `pydantic_ai._output` private reach (`co_cli/agent/preflight.py`)** — `build_output_toolset` no longer imports `OutputToolset` from the private module. It now builds the `final_result` `ToolDefinition` through **public pydantic**: `_ToolJsonSchemaGenerator(GenerateJsonSchema)` reproduces pydantic-ai's per-property-title stripping, the model docstring is lifted into the tool description (default otherwise), and `_OutputToolValidator` owns the dict / JSON-string / markdown-fenced validation path.
+- **Byte-parity verified** against the prior `OutputToolset` output for the real `SessionReviewOutput` (the sole subagent `output_type`) and a nested/optional edge model — schema, name, kind, description, and validation identical, so the dream-reviewer's tuned contract is preserved. The reach was a known pydantic-ai v2 break point; owning it removes that from the v2 migration surface.
+- **`sdk-coupling-cleanup` plan archived** — R-A actioned here; R-B (`make_run_context` synthetic `RunContext`) remains forced-no-action.
+
 ## [0.9.0]
 
 **Loop-decoupling milestone — capstone.** The owned agent loop is now co's sole turn engine; the pydantic-ai graph path (`agent.iter`, `SurrogateRecoveryModel`, `_CallSeamToolset`, `DeferredToolRequests` suspend/resume) was deleted at the v0.8.506 cutover. This release reconciles the runtime spec layer to that reality and closes the milestone. A docs + version capstone: **zero runtime behavior change** — full real-LLM suite green (887 passed).
